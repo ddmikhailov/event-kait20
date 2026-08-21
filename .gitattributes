@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Markdown uses intentional two-space hard line breaks in canonical documents.
+*.md whitespace=-blank-at-eol

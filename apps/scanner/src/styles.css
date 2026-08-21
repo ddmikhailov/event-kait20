@@ -1,0 +1,57 @@
+@import 'tailwindcss';
+@import '@event-registration/ui/tokens.css';
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #101122;
+  color: white;
+}
+
+.scanner-shell {
+  display: grid;
+  gap: 1rem;
+  width: min(100%, 42rem);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 1.25rem;
+}
+
+.scanner-shell header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+}
+
+.scanner-shell h1,
+.connection-state,
+.notice {
+  margin: 0;
+}
+
+.connection-state {
+  order: 2;
+  color: #b8f3d9;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.camera-placeholder {
+  display: grid;
+  min-height: 65vh;
+  place-items: center;
+  border: 3px solid #83639d;
+  border-radius: 1rem;
+  background: #191a35;
+  color: #d8d8e9;
+  text-align: center;
+}
+
+.notice {
+  line-height: 1.5;
+}

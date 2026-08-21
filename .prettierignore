@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+generated
+pnpm-lock.yaml
+PROJECT_DOCUMENTATION_v0.2.md
+docs
+AGENTS.md
+CODEX_START_PROMPT.md
+README.md

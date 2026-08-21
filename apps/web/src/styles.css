@@ -1,0 +1,50 @@
+@import 'tailwindcss';
+@import '@event-registration/ui/tokens.css';
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(145deg, rgb(43 44 124 / 8%), transparent 45%),
+    var(--kait-color-surface);
+  color: var(--kait-color-text);
+}
+
+.app-shell {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 52rem;
+  min-height: 100vh;
+  align-content: center;
+  padding: clamp(2rem, 8vw, 7rem);
+}
+
+.app-shell h1 {
+  margin: 0;
+  max-width: 13ch;
+  font-size: clamp(2.5rem, 7vw, 5rem);
+  line-height: 0.98;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--kait-color-blue);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.lede {
+  max-width: 40rem;
+  margin: 0;
+  font-size: 1.125rem;
+  line-height: 1.6;
+}
+
+.app-shell .kait-button {
+  justify-self: start;
+}

@@ -1,0 +1,29 @@
+:root {
+  color-scheme: light;
+  font-family: Montserrat, Arial, sans-serif;
+  --kait-color-violet: #83639d;
+  --kait-color-red: #cb3334;
+  --kait-color-blue: #2b2c7c;
+  --kait-color-orange: #ffa421;
+  --kait-color-green: #0f8558;
+  --kait-color-surface: #ffffff;
+  --kait-color-text: #18182a;
+  --kait-gradient-brand: linear-gradient(135deg, #2b2c7c, #83639d);
+  --kait-radius-control: 0.75rem;
+}
+
+.kait-button {
+  border: 0;
+  border-radius: var(--kait-radius-control);
+  background: var(--kait-gradient-brand);
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: 0.75rem 1.25rem;
+}
+
+.kait-button:focus-visible {
+  outline: 3px solid var(--kait-color-orange);
+  outline-offset: 3px;
+}
