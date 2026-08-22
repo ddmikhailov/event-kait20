@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"]
+    "types": ["node", "vitest/globals"]
   },
-  "include": ["prisma.config.ts"]
+  "include": ["prisma.config.ts", "scripts", "tests"]
 }

@@ -5,15 +5,21 @@
   "type": "module",
   "scripts": {
     "build": "prisma generate",
-    "lint": "eslint prisma.config.ts",
-    "test": "prisma validate",
+    "lint": "eslint prisma.config.ts scripts tests",
+    "test": "pnpm run test:integration",
+    "test:integration": "tsx scripts/run-integration-tests.ts",
+    "test:schema": "prisma validate",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@prisma/client": "7.9.1"
+    "@prisma/client": "7.9.1",
+    "pg": "8.23.0"
   },
   "devDependencies": {
+    "@types/pg": "8.23.1",
     "dotenv": "17.4.2",
-    "prisma": "7.9.1"
+    "embedded-postgres": "18.4.0-beta.17",
+    "prisma": "7.9.1",
+    "tsx": "4.23.12"
   }
 }

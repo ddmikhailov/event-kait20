@@ -21,6 +21,14 @@
 - Certificate Manager/CDN после появления домена;
 - Terraform.
 
+### PostgreSQL version policy
+
+- Production target: PostgreSQL 18.
+- Staging and integration tests must use PostgreSQL 18.
+- Patch and minor upgrades within PostgreSQL 18 are managed by the managed database service and are not an application-level compatibility target.
+- PostgreSQL-specific migrations must remain compatible with PostgreSQL 18.
+- Embedded PostgreSQL distributions are test-only tooling and must not be included in runtime or production dependencies or deployments.
+
 ## 3. Network
 
 PostgreSQL не публикуется как клиентский endpoint. API получает доступ в контролируемой сети.

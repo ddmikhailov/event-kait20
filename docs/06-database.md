@@ -27,6 +27,13 @@
 - All tables with mutable records use `created_at` / `updated_at` where applicable.
 - Hard delete is avoided for business entities referenced by history.
 
+### PostgreSQL version policy
+
+- Production target: PostgreSQL 18.
+- Staging and integration tests must use PostgreSQL 18.
+- Patch and minor upgrades within PostgreSQL 18 are managed by the managed database service and are not an application-level compatibility target.
+- PostgreSQL-specific migrations must remain compatible with PostgreSQL 18.
+
 ## 3. `persons`
 
 - `id uuid PK`
@@ -268,11 +275,11 @@ SUPER_ADMIN administrative overbooking is a separate explicit action/flag and mu
 - `event_access(user_id)`
 - `email_deliveries(status)`
 
-## 18. Remaining implementation choices
+## 18. Stage 1 implementation decisions
 
-These do not block scaffold but must be resolved in the first DB task:
+Resolved in the initial Prisma/PostgreSQL domain migration:
 
-- exact Prisma enum identifiers;
-- PostgreSQL extension/index for tolerant Cyrillic name search (if needed after baseline LIKE/ILIKE testing);
-- timestamp precision standard;
-- exact migration implementation of partial unique index if Prisma schema cannot express it directly.
+- exact enum identifiers are defined in `packages/database/prisma/schema.prisma` and persisted as PostgreSQL enum values;
+- the baseline Person name index is a B-tree on `(last_name, first_name, middle_name)`; no PostgreSQL extension is enabled before staging LIKE/ILIKE measurements justify it;
+- business `timestamptz` columns use millisecond precision (`timestamptz(3)`);
+- one ACTIVE Registration per `(event_id, person_id)` is enforced by the reviewed PostgreSQL partial unique index `registrations_event_id_person_id_active_key` in the SQL migration because Prisma cannot express its `WHERE status = 'ACTIVE'` predicate declaratively.
