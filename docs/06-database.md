@@ -250,6 +250,12 @@ Public and normal onsite registration:
 8. create/update Registration and answers;
 9. commit.
 
+The service serializes overlapping strong Person identity keys with PostgreSQL
+transaction advisory locks before matching/creating Person. This prevents two
+concurrent public submissions with the same normalized name plus email, phone
+or birth date from silently creating separate Person rows. Matching remains in
+the service layer; no deduplication trigger is introduced.
+
 SUPER_ADMIN administrative overbooking is a separate explicit action/flag and must be audit logged.
 
 ## 16. Delete policies

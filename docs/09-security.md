@@ -111,6 +111,10 @@ Return generic authentication/reset responses to reduce account enumeration.
 
 Milestone A rate limiting is process-local and bounds login, forgot/reset and invitation acceptance. Distributed multi-instance rate limiting remains a mandatory production security gate before horizontal API scaling; no external rate-limit service is introduced in MVP foundation code.
 
+Public registration uses the same process-local foundation and exact trusted
+Origin policy. Its production distributed enforcement remains part of the same
+security gate.
+
 ## 12. Logging/audit
 
 Operational logs:

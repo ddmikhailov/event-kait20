@@ -54,6 +54,13 @@ Success variants:
 - `201 REGISTERED` with `ticketUrl` and registration reference;
 - `200 ALREADY_REGISTERED` with neutral confirmation and resend queued when email exists.
 
+The implemented request requires birth date, normalized Russian phone, email,
+participant type, conditional study group/organization, current consent version
+and typed `customAnswers`. Consent URL/version are deployment configuration and
+are returned by the public Event response; every Registration persists their
+historical snapshot. `ticketUrl` is signed with the server-only QR secret and
+contains no plaintext participant data.
+
 Errors include: `VALIDATION_ERROR`, `REGISTRATION_CLOSED`, `CAPACITY_FULL`, `EVENT_NOT_FOUND`, `FORM_VERSION_INVALID`, rate limit.
 
 ## 3. Ticket
