@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  AdminOnsiteRegistrationRequest,
   FormFieldResponse,
+  OnsiteRegistrationResponse,
   PublicEventResponse,
   PublicRegistrationRequest,
   PublicRegistrationResponse,
+  ScannerOnsiteRegistrationRequest,
 } from '@event-registration/contracts';
 import { Inject, Injectable } from '@nestjs/common';
 import type { Pool, PoolClient } from 'pg';
@@ -40,6 +43,13 @@ type FieldRow = {
 
 type PersonRow = { id: string };
 type RegistrationRow = { id: string; public_id: string };
+type RegistrationValues = ScannerOnsiteRegistrationRequest & {
+  email: string | null;
+};
+type RegistrationActor = {
+  id: string;
+  role: 'SUPER_ADMIN' | 'SCANNER';
+};
 
 const KAIT_ORGANIZATION = 'КАИТ №20';
 
@@ -128,7 +138,12 @@ export class RegistrationsService {
 
       if (existing.rows[0]) {
         const registration = existing.rows[0];
-        await this.updateRegistration(client, registration.id, participant);
+        await this.updateRegistration(
+          client,
+          registration.id,
+          participant,
+          true,
+        );
         await this.persistAnswers(client, registration.id, fields, values);
         await this.queueTicket(client, event.id, registration.id, values.email);
         await this.bumpOfflineVersion(client, event.id);
@@ -154,6 +169,8 @@ export class RegistrationsService {
         event.id,
         person.id,
         participant,
+        'PUBLIC_FORM',
+        true,
       );
       await this.persistAnswers(client, registration.id, fields, values);
       await this.queueTicket(client, event.id, registration.id, values.email);
@@ -172,7 +189,120 @@ export class RegistrationsService {
     }
   }
 
-  private participant(values: PublicRegistrationRequest) {
+  public async registerOnsite(
+    eventId: string,
+    values: AdminOnsiteRegistrationRequest | ScannerOnsiteRegistrationRequest,
+    actor: RegistrationActor,
+  ): Promise<OnsiteRegistrationResponse> {
+    const capacityOverride =
+      'capacityOverride' in values && values.capacityOverride === true;
+    if (capacityOverride && actor.role !== 'SUPER_ADMIN') {
+      throw new ApiError(
+        403,
+        'FORBIDDEN',
+        'Capacity override is not permitted',
+      );
+    }
+    const participant = this.participant({
+      ...values,
+      email: values.email ?? null,
+    });
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const event = await this.lockEventById(client, eventId);
+      this.assertOnsiteRegistrationAllowed(event);
+      if (actor.role === 'SCANNER') {
+        await this.assertScannerAccess(client, eventId, actor.id);
+      }
+      await this.lockPersonKeys(client, participant);
+      const fields = await this.formFields(client, event.id);
+      this.validateAnswers(fields, values);
+      const person = await this.findOrCreatePerson(client, participant);
+      const existing = await client.query<RegistrationRow>(
+        `SELECT id, public_id FROM registrations
+         WHERE event_id = $1 AND person_id = $2 AND status = 'ACTIVE'
+         FOR UPDATE`,
+        [event.id, person.id],
+      );
+      if (existing.rows[0]) {
+        const registration = existing.rows[0];
+        await this.updateRegistration(
+          client,
+          registration.id,
+          participant,
+          false,
+        );
+        await this.persistAnswers(client, registration.id, fields, values);
+        if (participant.email) {
+          await this.queueTicket(
+            client,
+            event.id,
+            registration.id,
+            participant.email,
+          );
+        }
+        await this.bumpOfflineVersion(client, event.id);
+        await this.auditOnsite(client, actor, registration.id, false, true);
+        await client.query('COMMIT');
+        return {
+          status: 'ALREADY_REGISTERED',
+          registrationId: registration.id,
+          ticketUrl: this.references.ticketUrl(registration.public_id),
+        };
+      }
+
+      const activeCount = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM registrations
+         WHERE event_id = $1 AND status = 'ACTIVE'`,
+        [event.id],
+      );
+      const full = Number(activeCount.rows[0]?.count ?? 0) >= event.capacity;
+      if (full && !capacityOverride) {
+        throw new ApiError(409, 'CAPACITY_FULL', 'Event capacity is full');
+      }
+      const registration = await this.createRegistration(
+        client,
+        event.id,
+        person.id,
+        participant,
+        'ONSITE',
+        false,
+      );
+      await this.persistAnswers(client, registration.id, fields, values);
+      if (participant.email) {
+        await this.queueTicket(
+          client,
+          event.id,
+          registration.id,
+          participant.email,
+        );
+      }
+      await this.bumpOfflineVersion(client, event.id);
+      await this.auditOnsite(
+        client,
+        actor,
+        registration.id,
+        capacityOverride,
+        false,
+      );
+      await client.query('COMMIT');
+      return {
+        status: 'REGISTERED',
+        registrationId: registration.id,
+        ticketUrl: this.references.ticketUrl(registration.public_id),
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private participant(
+    values: PublicRegistrationRequest | RegistrationValues,
+  ): RegistrationValues {
     const student = values.personType.endsWith('_STUDENT');
     const external = values.personType.startsWith('EXTERNAL_');
     return {
@@ -181,6 +311,50 @@ export class RegistrationsService {
       organization: external ? values.organization! : KAIT_ORGANIZATION,
       studyGroup: student ? values.studyGroup! : null,
     };
+  }
+
+  private async lockEventById(
+    client: PoolClient,
+    eventId: string,
+  ): Promise<EventRow> {
+    const result = await client.query<EventRow>(
+      `SELECT id, title, slug, description, cover_object_key, start_at, end_at,
+              timezone, location, registration_deadline, capacity, status
+       FROM events WHERE id = $1 FOR UPDATE`,
+      [eventId],
+    );
+    const event = result.rows[0];
+    if (!event) throw new ApiError(404, 'EVENT_NOT_FOUND', 'Event not found');
+    return event;
+  }
+
+  private assertOnsiteRegistrationAllowed(event: EventRow): void {
+    if (
+      !['REGISTRATION_OPEN', 'REGISTRATION_CLOSED', 'ACTIVE'].includes(
+        event.status,
+      )
+    ) {
+      throw new ApiError(
+        409,
+        'INVALID_EVENT_STATE',
+        'Onsite registration is not allowed for this Event state',
+      );
+    }
+  }
+
+  private async assertScannerAccess(
+    client: PoolClient,
+    eventId: string,
+    userId: string,
+  ): Promise<void> {
+    const result = await client.query(
+      `SELECT 1 FROM event_access
+       WHERE event_id = $1 AND user_id = $2 AND role = 'SCANNER'`,
+      [eventId, userId],
+    );
+    if (!result.rowCount) {
+      throw new ApiError(403, 'FORBIDDEN', 'Event access is required');
+    }
   }
 
   private async lockEvent(client: PoolClient, slug: string): Promise<EventRow> {
@@ -226,7 +400,7 @@ export class RegistrationsService {
       participant.middleName?.toLocaleLowerCase('ru') ?? '',
     ].join('|');
     const keys = [
-      `${name}|email:${participant.email}`,
+      ...(participant.email ? [`${name}|email:${participant.email}`] : []),
       `${name}|phone:${participant.phone}`,
       `${name}|birth:${participant.birthDate}`,
     ].sort();
@@ -248,7 +422,7 @@ export class RegistrationsService {
          AND lower(last_name) = lower($1)
          AND lower(first_name) = lower($2)
          AND (($3::text IS NULL AND middle_name IS NULL) OR lower(middle_name) = lower($3))
-         AND (email_normalized = $4 OR phone_normalized = $5 OR birth_date = $6::date)
+         AND (email_normalized = $4::text OR phone_normalized = $5 OR birth_date = $6::date)
        FOR UPDATE`,
       [
         participant.lastName,
@@ -312,6 +486,8 @@ export class RegistrationsService {
     eventId: string,
     personId: string,
     participant: ReturnType<RegistrationsService['participant']>,
+    source: 'PUBLIC_FORM' | 'ONSITE',
+    consentAccepted: boolean,
   ): Promise<RegistrationRow> {
     const id = randomUUID();
     const publicId = randomUUID();
@@ -321,13 +497,14 @@ export class RegistrationsService {
          first_name, middle_name, birth_date, email, phone, study_group,
          person_type, organization, consent_accepted, consent_version,
          consent_url, consent_accepted_at, registered_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 'PUBLIC_FORM', 'ACTIVE', $5, $6, $7, $8,
-               $9, $10, $11, $12, $13, true, $14, $15, now(), now(), now(), now())`,
+       VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, $7, $8, $9,
+               $10, $11, $12, $13, $14, $15, $16, $17, $18, now(), now(), now())`,
       [
         id,
         publicId,
         eventId,
         personId,
+        source,
         participant.lastName,
         participant.firstName,
         participant.middleName,
@@ -337,8 +514,10 @@ export class RegistrationsService {
         participant.studyGroup,
         participant.personType,
         participant.organization,
-        this.config.CONSENT_VERSION,
-        this.config.CONSENT_URL,
+        consentAccepted,
+        consentAccepted ? this.config.CONSENT_VERSION : null,
+        consentAccepted ? this.config.CONSENT_URL : null,
+        consentAccepted ? new Date() : null,
       ],
     );
     return { id, public_id: publicId };
@@ -348,13 +527,17 @@ export class RegistrationsService {
     client: PoolClient,
     registrationId: string,
     participant: ReturnType<RegistrationsService['participant']>,
+    refreshConsent: boolean,
   ): Promise<void> {
     await client.query(
       `UPDATE registrations SET last_name = $2, first_name = $3,
          middle_name = $4, birth_date = $5, email = $6, phone = $7,
          study_group = $8, person_type = $9, organization = $10,
-         consent_accepted = true, consent_version = $11, consent_url = $12,
-         consent_accepted_at = now(), updated_at = now() WHERE id = $1`,
+         consent_accepted = CASE WHEN $11 THEN true ELSE consent_accepted END,
+         consent_version = CASE WHEN $11 THEN $12 ELSE consent_version END,
+         consent_url = CASE WHEN $11 THEN $13 ELSE consent_url END,
+         consent_accepted_at = CASE WHEN $11 THEN now() ELSE consent_accepted_at END,
+         updated_at = now() WHERE id = $1`,
       [
         registrationId,
         participant.lastName,
@@ -366,6 +549,7 @@ export class RegistrationsService {
         participant.studyGroup,
         participant.personType,
         participant.organization,
+        refreshConsent,
         this.config.CONSENT_VERSION,
         this.config.CONSENT_URL,
       ],
@@ -387,7 +571,7 @@ export class RegistrationsService {
 
   private validateAnswers(
     fields: FieldRow[],
-    values: PublicRegistrationRequest,
+    values: Pick<PublicRegistrationRequest, 'customAnswers'>,
   ): void {
     const fieldMap = new Map(fields.map((field) => [field.id, field]));
     const answerMap = new Map(
@@ -441,7 +625,7 @@ export class RegistrationsService {
     client: PoolClient,
     registrationId: string,
     fields: FieldRow[],
-    values: PublicRegistrationRequest,
+    values: Pick<PublicRegistrationRequest, 'customAnswers'>,
   ): Promise<void> {
     const fieldMap = new Map(fields.map((field) => [field.id, field]));
     for (const answer of values.customAnswers) {
@@ -497,6 +681,30 @@ export class RegistrationsService {
     await client.query(
       'UPDATE events SET offline_data_version = offline_data_version + 1, updated_at = now() WHERE id = $1',
       [eventId],
+    );
+  }
+
+  private async auditOnsite(
+    client: PoolClient,
+    actor: RegistrationActor,
+    registrationId: string,
+    capacityOverride: boolean,
+    existingRegistration: boolean,
+  ): Promise<void> {
+    await client.query(
+      `INSERT INTO audit_log
+        (id, actor_user_id, action, entity_type, entity_id, metadata, created_at)
+       VALUES ($1, $2, 'ONSITE_REGISTRATION', 'Registration', $3, $4, now())`,
+      [
+        randomUUID(),
+        actor.id,
+        registrationId,
+        {
+          actorRole: actor.role,
+          capacityOverride,
+          existingRegistration,
+        },
+      ],
     );
   }
 }

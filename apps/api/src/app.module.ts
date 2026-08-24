@@ -7,6 +7,7 @@ import { ApiConfigModule } from './common/config.module.js';
 import { DatabaseModule } from './common/database.module.js';
 import { EventsModule } from './events/events.module.js';
 import { HealthController } from './health.controller.js';
+import { ParticipantsModule } from './participants/participants.module.js';
 import { RegistrationsModule } from './registrations/registrations.module.js';
 import { StaffModule } from './staff/staff.module.js';
 
@@ -18,6 +19,7 @@ import { StaffModule } from './staff/staff.module.js';
     StaffModule,
     EventsModule,
     RegistrationsModule,
+    ParticipantsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useExisting: OriginCsrfGuard }],

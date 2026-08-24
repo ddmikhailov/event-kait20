@@ -10,7 +10,7 @@ export const personTypeSchema = z.enum([
   'EXTERNAL_TEACHER',
 ]);
 
-const nameSchema = z
+export const participantNameSchema = z
   .string()
   .trim()
   .min(1)
@@ -43,9 +43,9 @@ export const registrationAnswerRequestSchema = z
 
 export const publicRegistrationRequestSchema = z
   .object({
-    lastName: nameSchema,
-    firstName: nameSchema,
-    middleName: nameSchema.nullable().optional(),
+    lastName: participantNameSchema,
+    firstName: participantNameSchema,
+    middleName: participantNameSchema.nullable().optional(),
     birthDate: z.iso.date(),
     email: emailSchema,
     phone: russianPhoneSchema,
@@ -144,3 +144,65 @@ export const ticketResponseSchema = z.object({
   qrPayload: z.string().min(40).max(500),
 });
 export type TicketResponse = z.infer<typeof ticketResponseSchema>;
+
+const onsiteRegistrationValuesSchema = z.object({
+  lastName: participantNameSchema,
+  firstName: participantNameSchema,
+  middleName: participantNameSchema.nullable().optional(),
+  birthDate: z.iso.date(),
+  email: emailSchema.nullable().optional(),
+  phone: russianPhoneSchema,
+  studyGroup: z.string().trim().min(1).max(100).nullable().optional(),
+  personType: personTypeSchema,
+  organization: z.string().trim().min(1).max(255).nullable().optional(),
+  customAnswers: z.array(registrationAnswerRequestSchema).max(100).default([]),
+});
+
+const refineOnsiteRegistration = (
+  value: z.infer<typeof onsiteRegistrationValuesSchema>,
+  context: z.RefinementCtx,
+) => {
+  if (value.personType.endsWith('_STUDENT') && !value.studyGroup) {
+    context.addIssue({
+      code: 'custom',
+      path: ['studyGroup'],
+      message: 'Study group is required for students',
+    });
+  }
+  if (value.personType.startsWith('EXTERNAL_') && !value.organization) {
+    context.addIssue({
+      code: 'custom',
+      path: ['organization'],
+      message: 'Organization is required for external participants',
+    });
+  }
+  if (
+    new Set(value.customAnswers.map((answer) => answer.fieldId)).size !==
+    value.customAnswers.length
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['customAnswers'],
+      message: 'Each form field may be answered only once',
+    });
+  }
+};
+
+export const scannerOnsiteRegistrationRequestSchema =
+  onsiteRegistrationValuesSchema.strict().superRefine(refineOnsiteRegistration);
+export type ScannerOnsiteRegistrationRequest = z.infer<
+  typeof scannerOnsiteRegistrationRequestSchema
+>;
+
+export const adminOnsiteRegistrationRequestSchema =
+  onsiteRegistrationValuesSchema
+    .extend({ capacityOverride: z.boolean().default(false) })
+    .strict()
+    .superRefine(refineOnsiteRegistration);
+export type AdminOnsiteRegistrationRequest = z.infer<
+  typeof adminOnsiteRegistrationRequestSchema
+>;
+
+export const onsiteRegistrationResponseSchema =
+  publicRegistrationResponseSchema;
+export type OnsiteRegistrationResponse = PublicRegistrationResponse;

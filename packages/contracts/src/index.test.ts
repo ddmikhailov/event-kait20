@@ -4,6 +4,7 @@ import {
   createEventRequestSchema,
   healthResponseSchema,
   passwordResetRequestSchema,
+  scannerOnsiteRegistrationRequestSchema,
   publicRegistrationRequestSchema,
 } from './index';
 
@@ -57,6 +58,27 @@ describe('healthResponseSchema', () => {
         ...result,
         personType: 'EXTERNAL_STUDENT',
         organization: null,
+      }),
+    ).toThrow();
+  });
+
+  it('allows onsite registration without email but rejects scanner overbooking flags', () => {
+    const values = {
+      lastName: 'Петров',
+      firstName: 'Пётр',
+      birthDate: '2004-03-04',
+      phone: '8 999 555 44 33',
+      studyGroup: 'ИС-22',
+      personType: 'KAIT_STUDENT' as const,
+      customAnswers: [],
+    };
+    expect(scannerOnsiteRegistrationRequestSchema.parse(values).email).toBe(
+      undefined,
+    );
+    expect(() =>
+      scannerOnsiteRegistrationRequestSchema.parse({
+        ...values,
+        capacityOverride: true,
       }),
     ).toThrow();
   });

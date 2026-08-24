@@ -15,5 +15,6 @@ import { TicketsService } from './tickets.service.js';
     RegistrationsService,
     TicketsService,
   ],
+  exports: [RegistrationReferenceService, RegistrationsService],
 })
 export class RegistrationsModule {}

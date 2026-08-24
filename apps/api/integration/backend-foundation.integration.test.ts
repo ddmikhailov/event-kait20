@@ -134,6 +134,20 @@ const participant = (
   ...overrides,
 });
 
+const onsiteParticipant = (
+  suffix: string,
+  overrides: Record<string, unknown> = {},
+) => ({
+  lastName: `Петров${suffix}`,
+  firstName: 'Пётр',
+  birthDate: '2004-03-04',
+  phone: `+7888${suffix.padStart(7, '0').slice(-7)}`,
+  studyGroup: 'ИС-22',
+  personType: 'KAIT_STUDENT',
+  customAnswers: [] as { fieldId: string; value: unknown }[],
+  ...overrides,
+});
+
 beforeAll(async () => {
   adminId = await bootstrapSuperAdmin(pool, adminEmail, adminPassword);
   app = await NestFactory.create(AppModule, {
@@ -863,6 +877,113 @@ describe.sequential('backend foundation', () => {
     });
   });
 
+  it('provides a bounded global Person directory and preserves Registration history on Person edits', async () => {
+    const admin = await login();
+    expect((await api('/admin/people')).status).toBe(401);
+    const list = await api(
+      '/admin/people?query=participant-1000001%40example.test&page=1&pageSize=10',
+      { cookie: admin.cookie },
+    );
+    expect(list.status).toBe(200);
+    const listBody = (await list.json()) as {
+      items: { id: string; email: string }[];
+      total: number;
+    };
+    expect(listBody.total).toBe(1);
+    expect(listBody.items[0]?.email).toBe('participant-1000001@example.test');
+    const personId = listBody.items[0]!.id;
+
+    const detail = await api(`/admin/people/${personId}`, {
+      cookie: admin.cookie,
+    });
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({
+      id: personId,
+      registrations: [{ status: 'ACTIVE' }, { status: 'ACTIVE' }],
+    });
+    const update = await api(`/admin/people/${personId}`, {
+      method: 'PATCH',
+      cookie: admin.cookie,
+      csrf: admin.csrf,
+      body: { studyGroup: 'CURRENT-99' },
+    });
+    expect(update.status).toBe(200);
+    expect(await update.json()).toMatchObject({ studyGroup: 'CURRENT-99' });
+
+    const snapshots = await pool.query<{ study_group: string }>(
+      `SELECT study_group FROM registrations WHERE person_id = $1
+       ORDER BY registered_at`,
+      [personId],
+    );
+    expect(snapshots.rows.map((row) => row.study_group)).toEqual([
+      'ИС-22',
+      'ИС-23',
+    ]);
+  });
+
+  it('lists, views and edits Registration snapshots and queues ticket resend with compact audit', async () => {
+    const admin = await login();
+    const list = await api(
+      `/admin/events/${registrationEventId}/registrations?query=Иванов1000001&status=ACTIVE`,
+      { cookie: admin.cookie },
+    );
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({
+      total: 1,
+      items: [{ id: registrationId, status: 'ACTIVE' }],
+    });
+    const detail = await api(
+      `/admin/events/${registrationEventId}/registrations/${registrationId}`,
+      { cookie: admin.cookie },
+    );
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({
+      id: registrationId,
+      answers: [{ value: 'Frontend' }],
+    });
+    const update = await api(
+      `/admin/events/${registrationEventId}/registrations/${registrationId}`,
+      {
+        method: 'PATCH',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: { studyGroup: 'SNAPSHOT-24' },
+      },
+    );
+    expect(update.status).toBe(200);
+    expect(await update.json()).toMatchObject({ studyGroup: 'SNAPSHOT-24' });
+    const personAndRegistration = await pool.query<{
+      person_group: string;
+      registration_group: string;
+    }>(
+      `SELECT p.study_group AS person_group, r.study_group AS registration_group
+       FROM registrations r JOIN persons p ON p.id = r.person_id WHERE r.id = $1`,
+      [registrationId],
+    );
+    expect(personAndRegistration.rows[0]).toMatchObject({
+      person_group: 'CURRENT-99',
+      registration_group: 'SNAPSHOT-24',
+    });
+
+    const resend = await api(
+      `/admin/events/${registrationEventId}/registrations/${registrationId}/resend-ticket`,
+      { method: 'POST', cookie: admin.cookie, csrf: admin.csrf },
+    );
+    expect(resend.status).toBe(201);
+    const deliveries = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM email_deliveries
+       WHERE registration_id = $1`,
+      [registrationId],
+    );
+    expect(deliveries.rows[0]?.count).toBe('3');
+    const audit = await pool.query<{ metadata: { fields?: string[] } }>(
+      `SELECT metadata FROM audit_log WHERE entity_id = $1
+       AND action = 'REGISTRATION_UPDATED' ORDER BY created_at DESC LIMIT 1`,
+      [registrationId],
+    );
+    expect(audit.rows[0]?.metadata).toEqual({ fields: ['studyGroup'] });
+  });
+
   it('preserves answer snapshots when the Event form field changes', async () => {
     const admin = await login();
     const update = await api(
@@ -974,16 +1095,188 @@ describe.sequential('backend foundation', () => {
     expect(count.rows[0]?.count).toBe('1');
   });
 
-  it('invalidates a public ticket after Registration annulment', async () => {
+  it('supports assigned online onsite registration and restricts capacity override to SUPER_ADMIN', async () => {
+    const admin = await login();
+    const event = await createEvent(admin, 'onsite-capacity', 1);
+    const unassignedEvent = await createEvent(admin, 'onsite-unassigned', 2);
+    const onsiteScannerId = randomUUID();
+    const onsiteScannerEmail = 'onsite-scanner@example.test';
+    const onsiteScannerPassword = 'onsite scanner secure password';
     await pool.query(
-      `UPDATE registrations SET status = 'ANNULLED', annulled_at = now(),
-              updated_at = now() WHERE id = $1`,
-      [registrationId],
+      `INSERT INTO staff_users
+        (id, email, email_normalized, password_hash, system_role, active,
+         password_changed_at, created_at, updated_at)
+       VALUES ($1, $2, $2, $3, 'SCANNER', true, now(), now(), now())`,
+      [
+        onsiteScannerId,
+        onsiteScannerEmail,
+        await hashPassword(onsiteScannerPassword),
+      ],
     );
+    await pool.query(
+      `INSERT INTO event_access
+        (id, event_id, user_id, role, created_by, created_at)
+       VALUES ($1, $2, $3, 'SCANNER', $4, now())`,
+      [randomUUID(), event.id, onsiteScannerId, adminId],
+    );
+    const scanner = await login(onsiteScannerEmail, onsiteScannerPassword);
+    expect(
+      (await api('/admin/people', { cookie: scanner.cookie })).status,
+    ).toBe(403);
+
+    const created = await api(
+      `/scanner/events/${event.id}/registrations/onsite`,
+      {
+        method: 'POST',
+        cookie: scanner.cookie,
+        csrf: scanner.csrf,
+        body: onsiteParticipant('4000001'),
+      },
+    );
+    expect(created.status).toBe(201);
+    const createdBody = (await created.json()) as { registrationId: string };
+    const persisted = await pool.query<{
+      consent_accepted: boolean;
+      delivery_count: string;
+      source: string;
+    }>(
+      `SELECT r.source, r.consent_accepted,
+        (SELECT count(*)::text FROM email_deliveries ed
+         WHERE ed.registration_id = r.id) AS delivery_count
+       FROM registrations r WHERE r.id = $1`,
+      [createdBody.registrationId],
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      source: 'ONSITE',
+      consent_accepted: false,
+      delivery_count: '0',
+    });
+    const duplicate = await api(
+      `/scanner/events/${event.id}/registrations/onsite`,
+      {
+        method: 'POST',
+        cookie: scanner.cookie,
+        csrf: scanner.csrf,
+        body: onsiteParticipant('4000001'),
+      },
+    );
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toMatchObject({
+      status: 'ALREADY_REGISTERED',
+      registrationId: createdBody.registrationId,
+    });
+    const resendWithoutEmail = await api(
+      `/admin/events/${event.id}/registrations/${createdBody.registrationId}/resend-ticket`,
+      { method: 'POST', cookie: admin.cookie, csrf: admin.csrf },
+    );
+    expect(resendWithoutEmail.status).toBe(409);
+
+    const search = await api(
+      `/scanner/events/${event.id}/registrations/search?query=Петров4000001`,
+      { cookie: scanner.cookie },
+    );
+    expect(search.status).toBe(200);
+    const searchText = await search.text();
+    expect(searchText).toContain('Петров4000001');
+    expect(searchText).not.toContain('birthDate');
+    expect(searchText).not.toContain('email');
+
+    const fullForScanner = await api(
+      `/scanner/events/${event.id}/registrations/onsite`,
+      {
+        method: 'POST',
+        cookie: scanner.cookie,
+        csrf: scanner.csrf,
+        body: onsiteParticipant('4000002'),
+      },
+    );
+    expect(fullForScanner.status).toBe(409);
+    expect(await fullForScanner.json()).toMatchObject({
+      error: { code: 'CAPACITY_FULL' },
+    });
+    const scannerOverride = await api(
+      `/scanner/events/${event.id}/registrations/onsite`,
+      {
+        method: 'POST',
+        cookie: scanner.cookie,
+        csrf: scanner.csrf,
+        body: onsiteParticipant('4000002', { capacityOverride: true }),
+      },
+    );
+    expect(scannerOverride.status).toBe(400);
+    expect(
+      (
+        await api(
+          `/scanner/events/${unassignedEvent.id}/registrations/onsite`,
+          {
+            method: 'POST',
+            cookie: scanner.cookie,
+            csrf: scanner.csrf,
+            body: onsiteParticipant('4000003'),
+          },
+        )
+      ).status,
+    ).toBe(403);
+
+    const fullForAdmin = await api(
+      `/admin/events/${event.id}/registrations/onsite`,
+      {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: onsiteParticipant('4000002'),
+      },
+    );
+    expect(fullForAdmin.status).toBe(409);
+    const override = await api(
+      `/admin/events/${event.id}/registrations/onsite`,
+      {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: onsiteParticipant('4000002', { capacityOverride: true }),
+      },
+    );
+    expect(override.status).toBe(201);
+    const state = await pool.query<{
+      active_count: string;
+      override_audit_count: string;
+    }>(
+      `SELECT
+        (SELECT count(*)::text FROM registrations
+         WHERE event_id = $1 AND status = 'ACTIVE') AS active_count,
+        (SELECT count(*)::text FROM audit_log
+         WHERE action = 'ONSITE_REGISTRATION'
+           AND metadata @> '{"capacityOverride": true}'::jsonb) AS override_audit_count`,
+      [event.id],
+    );
+    expect(state.rows[0]).toMatchObject({
+      active_count: '2',
+      override_audit_count: '1',
+    });
+  });
+
+  it('invalidates a public ticket after Registration annulment', async () => {
+    const admin = await login();
+    const annul = await api(
+      `/admin/events/${registrationEventId}/registrations/${registrationId}/annul`,
+      { method: 'POST', cookie: admin.cookie, csrf: admin.csrf },
+    );
+    expect(annul.status).toBe(201);
     const response = await api(registrationTicketPath);
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({
       error: { code: 'INVALID_QR' },
+    });
+    const persisted = await pool.query<{
+      annulled_by: string;
+      status: string;
+    }>('SELECT status, annulled_by FROM registrations WHERE id = $1', [
+      registrationId,
+    ]);
+    expect(persisted.rows[0]).toMatchObject({
+      status: 'ANNULLED',
+      annulled_by: adminId,
     });
   });
 });
