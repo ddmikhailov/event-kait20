@@ -90,6 +90,18 @@ Permission: SUPER_ADMIN in MVP.
 
 Important errors: `INVALID_EVENT_STATE`, `INVALID_TIME_RANGE`, `CAPACITY_BELOW_ACTIVE_REGISTRATIONS`.
 
+Implemented MVP status transitions:
+
+- `DRAFT → REGISTRATION_OPEN`;
+- `REGISTRATION_OPEN → REGISTRATION_CLOSED | ACTIVE`;
+- `REGISTRATION_CLOSED → REGISTRATION_OPEN | ACTIVE | COMPLETED`;
+- `ACTIVE → COMPLETED`;
+- `COMPLETED → ARCHIVED` through the archive action;
+- any non-archived status may be archived through the explicit archive action;
+- `ARCHIVED` is terminal and immutable.
+
+New Events start as `DRAFT` or `REGISTRATION_OPEN`. The registration deadline cannot be later than Event start, and Event end must be later than start.
+
 ## 6. Admin — Form fields
 
 - `GET /admin/events/:eventId/form-fields`

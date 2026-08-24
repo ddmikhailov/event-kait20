@@ -15,6 +15,8 @@ Registration committed
 
 Ошибки email не откатывают регистрацию.
 
+Invitation/reset producers persist an idempotent `email_deliveries` intent linked to the one-time auth record. The future worker reconstructs the signed link from record id, purpose, expiry and the server-side HMAC secret; raw invitation/reset tokens are never durable delivery context.
+
 ## 2. Типы писем MVP
 
 - `REGISTRATION_TICKET`

@@ -206,11 +206,14 @@ Raw invitation/session/reset tokens are never persisted.
 - `type enum not null`
 - `recipient_email varchar not null`
 - optional `event_id`, `registration_id`, `staff_user_id`
+- optional `staff_invitation_id`, `password_reset_token_id` for durable auth-link reconstruction by the email worker;
 - `status enum not null`
 - `attempts integer not null default 0`
 - `last_error_code varchar null`
 - `provider_message_id varchar null`
 - `queued_at`, `sent_at`, `created_at`, `updated_at`
+
+At most one auth-link record reference is set on a delivery. The referenced invitation/reset row contains the record id, purpose-by-table, expiry and one-time state; raw link tokens are not stored.
 
 MVP types: `REGISTRATION_TICKET`, `STAFF_INVITATION`, `PASSWORD_RESET`.
 

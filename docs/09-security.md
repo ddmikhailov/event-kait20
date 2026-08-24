@@ -44,11 +44,20 @@ Staff only:
 - password reset token one-time + short TTL;
 - invitation token one-time + TTL.
 
+Milestone A implementation freeze:
+
+- first `SUPER_ADMIN` is created only by the `bootstrap:super-admin` CLI using ephemeral environment input; the command refuses to overwrite any existing SUPER_ADMIN;
+- opaque session tokens contain 256 random bits and only their SHA-256 hashes are persisted;
+- invitation/reset links contain a persisted record id and an HMAC-SHA-256 value bound to purpose and expiry; the database persists only the link hash and one-time record state, while the email worker can reconstruct the link from server-side HMAC configuration;
+- successful password reset revokes all existing sessions for the user.
+
 ## 6. Cookie/CSRF/CORS model
 
 Preferred deployment uses application subdomains under one parent domain (e.g. web/scanner/api). Configure exact CORS allowlist, `credentials` only for trusted origins and never wildcard with credentials.
 
 Mutating cookie-authenticated requests require explicit Origin/Referer validation and CSRF protection appropriate to chosen same-site topology. Exact implementation is frozen during auth scaffold and covered by integration tests.
+
+Milestone A uses exact `Origin` matching against validated Web/Scanner configuration plus a session-bound HMAC CSRF token in `X-CSRF-Token`. The opaque session is stored in the `staff_session` cookie with `HttpOnly`, `SameSite=Lax`, explicit expiry and `Secure` in production. Wildcard credentialed CORS is not supported.
 
 ## 7. Authorization
 
@@ -99,6 +108,8 @@ At minimum:
 - invitation acceptance.
 
 Return generic authentication/reset responses to reduce account enumeration.
+
+Milestone A rate limiting is process-local and bounds login, forgot/reset and invitation acceptance. Distributed multi-instance rate limiting remains a mandatory production security gate before horizontal API scaling; no external rate-limit service is introduced in MVP foundation code.
 
 ## 12. Logging/audit
 
