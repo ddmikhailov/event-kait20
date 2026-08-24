@@ -63,6 +63,12 @@ contains no plaintext participant data.
 
 Errors include: `VALIDATION_ERROR`, `REGISTRATION_CLOSED`, `CAPACITY_FULL`, `EVENT_NOT_FOUND`, `FORM_VERSION_INVALID`, rate limit.
 
+Public web implementation freeze: `/events/:slug` renders the Event and typed
+dynamic form from these contracts; it does not persist draft PII in browser
+storage. The client submits the consent version received with the rendered
+Event and branches on stable error codes. `VITE_API_BASE_URL` optionally selects
+the API origin at build time; an empty value uses the web application's origin.
+
 ## 3. Ticket
 
 ### `GET /tickets/:publicId/:signature`
@@ -77,6 +83,11 @@ endpoint/path logging must mask token/signature components.
 
 Malformed, incorrectly signed, missing and annulled tickets all return the same
 generic `INVALID_QR` response without exposing participant data.
+
+The public client route `/tickets/:publicId/:signature` fetches the ticket with
+`cache: no-store`, renders the QR locally from the opaque signed payload and
+never displays that raw payload as text. The web document declares a
+`no-referrer` policy.
 
 ## 4. Auth
 

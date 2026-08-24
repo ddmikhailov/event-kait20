@@ -65,6 +65,13 @@ High-priority codes: `CAPACITY_FULL`, `ALREADY_REGISTERED`, `REGISTRATION_CLOSED
 - Excel preview → commit;
 - invitation → initial password → login.
 
+The public web client baseline includes unit coverage for conditional system
+fields, rendered custom fields, required multi-choice answers, phone
+normalization, consent-version binding and non-text QR rendering. Browser smoke
+checks cover the Event form at desktop and mobile widths; full
+registration-to-ticket E2E remains part of staging validation against the real
+API and email flow.
+
 ## 6. Offline E2E
 
 - prepare bundle;
