@@ -158,12 +158,18 @@ importers:
 
   apps/web:
     dependencies:
+      '@event-registration/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@event-registration/ui':
         specifier: workspace:*
         version: link:../../packages/ui
       '@tailwindcss/vite':
         specifier: 4.3.3
         version: 4.3.3(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
+      qrcode:
+        specifier: 1.5.4
+        version: 1.5.4
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -174,6 +180,9 @@ importers:
         specifier: 4.3.3
         version: 4.3.3
     devDependencies:
+      '@types/qrcode':
+        specifier: 1.5.6
+        version: 1.5.6
       '@types/react':
         specifier: 19.2.18
         version: 19.2.18
@@ -186,6 +195,9 @@ importers:
       vite:
         specifier: 8.2.2
         version: 8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12)
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   packages/config:
     dependencies:

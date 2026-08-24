@@ -4,47 +4,398 @@
 * {
   box-sizing: border-box;
 }
-
+html {
+  scroll-behavior: smooth;
+}
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
   background:
-    linear-gradient(145deg, rgb(43 44 124 / 8%), transparent 45%),
-    var(--kait-color-surface);
+    radial-gradient(
+      circle at 100% 0%,
+      rgb(131 99 157 / 18%),
+      transparent 32rem
+    ),
+    linear-gradient(180deg, #f8f7fb, #fff 32rem);
   color: var(--kait-color-text);
+  font-family: Montserrat, Arial, sans-serif;
 }
-
-.app-shell {
-  display: grid;
-  gap: 1.5rem;
-  max-width: 52rem;
-  min-height: 100vh;
-  align-content: center;
-  padding: clamp(2rem, 8vw, 7rem);
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }
-
-.app-shell h1 {
-  margin: 0;
-  max-width: 13ch;
-  font-size: clamp(2.5rem, 7vw, 5rem);
-  line-height: 0.98;
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--kait-color-orange);
+  outline-offset: 3px;
 }
-
-.eyebrow {
-  margin: 0;
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+a {
   color: var(--kait-color-blue);
-  font-weight: 700;
+}
+
+.public-page {
+  width: min(100%, 78rem);
+  margin: 0 auto;
+  padding: clamp(1rem, 4vw, 3rem);
+}
+.event-hero {
+  position: relative;
+  display: grid;
+  min-height: 28rem;
+  align-items: end;
+  overflow: hidden;
+  border-radius: clamp(1.25rem, 3vw, 2.25rem);
+  padding: clamp(1.5rem, 5vw, 4.5rem);
+  background:
+    linear-gradient(135deg, rgb(43 44 124 / 96%), rgb(131 99 157 / 91%)),
+    #2b2c7c;
+  color: white;
+  box-shadow: 0 1.5rem 4rem rgb(43 44 124 / 20%);
+}
+.event-hero::before,
+.event-hero::after {
+  position: absolute;
+  width: 17rem;
+  height: 17rem;
+  border: 1px solid rgb(255 255 255 / 18%);
+  content: '';
+  transform: rotate(35deg);
+}
+.event-hero::before {
+  top: -9rem;
+  right: -4rem;
+}
+.event-hero::after {
+  right: 9rem;
+  bottom: -14rem;
+}
+.brand-mark {
+  position: absolute;
+  top: clamp(1.5rem, 4vw, 3rem);
+  left: clamp(1.5rem, 5vw, 4.5rem);
+  font-size: 0.8rem;
+  font-weight: 800;
   letter-spacing: 0.08em;
 }
-
-.lede {
-  max-width: 40rem;
-  margin: 0;
-  font-size: 1.125rem;
+.hero-content {
+  position: relative;
+  z-index: 1;
+  max-width: 58rem;
+}
+.eyebrow {
+  margin-bottom: 0.65rem;
+  color: var(--kait-color-violet);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.event-hero .eyebrow {
+  color: #eadcf4;
+}
+.event-hero h1 {
+  max-width: 16ch;
+  margin-bottom: 1rem;
+  font-size: clamp(2.4rem, 7vw, 5.7rem);
+  line-height: 0.98;
+}
+.description {
+  max-width: 48rem;
+  color: rgb(255 255 255 / 83%);
+  font-size: clamp(1rem, 2vw, 1.25rem);
   line-height: 1.6;
+  white-space: pre-line;
+}
+.event-facts {
+  display: grid;
+  gap: 1rem;
+  margin: 2rem 0 0;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+.event-facts div {
+  border-left: 3px solid var(--kait-color-orange);
+  padding-left: 0.9rem;
+}
+.event-facts dt {
+  color: rgb(255 255 255 / 60%);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.event-facts dd {
+  margin: 0.3rem 0 0;
+  font-weight: 650;
+  line-height: 1.45;
 }
 
-.app-shell .kait-button {
+.registration-panel {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 62rem;
+  margin: clamp(2rem, 6vw, 5rem) auto;
+  border: 1px solid #e1ddea;
+  border-radius: 1.5rem;
+  padding: clamp(1.25rem, 4vw, 3rem);
+  background: white;
+  box-shadow: 0 1rem 3rem rgb(43 44 124 / 8%);
+}
+.section-heading h2 {
+  margin-bottom: 0.65rem;
+  font-size: clamp(1.7rem, 4vw, 2.65rem);
+}
+.section-heading p:last-child,
+.muted,
+.form-footnote {
+  color: #67677b;
+  line-height: 1.55;
+}
+.registration-form {
+  display: grid;
+  gap: 1.75rem;
+}
+.registration-form fieldset {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+.registration-form legend {
+  margin-bottom: 1rem;
+  color: var(--kait-color-blue);
+  font-size: 1.05rem;
+  font-weight: 750;
+}
+.form-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.dynamic-fields {
+  display: grid;
+  gap: 1rem;
+}
+.registration-form label,
+.choice-group {
+  display: grid;
+  gap: 0.45rem;
+  color: #35354c;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+input:not([type='checkbox']),
+select,
+textarea {
+  width: 100%;
+  min-height: 3.25rem;
+  border: 1px solid #b9b5c9;
+  border-radius: 0.75rem;
+  background: #fff;
+  color: var(--kait-color-text);
+  padding: 0.75rem 0.9rem;
+}
+textarea {
+  min-height: 8rem;
+  resize: vertical;
+}
+.choice-group {
+  border: 1px solid #dedbe7;
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+.choice-group p {
+  margin-bottom: 0.35rem;
+}
+.choice-row,
+.consent-row {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 0.7rem !important;
+  line-height: 1.5;
+}
+.choice-row input,
+.consent-row input {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: 0 0 auto;
+  margin-top: 0.08rem;
+}
+.consent-row {
+  border: 1px solid #dedbe7;
+  border-radius: 0.9rem;
+  padding: 1rem;
+  background: #faf9fc;
+}
+.registration-form .kait-button,
+.primary-link {
+  display: inline-flex;
+  min-height: 3.5rem;
+  align-items: center;
+  justify-content: center;
   justify-self: start;
+  padding: 0.85rem 1.5rem;
+  font-weight: 750;
+}
+.registration-form .kait-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.form-footnote {
+  margin-bottom: 0;
+  font-size: 0.82rem;
+}
+.message {
+  border-radius: 0.85rem;
+  padding: 1rem 1.1rem;
+  font-weight: 650;
+  line-height: 1.45;
+}
+.message.error {
+  border: 1px solid #e0a0a0;
+  background: #fff1f1;
+  color: #852324;
+}
+.message.notice {
+  border: 1px solid #c9bed5;
+  background: #f7f3fa;
+  color: #4c365d;
+}
+.privacy-note {
+  max-width: 55rem;
+  margin: 0 auto 2rem;
+  color: #6e6e80;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.centered-page,
+.ticket-page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: clamp(1rem, 5vw, 3rem);
+}
+.home-card,
+.success-card,
+.error-card {
+  width: min(100%, 42rem);
+  border: 1px solid #dedbe7;
+  border-radius: 1.5rem;
+  padding: clamp(1.5rem, 5vw, 3.5rem);
+  background: white;
+  box-shadow: 0 1.5rem 4rem rgb(43 44 124 / 12%);
+}
+.home-card h1,
+.success-card h1,
+.error-card h1 {
+  margin-bottom: 1rem;
+  font-size: clamp(2rem, 6vw, 4rem);
+  line-height: 1.04;
+}
+.success-card {
+  text-align: center;
+}
+.success-icon {
+  display: grid;
+  width: 4rem;
+  height: 4rem;
+  margin: 0 auto 1.5rem;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--kait-color-green);
+  color: white;
+  font-size: 2rem;
+  font-weight: 800;
+}
+.primary-link {
+  margin: 1rem 0;
+  border-radius: 0.75rem;
+  background: var(--kait-gradient-brand);
+  color: white;
+  text-decoration: none;
+}
+.loading-label {
+  color: var(--kait-color-blue);
+  font-weight: 750;
+}
+
+.ticket-page {
+  background:
+    radial-gradient(circle at 50% 0%, rgb(131 99 157 / 25%), transparent 35rem),
+    #101122;
+}
+.ticket-card {
+  display: grid;
+  width: min(100%, 38rem);
+  gap: 1.35rem;
+  overflow: hidden;
+  border-radius: 1.5rem;
+  padding: clamp(1.25rem, 5vw, 3rem);
+  background: white;
+  box-shadow: 0 2rem 6rem rgb(0 0 0 / 35%);
+}
+.ticket-card h1 {
+  margin-bottom: 0;
+  font-size: clamp(1.8rem, 6vw, 3.2rem);
+  line-height: 1.05;
+}
+.ticket-qr {
+  display: block;
+  width: min(100%, 30rem);
+  aspect-ratio: 1;
+  margin: 0 auto;
+  image-rendering: pixelated;
+}
+.ticket-details {
+  border-left: 4px solid var(--kait-color-violet);
+  padding-left: 1rem;
+}
+.ticket-details h2 {
+  margin-bottom: 0.6rem;
+  font-size: clamp(1.35rem, 4vw, 2rem);
+}
+.ticket-details p {
+  margin-bottom: 0.35rem;
+  color: #55556b;
+  line-height: 1.45;
+}
+.ticket-hint {
+  margin-bottom: 0;
+  border-radius: 0.75rem;
+  padding: 0.85rem;
+  background: #f2eef6;
+  color: #4c365d;
+  font-size: 0.85rem;
+  font-weight: 650;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .event-hero {
+    min-height: 31rem;
+  }
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .registration-form .kait-button,
+  .primary-link {
+    width: 100%;
+    justify-self: stretch;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
