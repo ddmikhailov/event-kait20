@@ -10,6 +10,9 @@ describe('parseApiEnvironment', () => {
       AUTH_LINK_SECRET: 'a'.repeat(32),
       AUTH_LINK_BASE_URL: 'http://localhost:5173/auth',
       QR_SIGNING_SECRET: 'q'.repeat(32),
+      PUBLIC_WEB_BASE_URL: 'http://localhost:5173',
+      CONSENT_URL: 'https://example.test/consent',
+      CONSENT_VERSION: 'test-v1',
       CORS_ORIGINS: 'http://localhost:5173',
     });
 
@@ -26,6 +29,9 @@ describe('parseApiEnvironment', () => {
         AUTH_LINK_SECRET: 'a'.repeat(32),
         AUTH_LINK_BASE_URL: 'http://localhost:5173/auth',
         QR_SIGNING_SECRET: 'q'.repeat(32),
+        PUBLIC_WEB_BASE_URL: 'http://localhost:5173',
+        CONSENT_URL: 'https://example.test/consent',
+        CONSENT_VERSION: 'test-v1',
         CORS_ORIGINS: 'http://localhost:5173/path',
       }),
     ).toThrow();

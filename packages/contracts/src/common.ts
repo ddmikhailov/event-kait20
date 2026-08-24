@@ -29,6 +29,13 @@ export const errorCodeSchema = z.enum([
   'INVALID_EVENT_STATE',
   'INVALID_TIME_RANGE',
   'CAPACITY_BELOW_ACTIVE_REGISTRATIONS',
+  'REGISTRATION_CLOSED',
+  'CAPACITY_FULL',
+  'ALREADY_REGISTERED',
+  'REGISTRATION_ANNULLED',
+  'REGISTRATION_NOT_FOUND',
+  'FORM_VERSION_INVALID',
+  'INVALID_QR',
 ]);
 
 export type ErrorCode = z.infer<typeof errorCodeSchema>;

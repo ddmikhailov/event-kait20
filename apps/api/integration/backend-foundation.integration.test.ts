@@ -33,6 +33,8 @@ let baseUrl: string;
 let adminId: string;
 let scannerId: string;
 let eventId: string;
+let registrationEventId: string;
+let registrationFieldId: string;
 
 type SessionClient = { cookie: string; csrf: string };
 
@@ -85,7 +87,11 @@ const login = async (
   };
 };
 
-const createEvent = async (session: SessionClient, suffix = '') => {
+const createEvent = async (
+  session: SessionClient,
+  suffix = '',
+  capacity = 100,
+) => {
   const response = await api('/admin/events', {
     method: 'POST',
     cookie: session.cookie,
@@ -97,7 +103,8 @@ const createEvent = async (session: SessionClient, suffix = '') => {
       endAt: '2027-06-10T18:00:00.000Z',
       registrationDeadline: '2027-06-09T18:00:00.000Z',
       location: 'Moscow',
-      capacity: 100,
+      capacity,
+      status: 'REGISTRATION_OPEN',
     },
   });
   expect(response.status).toBe(201);
@@ -107,6 +114,23 @@ const createEvent = async (session: SessionClient, suffix = '') => {
     title: string;
   };
 };
+
+const participant = (
+  suffix: string,
+  overrides: Record<string, unknown> = {},
+) => ({
+  lastName: `Иванов${suffix}`,
+  firstName: 'Иван',
+  birthDate: '2005-01-02',
+  email: `participant-${suffix.toLowerCase()}@example.test`,
+  phone: `+7999${suffix.padStart(7, '0').slice(-7)}`,
+  studyGroup: 'ИС-21',
+  personType: 'KAIT_STUDENT',
+  consentAccepted: true,
+  consentVersion: 'test-v1',
+  customAnswers: [] as { fieldId: string; value: unknown }[],
+  ...overrides,
+});
 
 beforeAll(async () => {
   adminId = await bootstrapSuperAdmin(pool, adminEmail, adminPassword);
@@ -618,5 +642,303 @@ describe.sequential('backend foundation', () => {
       body: { email: scannerEmail, password: scannerPassword },
     });
     expect(loginResponse.status).toBe(401);
+  });
+
+  it('publishes an open Event with active form fields and current consent metadata', async () => {
+    const admin = await login();
+    const event = await createEvent(admin, 'registration-core', 2);
+    registrationEventId = event.id;
+    const fieldResponse = await api(
+      `/admin/events/${registrationEventId}/form-fields`,
+      {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: {
+          type: 'SINGLE_CHOICE',
+          label: 'Направление',
+          required: true,
+          sortOrder: 1,
+          options: ['Backend', 'Frontend'],
+        },
+      },
+    );
+    expect(fieldResponse.status).toBe(201);
+    registrationFieldId = ((await fieldResponse.json()) as { id: string }).id;
+
+    const response = await api(
+      '/public/events/foundation-event-registration-core',
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      availability: 'OPEN',
+      consentUrl: 'https://example.test/consent',
+      consentVersion: 'test-v1',
+      formFields: [
+        {
+          id: registrationFieldId,
+          label: 'Направление',
+          required: true,
+        },
+      ],
+    });
+  });
+
+  it('validates form and consent versions before persisting public registration', async () => {
+    const path = '/public/events/foundation-event-registration-core/register';
+    const staleConsent = await api(path, {
+      method: 'POST',
+      body: participant('1000001', {
+        consentVersion: 'stale-v0',
+        customAnswers: [{ fieldId: registrationFieldId, value: 'Backend' }],
+      }),
+    });
+    expect(staleConsent.status).toBe(409);
+    expect(await staleConsent.json()).toMatchObject({
+      error: { code: 'FORM_VERSION_INVALID' },
+    });
+    const missingRequiredAnswer = await api(path, {
+      method: 'POST',
+      body: participant('1000001'),
+    });
+    expect(missingRequiredAnswer.status).toBe(409);
+    const count = await pool.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM registrations WHERE event_id = $1',
+      [registrationEventId],
+    );
+    expect(count.rows[0]?.count).toBe('0');
+  });
+
+  it('creates Person, Registration snapshot, typed answers, consent, and durable email intent', async () => {
+    const response = await api(
+      '/public/events/foundation-event-registration-core/register',
+      {
+        method: 'POST',
+        body: participant('1000001', {
+          customAnswers: [{ fieldId: registrationFieldId, value: 'Backend' }],
+        }),
+      },
+    );
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as {
+      registrationId: string;
+      status: string;
+      ticketUrl: string;
+    };
+    expect(body.status).toBe('REGISTERED');
+    expect(body.ticketUrl).not.toContain('Иванов');
+    expect(body.ticketUrl).not.toContain('example.test@');
+
+    const persisted = await pool.query<{
+      answer: unknown;
+      consent_accepted: boolean;
+      consent_url: string;
+      consent_version: string;
+      delivery_count: string;
+      organization: string;
+    }>(
+      `SELECT r.consent_accepted, r.consent_url, r.consent_version,
+              r.organization, ra.answer,
+              (SELECT count(*)::text FROM email_deliveries ed
+               WHERE ed.registration_id = r.id) AS delivery_count
+       FROM registrations r
+       JOIN registration_answers ra ON ra.registration_id = r.id
+       WHERE r.id = $1`,
+      [body.registrationId],
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      answer: 'Backend',
+      consent_accepted: true,
+      consent_url: 'https://example.test/consent',
+      consent_version: 'test-v1',
+      delivery_count: '1',
+      organization: 'КАИТ №20',
+    });
+  });
+
+  it('resolves a confident repeat without creating duplicate Person or Registration', async () => {
+    const response = await api(
+      '/public/events/foundation-event-registration-core/register',
+      {
+        method: 'POST',
+        body: participant('1000001', {
+          studyGroup: 'ИС-22',
+          customAnswers: [{ fieldId: registrationFieldId, value: 'Frontend' }],
+        }),
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: 'ALREADY_REGISTERED',
+    });
+    const counts = await pool.query<{
+      deliveries: string;
+      persons: string;
+      registrations: string;
+      study_group: string;
+    }>(
+      `SELECT
+         (SELECT count(*)::text FROM persons WHERE email_normalized = $1) AS persons,
+         (SELECT count(*)::text FROM registrations WHERE event_id = $2) AS registrations,
+         (SELECT count(*)::text FROM email_deliveries ed JOIN registrations r
+          ON r.id = ed.registration_id WHERE r.event_id = $2) AS deliveries,
+         (SELECT study_group FROM registrations WHERE event_id = $2) AS study_group`,
+      ['participant-1000001@example.test', registrationEventId],
+    );
+    expect(counts.rows[0]).toMatchObject({
+      persons: '1',
+      registrations: '1',
+      deliveries: '2',
+      study_group: 'ИС-22',
+    });
+  });
+
+  it('reuses Person across Events without rewriting the earlier Registration snapshot', async () => {
+    const admin = await login();
+    await createEvent(admin, 'second-registration', 2);
+    const response = await api(
+      '/public/events/foundation-event-second-registration/register',
+      {
+        method: 'POST',
+        body: participant('1000001', { studyGroup: 'ИС-23' }),
+      },
+    );
+    expect(response.status).toBe(201);
+    const history = await pool.query<{
+      current_group: string;
+      first_snapshot: string;
+      person_count: string;
+      registration_count: string;
+      second_snapshot: string;
+    }>(
+      `SELECT
+         (SELECT count(*)::text FROM persons WHERE email_normalized = $1) AS person_count,
+         (SELECT count(*)::text FROM registrations r JOIN persons p ON p.id = r.person_id
+          WHERE p.email_normalized = $1) AS registration_count,
+         (SELECT study_group FROM persons WHERE email_normalized = $1) AS current_group,
+         (SELECT r.study_group FROM registrations r JOIN events e ON e.id = r.event_id
+          WHERE e.slug = 'foundation-event-registration-core') AS first_snapshot,
+         (SELECT r.study_group FROM registrations r JOIN events e ON e.id = r.event_id
+          WHERE e.slug = 'foundation-event-second-registration') AS second_snapshot`,
+      ['participant-1000001@example.test'],
+    );
+    expect(history.rows[0]).toMatchObject({
+      person_count: '1',
+      registration_count: '2',
+      current_group: 'ИС-23',
+      first_snapshot: 'ИС-22',
+      second_snapshot: 'ИС-23',
+    });
+  });
+
+  it('preserves answer snapshots when the Event form field changes', async () => {
+    const admin = await login();
+    const update = await api(
+      `/admin/events/${registrationEventId}/form-fields/${registrationFieldId}`,
+      {
+        method: 'PATCH',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: { label: 'Новое название поля' },
+      },
+    );
+    expect(update.status).toBe(200);
+    const snapshots = await pool.query<{
+      current_label: string;
+      snapshot_label: string;
+    }>(
+      `SELECT f.label AS current_label, a.field_label_snapshot AS snapshot_label
+       FROM registration_answers a
+       JOIN event_form_fields f ON f.id = a.field_id
+       WHERE a.field_id = $1`,
+      [registrationFieldId],
+    );
+    expect(snapshots.rows[0]).toMatchObject({
+      current_label: 'Новое название поля',
+      snapshot_label: 'Направление',
+    });
+  });
+
+  it('creates a review-marked Person when strong identifiers point to different people', async () => {
+    await pool.query(
+      `INSERT INTO persons
+        (id, last_name, first_name, birth_date, email, email_normalized,
+         phone, phone_normalized, person_type, organization, study_group,
+         dedup_review_required, created_at, updated_at)
+       VALUES ($1, 'Иванов1000001', 'Иван', '2004-02-03', $2, $2, $3, $3,
+               'KAIT_STUDENT', 'КАИТ №20', 'ИС-20', false, now(), now())`,
+      [randomUUID(), 'conflict@example.test', '+79995550000'],
+    );
+    const admin = await login();
+    await createEvent(admin, 'dedup-conflict', 2);
+    const response = await api(
+      '/public/events/foundation-event-dedup-conflict/register',
+      {
+        method: 'POST',
+        body: participant('1000001', {
+          birthDate: '2004-02-03',
+          phone: '+79995550000',
+        }),
+      },
+    );
+    expect(response.status).toBe(201);
+    const people = await pool.query<{
+      count: string;
+      review_count: string;
+    }>(
+      `SELECT count(*)::text AS count,
+              count(*) FILTER (WHERE dedup_review_required)::text AS review_count
+       FROM persons WHERE last_name = 'Иванов1000001'`,
+    );
+    expect(people.rows[0]).toMatchObject({
+      count: '3',
+      review_count: '1',
+    });
+  });
+
+  it('rejects registration after the deadline without creating business rows', async () => {
+    const admin = await login();
+    const event = await createEvent(admin, 'closed-deadline', 2);
+    await pool.query(
+      `UPDATE events SET registration_deadline = now() - interval '1 minute'
+       WHERE id = $1`,
+      [event.id],
+    );
+    const response = await api(
+      '/public/events/foundation-event-closed-deadline/register',
+      { method: 'POST', body: participant('3000001') },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: { code: 'REGISTRATION_CLOSED' },
+    });
+    const count = await pool.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM registrations WHERE event_id = $1',
+      [event.id],
+    );
+    expect(count.rows[0]?.count).toBe('0');
+  });
+
+  it('serializes concurrent public registration so capacity cannot be exceeded', async () => {
+    const admin = await login();
+    await createEvent(admin, 'capacity-race', 1);
+    const path = '/public/events/foundation-event-capacity-race/register';
+    const responses = await Promise.all([
+      api(path, { method: 'POST', body: participant('2000001') }),
+      api(path, { method: 'POST', body: participant('2000002') }),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      201, 409,
+    ]);
+    const failure = responses.find((response) => response.status === 409)!;
+    expect(await failure.json()).toMatchObject({
+      error: { code: 'CAPACITY_FULL' },
+    });
+    const count = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM registrations r
+       JOIN events e ON e.id = r.event_id
+       WHERE e.slug = 'foundation-event-capacity-race' AND r.status = 'ACTIVE'`,
+    );
+    expect(count.rows[0]?.count).toBe('1');
   });
 });

@@ -4,6 +4,7 @@ import {
   createEventRequestSchema,
   healthResponseSchema,
   passwordResetRequestSchema,
+  publicRegistrationRequestSchema,
 } from './index';
 
 describe('healthResponseSchema', () => {
@@ -34,5 +35,29 @@ describe('healthResponseSchema', () => {
         capacity: 100,
       }).timezone,
     ).toBe('Europe/Moscow');
+  });
+
+  it('normalizes a public registration and enforces conditional fields', () => {
+    const result = publicRegistrationRequestSchema.parse({
+      lastName: ' Иванов ',
+      firstName: 'Иван',
+      birthDate: '2005-01-02',
+      email: ' IVAN@example.test ',
+      phone: '8 (999) 123-45-67',
+      studyGroup: 'ИС-21',
+      personType: 'KAIT_STUDENT',
+      consentAccepted: true,
+      consentVersion: 'v1',
+      customAnswers: [],
+    });
+    expect(result.email).toBe('ivan@example.test');
+    expect(result.phone).toBe('+79991234567');
+    expect(() =>
+      publicRegistrationRequestSchema.parse({
+        ...result,
+        personType: 'EXTERNAL_STUDENT',
+        organization: null,
+      }),
+    ).toThrow();
   });
 });

@@ -25,6 +25,9 @@ const integrationEnvironment = {
   CORS_ORIGINS: 'http://127.0.0.1:5173,http://127.0.0.1:4173',
   NODE_ENV: 'test',
   QR_SIGNING_SECRET: randomBytes(32).toString('base64url'),
+  PUBLIC_WEB_BASE_URL: 'http://127.0.0.1:5173',
+  CONSENT_URL: 'https://example.test/consent',
+  CONSENT_VERSION: 'test-v1',
   SESSION_SECRET: randomBytes(32).toString('base64url'),
 };
 
@@ -378,6 +381,8 @@ const run = async (): Promise<void> => {
     );
     await resetExternalTestDatabase(databaseUrl);
     await runPnpm(['exec', 'prisma', 'migrate', 'deploy'], databaseUrl);
+    await runPnpm(['--dir', '../config', 'run', 'build'], databaseUrl);
+    await runPnpm(['--dir', '../contracts', 'run', 'build'], databaseUrl);
     await runPnpm(
       ['--dir', '../../apps/api', 'run', 'test:integration'],
       databaseUrl,

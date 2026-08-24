@@ -23,6 +23,9 @@ export const apiEnvironmentSchema = z.object({
   AUTH_LINK_SECRET: z.string().min(32),
   AUTH_LINK_BASE_URL: z.url(),
   QR_SIGNING_SECRET: z.string().min(32),
+  PUBLIC_WEB_BASE_URL: z.url(),
+  CONSENT_URL: z.url(),
+  CONSENT_VERSION: z.string().min(1).max(255),
   CORS_ORIGINS: trustedOriginsSchema,
   SESSION_TTL_SECONDS: z.coerce.number().int().min(300).default(28_800),
   PASSWORD_RESET_TTL_SECONDS: z.coerce

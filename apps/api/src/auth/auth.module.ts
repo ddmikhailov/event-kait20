@@ -20,6 +20,7 @@ import { AuthService } from './auth.service.js';
     AuthLinkService,
     AuthService,
     OriginCsrfGuard,
+    RateLimiterService,
     RolesGuard,
     SessionGuard,
   ],

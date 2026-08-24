@@ -7,6 +7,7 @@ import { ApiConfigModule } from './common/config.module.js';
 import { DatabaseModule } from './common/database.module.js';
 import { EventsModule } from './events/events.module.js';
 import { HealthController } from './health.controller.js';
+import { RegistrationsModule } from './registrations/registrations.module.js';
 import { StaffModule } from './staff/staff.module.js';
 
 @Module({
@@ -16,6 +17,7 @@ import { StaffModule } from './staff/staff.module.js';
     AuthModule,
     StaffModule,
     EventsModule,
+    RegistrationsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useExisting: OriginCsrfGuard }],
