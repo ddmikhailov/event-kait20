@@ -69,6 +69,12 @@ Increase version for changes that affect scanner dataset, e.g.:
 
 At 100–1000 registrations, MVP downloads a full replacement bundle when version differs. No differential sync.
 
+Backend implementation freeze: version is serialized as a decimal string;
+bundle integrity uses SHA-256 over the deterministic Registration array plus an
+explicit row count. Only active registrations are included. The server hard
+limit of 5000 rows is an operational guard above the reviewed MVP range, not a
+new supported Event-size target.
+
 ## 6. Offline access lifecycle
 
 Prepared data was obtained after authenticated authorization. While disconnected, backend cannot instantly revoke access already cached on the device; this is an explicit MVP limitation.
@@ -109,6 +115,11 @@ No distributed locking between phones.
 
 If two devices scan the same participant while disconnected, both local events can exist. Server accepts idempotent client event IDs and determines first valid attendance. Later event is marked repeated/duplicate but retained according to attendance/audit policy.
 
+The first item accepted under a PostgreSQL Registration row lock becomes the
+primary attendance and its estimated time is retained. Later-arriving events,
+even with an earlier device timestamp, remain diagnostic duplicates and do not
+rewrite `first_attended_at`.
+
 ## 10. Time
 
 Store:
@@ -118,6 +129,10 @@ Store:
 - server `received_at`.
 
 Use server-adjusted estimate for arrival analytics when credible. Received time remains available for diagnostics. Absurd clock offsets must not silently rewrite event history; implementation can clamp/flag suspicious values.
+
+The MVP backend treats estimates outside Event start −24h through Event end
++24h as `INVALID_TIMESTAMP`; such items remain available for visible client-side
+resolution and are not written to attendance history.
 
 ## 11. Offline UX states
 

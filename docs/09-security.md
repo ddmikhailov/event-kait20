@@ -90,6 +90,11 @@ Scanner caches minimum fields only. Cache lifecycle:
 
 Browser storage is not treated as encrypted trusted storage against an unlocked/compromised device. Minimize stored fields instead of relying on ineffective client-side secret encryption.
 
+The backend offline bundle contains no email, birth date, custom answers, raw QR
+payload or signing secret. QR resolution and attendance synchronization require
+an active server session plus current EventAccess; an unassigned SCANNER cannot
+download, resolve or sync for the Event.
+
 ## 9. Database/network
 
 - PostgreSQL not publicly exposed to client apps.

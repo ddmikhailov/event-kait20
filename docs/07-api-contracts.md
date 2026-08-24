@@ -201,10 +201,21 @@ Returns only assigned Event summaries.
 ### `GET /scanner/events/:eventId/offline-bundle`
 Requires active session + EventAccess. Returns bundle version, expiry metadata and minimum participant dataset.
 
+The implemented full bundle returns the decimal-string `offline_data_version`,
+generation/server time, expiry at Event end + 24 hours, row count, SHA-256
+checksum and active Registration snapshots. Each snapshot contains the allowed
+scanner fields and SHA-256 of its expected signed QR payload; the signing secret
+and raw QR payload are not included. The reviewed MVP hard limit is 5000 rows.
+
 ### `POST /scanner/events/:eventId/resolve-qr`
 Online scan lookup. QR payload is in JSON body, not URL, to reduce secret exposure in access logs.
 
 Returns participant display data and attendance state. Does not itself create attendance unless request explicitly includes supported fast-mode confirmation; preferred implementation can call sync endpoint immediately after resolve.
+
+The implemented endpoint only resolves an HMAC-valid QR belonging to the Event
+in the route. Forged, malformed and cross-Event QR values return `INVALID_QR`;
+an existing annulled Registration returns `REGISTRATION_ANNULLED`. Resolution
+does not create an AttendanceEvent.
 
 ### `GET /scanner/events/:eventId/registrations/search`
 Search by name/phone/email/group within assigned Event.
@@ -229,6 +240,11 @@ Request includes:
 - device timestamp;
 - estimated server-adjusted timestamp/clock metadata when available.
 
+The implemented batch accepts 1–500 unique client event IDs. Every item also
+declares `ONLINE` or `OFFLINE_SYNC` source. Estimated scan time must fall within
+24 hours before Event start and 24 hours after Event end; suspicious values are
+returned as `INVALID_TIMESTAMP` and are not persisted.
+
 Per item response:
 - `ACCEPTED`
 - `ALREADY_PROCESSED`
@@ -236,8 +252,15 @@ Per item response:
 - `INVALID_REGISTRATION`
 - `REGISTRATION_ANNULLED`
 - `ACCESS_DENIED`
+- `INVALID_TIMESTAMP`
 
 The whole batch is not failed because one item is duplicate/invalid; return per-item results.
+
+Valid attempts are persisted as AttendanceEvent rows, including repeats.
+Registration is locked while an item is applied: the first accepted attempt
+sets `first_attended_at`, while later attempts are stored with `duplicate=true`
+and cannot rewrite it. A retry of the globally unique `clientEventId` returns
+`ALREADY_PROCESSED`. The response includes the current offline-data version.
 
 ## 14. Shared business error codes
 
