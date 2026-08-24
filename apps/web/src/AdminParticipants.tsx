@@ -10,6 +10,7 @@ import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
+import { downloadEventExcel, EventExcel } from './AdminExcel.js';
 import {
   onsiteValues,
   participantDefaults,
@@ -35,6 +36,7 @@ export const EventParticipants = ({
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<RegistrationDetailResponse>();
   const [onsite, setOnsite] = useState(false);
+  const [excel, setExcel] = useState(false);
   const [fields, setFields] = useState<FormFieldResponse[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
@@ -114,6 +116,15 @@ export const EventParticipants = ({
       />
     );
   }
+  if (excel) {
+    return (
+      <EventExcel
+        event={event}
+        onBack={() => setExcel(false)}
+        onCommitted={() => void load()}
+      />
+    );
+  }
 
   const canRegisterOnsite = [
     'REGISTRATION_OPEN',
@@ -137,9 +148,33 @@ export const EventParticipants = ({
             <h1>{event.title}</h1>
             <p>Регистрационные данные относятся только к этому мероприятию.</p>
           </div>
-          {canRegisterOnsite && (
-            <Button onClick={() => void openOnsite()}>Добавить на месте</Button>
-          )}
+          <div className="row-actions">
+            <button
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void downloadEventExcel(event.id)
+                  .catch((error: unknown) => setNotice(participantError(error)))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Экспортировать Excel
+            </button>
+            {canRegisterOnsite && (
+              <button
+                className="secondary-button"
+                onClick={() => setExcel(true)}
+              >
+                Импортировать Excel
+              </button>
+            )}
+            {canRegisterOnsite && (
+              <Button onClick={() => void openOnsite()}>
+                Добавить на месте
+              </Button>
+            )}
+          </div>
         </header>
         {notice && <ParticipantNotice notice={notice} />}
         <RegistrationFilters

@@ -149,6 +149,53 @@ describe('admin API client', () => {
       '/admin/events/50000000-0000-4000-8000-000000000001/access',
     );
   });
+
+  it('uploads Excel as multipart with CSRF and without a forced JSON content type', async () => {
+    const preview = {
+      importJobId: '70000000-0000-4000-8000-000000000001',
+      expiresAt: '2026-08-25T12:00:00.000Z',
+      headers: ['Фамилия', 'Имя', 'Дата рождения', 'Тип участника', 'Телефон'],
+      mapping: {
+        lastName: 'Фамилия',
+        firstName: 'Имя',
+        birthDate: 'Дата рождения',
+        personType: 'Тип участника',
+        phone: 'Телефон',
+        customFields: {},
+      },
+      summary: {
+        totalRows: 1,
+        newRows: 1,
+        alreadyRegisteredRows: 0,
+        possibleMatchRows: 0,
+        errorRows: 0,
+        withoutEmailRows: 1,
+        capacityImpact: 1,
+        activeRegistrations: 0,
+        capacity: 100,
+        exceedsCapacity: false,
+      },
+      rows: [],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(session))
+      .mockResolvedValueOnce(jsonResponse(preview, 201));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AdminApiClient();
+    await client.restoreSession();
+
+    await client.previewExcel(
+      '10000000-0000-4000-8000-000000000001',
+      new File(['xlsx'], 'participants.xlsx'),
+    );
+
+    const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(init.body).toBeInstanceOf(FormData);
+    expect(headers.get('content-type')).toBeNull();
+    expect(headers.get('x-csrf-token')).toBe(session.csrfToken);
+  });
 });
 
 const jsonResponse = (body: unknown, status = 200): Response =>

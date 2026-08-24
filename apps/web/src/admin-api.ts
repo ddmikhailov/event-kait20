@@ -1,5 +1,7 @@
 import {
   acceptedResponseSchema,
+  excelImportCommitResponseSchema,
+  excelImportPreviewResponseSchema,
   onsiteRegistrationResponseSchema,
   personDetailResponseSchema,
   personListResponseSchema,
@@ -23,6 +25,9 @@ import {
   type EventAccessRequest,
   type FormFieldListResponse,
   type FormFieldResponse,
+  type ExcelImportCommitRequest,
+  type ExcelImportCommitResponse,
+  type ExcelImportPreviewResponse,
   type LoginRequest,
   type OnsiteRegistrationResponse,
   type PersonDetailResponse,
@@ -352,6 +357,60 @@ export class AdminApiClient {
     );
   }
 
+  public previewExcel(
+    eventId: string,
+    file: File,
+  ): Promise<ExcelImportPreviewResponse> {
+    const form = new FormData();
+    form.set('file', file);
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/import/preview`,
+      { method: 'POST', body: form },
+      excelImportPreviewResponseSchema,
+    );
+  }
+
+  public commitExcel(
+    eventId: string,
+    importJobId: string,
+    values: ExcelImportCommitRequest,
+  ): Promise<ExcelImportCommitResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/import/${encodeURIComponent(importJobId)}/commit`,
+      { method: 'POST', body: JSON.stringify(values) },
+      excelImportCommitResponseSchema,
+    );
+  }
+
+  public async exportExcel(
+    eventId: string,
+  ): Promise<{ blob: Blob; filename: string }> {
+    let response: Response;
+    try {
+      response = await fetch(
+        `${apiBaseUrl}/admin/events/${encodeURIComponent(eventId)}/export.xlsx`,
+        { credentials: 'include' },
+      );
+    } catch {
+      throw new AdminApiError('NETWORK_ERROR', 0, 'Сервер недоступен');
+    }
+    if (!response.ok) {
+      const body = (await response.json().catch(() => undefined)) as
+        { error?: { code?: string; message?: string } } | undefined;
+      throw new AdminApiError(
+        body?.error?.code ?? 'REQUEST_FAILED',
+        response.status,
+        body?.error?.message ?? 'Экспорт не выполнен',
+      );
+    }
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    return {
+      blob: await response.blob(),
+      filename: encoded ? decodeURIComponent(encoded) : 'participants.xlsx',
+    };
+  }
+
   private async request<T>(
     path: string,
     init: RequestInit,
@@ -359,7 +418,7 @@ export class AdminApiClient {
     includeCsrf = true,
   ): Promise<T> {
     const headers = new Headers(init.headers);
-    if (init.body !== undefined)
+    if (typeof init.body === 'string')
       headers.set('content-type', 'application/json');
     if (
       includeCsrf &&
