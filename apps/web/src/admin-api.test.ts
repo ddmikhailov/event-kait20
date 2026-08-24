@@ -80,6 +80,28 @@ describe('admin API client', () => {
       new AdminApiClient().restoreSession(),
     ).resolves.toBeUndefined();
   });
+
+  it('encodes participant search filters and validates the list response', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ items: [], page: 2, pageSize: 25, total: 30 }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new AdminApiClient().registrations(
+      '10000000-0000-4000-8000-000000000001',
+      'Иванов +7999',
+      'ACTIVE',
+      2,
+    );
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      'query=%D0%98%D0%B2%D0%B0%D0%BD%D0%BE%D0%B2+%2B7999',
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('status=ACTIVE');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('page=2');
+  });
 });
 
 const jsonResponse = (body: unknown, status = 200): Response =>

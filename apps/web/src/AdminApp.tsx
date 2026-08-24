@@ -8,6 +8,7 @@ import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
+import { EventParticipants, PeopleDirectory } from './AdminParticipants.js';
 import {
   eventDefaults,
   eventValues,
@@ -90,7 +91,9 @@ const AdminWorkspace = ({
   onLogout: () => Promise<void>;
 }) => {
   const [events, setEvents] = useState<EventResponse[]>([]);
-  const [editing, setEditing] = useState(false);
+  const [view, setView] = useState<
+    'events' | 'editor' | 'participants' | 'people'
+  >('events');
   const [selected, setSelected] = useState<EventResponse>();
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
@@ -113,21 +116,36 @@ const AdminWorkspace = ({
   const openEditor = async (event?: EventResponse) => {
     setNotice(undefined);
     setSelected(event);
-    setEditing(true);
+    setView('editor');
   };
 
-  if (editing) {
+  if (view === 'editor') {
     return (
       <EventEditor
         key={selected?.id ?? 'new-event'}
         event={selected}
         onBack={() => {
-          setEditing(false);
+          setView('events');
           setSelected(undefined);
           void loadEvents();
         }}
       />
     );
+  }
+  if (view === 'participants' && selected) {
+    return (
+      <EventParticipants
+        event={selected}
+        onBack={() => {
+          setView('events');
+          setSelected(undefined);
+          void loadEvents();
+        }}
+      />
+    );
+  }
+  if (view === 'people') {
+    return <PeopleDirectory onBack={() => setView('events')} />;
   }
 
   return (
@@ -140,13 +158,28 @@ const AdminWorkspace = ({
             <h1>Мероприятия</h1>
             <p>Создавайте события и настраивайте форму регистрации.</p>
           </div>
-          <Button onClick={() => void openEditor()}>Новое мероприятие</Button>
+          <div className="row-actions">
+            <button
+              className="secondary-button"
+              onClick={() => setView('people')}
+            >
+              Общая база людей
+            </button>
+            <Button onClick={() => void openEditor()}>Новое мероприятие</Button>
+          </div>
         </header>
         {notice && <AdminNotice notice={notice} />}
         {busy && events.length === 0 ? (
           <p className="admin-empty">Загружаем мероприятия…</p>
         ) : (
-          <EventGrid events={events} onOpen={openEditor} />
+          <EventGrid
+            events={events}
+            onOpen={openEditor}
+            onParticipants={async (event) => {
+              setSelected(event);
+              setView('participants');
+            }}
+          />
         )}
       </section>
     </main>
@@ -156,9 +189,11 @@ const AdminWorkspace = ({
 export const EventGrid = ({
   events,
   onOpen,
+  onParticipants,
 }: {
   events: EventResponse[];
   onOpen: (event: EventResponse) => Promise<void>;
+  onParticipants: (event: EventResponse) => Promise<void>;
 }) => (
   <section className="admin-event-grid" aria-label="Список мероприятий">
     {events.map((event) => (
@@ -170,9 +205,20 @@ export const EventGrid = ({
         <h2>{event.title}</h2>
         <p>{formatDate(event.startAt, event.timezone)}</p>
         <p>{event.location}</p>
-        <button className="secondary-button" onClick={() => void onOpen(event)}>
-          {event.status === 'ARCHIVED' ? 'Посмотреть' : 'Настроить'}
-        </button>
+        <div className="event-card-actions">
+          <button
+            className="secondary-button"
+            onClick={() => void onParticipants(event)}
+          >
+            Участники
+          </button>
+          <button
+            className="secondary-button"
+            onClick={() => void onOpen(event)}
+          >
+            {event.status === 'ARCHIVED' ? 'Посмотреть' : 'Настроить'}
+          </button>
+        </div>
       </article>
     ))}
     {events.length === 0 && (

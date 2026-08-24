@@ -45,7 +45,11 @@ describe('admin console views', () => {
 
   it('renders events and only valid draft status transitions', () => {
     const grid = renderToStaticMarkup(
-      <EventGrid events={[event]} onOpen={async () => undefined} />,
+      <EventGrid
+        events={[event]}
+        onOpen={async () => undefined}
+        onParticipants={async () => undefined}
+      />,
     );
     const form = renderToStaticMarkup(
       <EventForm

@@ -1,9 +1,17 @@
 import {
+  acceptedResponseSchema,
+  onsiteRegistrationResponseSchema,
+  personDetailResponseSchema,
+  personListResponseSchema,
+  registrationDetailResponseSchema,
+  registrationListResponseSchema,
   eventListResponseSchema,
   eventResponseSchema,
   formFieldListResponseSchema,
   formFieldResponseSchema,
   sessionResponseSchema,
+  type AcceptedResponse,
+  type AdminOnsiteRegistrationRequest,
   type CreateEventRequest,
   type CreateFormFieldRequest,
   type EventListResponse,
@@ -11,9 +19,16 @@ import {
   type FormFieldListResponse,
   type FormFieldResponse,
   type LoginRequest,
+  type OnsiteRegistrationResponse,
+  type PersonDetailResponse,
+  type PersonListResponse,
+  type RegistrationDetailResponse,
+  type RegistrationListResponse,
   type SessionResponse,
   type UpdateEventRequest,
   type UpdateFormFieldRequest,
+  type UpdatePersonRequest,
+  type UpdateRegistrationRequest,
 } from '@event-registration/contracts';
 import type { ZodType } from 'zod';
 
@@ -158,6 +173,118 @@ export class AdminApiClient {
       `/admin/events/${encodeURIComponent(eventId)}/form-fields/${encodeURIComponent(fieldId)}`,
       { method: 'DELETE' },
       formFieldResponseSchema,
+    );
+  }
+
+  public registrations(
+    eventId: string,
+    query = '',
+    status?: 'ACTIVE' | 'ANNULLED',
+    page = 1,
+    pageSize = 25,
+  ): Promise<RegistrationListResponse> {
+    const parameters = new URLSearchParams({
+      query,
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    if (status) parameters.set('status', status);
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/registrations?${parameters.toString()}`,
+      { method: 'GET' },
+      registrationListResponseSchema,
+    );
+  }
+
+  public registration(
+    eventId: string,
+    registrationId: string,
+  ): Promise<RegistrationDetailResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/registrations/${encodeURIComponent(registrationId)}`,
+      { method: 'GET' },
+      registrationDetailResponseSchema,
+    );
+  }
+
+  public updateRegistration(
+    eventId: string,
+    registrationId: string,
+    values: UpdateRegistrationRequest,
+  ): Promise<RegistrationDetailResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/registrations/${encodeURIComponent(registrationId)}`,
+      { method: 'PATCH', body: JSON.stringify(values) },
+      registrationDetailResponseSchema,
+    );
+  }
+
+  public annulRegistration(
+    eventId: string,
+    registrationId: string,
+  ): Promise<AcceptedResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/registrations/${encodeURIComponent(registrationId)}/annul`,
+      { method: 'POST' },
+      acceptedResponseSchema,
+    );
+  }
+
+  public resendTicket(
+    eventId: string,
+    registrationId: string,
+  ): Promise<AcceptedResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/registrations/${encodeURIComponent(registrationId)}/resend-ticket`,
+      { method: 'POST' },
+      acceptedResponseSchema,
+    );
+  }
+
+  public onsiteRegistration(
+    eventId: string,
+    values: AdminOnsiteRegistrationRequest,
+  ): Promise<OnsiteRegistrationResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/registrations/onsite`,
+      { method: 'POST', body: JSON.stringify(values) },
+      onsiteRegistrationResponseSchema,
+    );
+  }
+
+  public people(
+    query = '',
+    page = 1,
+    pageSize = 25,
+  ): Promise<PersonListResponse> {
+    const parameters = new URLSearchParams({
+      query,
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    return this.request(
+      `/admin/people?${parameters.toString()}`,
+      { method: 'GET' },
+      personListResponseSchema,
+    );
+  }
+
+  public person(personId: string): Promise<PersonDetailResponse> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}`,
+      { method: 'GET' },
+      personDetailResponseSchema,
+    );
+  }
+
+  public updatePerson(
+    personId: string,
+    values: UpdatePersonRequest,
+  ): Promise<PersonDetailResponse> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}`,
+      { method: 'PATCH', body: JSON.stringify(values) },
+      personDetailResponseSchema,
     );
   }
 
