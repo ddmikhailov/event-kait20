@@ -35,6 +35,8 @@ let scannerId: string;
 let eventId: string;
 let registrationEventId: string;
 let registrationFieldId: string;
+let registrationId: string;
+let registrationTicketPath: string;
 
 type SessionClient = { cookie: string; csrf: string };
 
@@ -728,6 +730,36 @@ describe.sequential('backend foundation', () => {
     expect(body.status).toBe('REGISTERED');
     expect(body.ticketUrl).not.toContain('Иванов');
     expect(body.ticketUrl).not.toContain('example.test@');
+    registrationId = body.registrationId;
+    registrationTicketPath = new URL(body.ticketUrl).pathname;
+
+    const ticket = await api(registrationTicketPath);
+    expect(ticket.status).toBe(200);
+    expect(ticket.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(ticket.headers.get('cache-control')).toBe('no-store');
+    const ticketBody = (await ticket.json()) as Record<string, unknown>;
+    expect(ticketBody).toMatchObject({
+      event: {
+        title: 'Foundation Event registration-core',
+        timezone: 'Europe/Moscow',
+        location: 'Moscow',
+      },
+      participantName: {
+        lastName: 'Иванов1000001',
+        firstName: 'Иван',
+      },
+    });
+    expect(JSON.stringify(ticketBody)).not.toContain(
+      'participant-1000001@example.test',
+    );
+
+    const ticketParts = registrationTicketPath.split('/');
+    ticketParts[ticketParts.length - 1] = 'tampered-signature';
+    const tamperedTicket = await api(ticketParts.join('/'));
+    expect(tamperedTicket.status).toBe(404);
+    expect(await tamperedTicket.json()).toMatchObject({
+      error: { code: 'INVALID_QR' },
+    });
 
     const persisted = await pool.query<{
       answer: unknown;
@@ -940,5 +972,18 @@ describe.sequential('backend foundation', () => {
        WHERE e.slug = 'foundation-event-capacity-race' AND r.status = 'ACTIVE'`,
     );
     expect(count.rows[0]?.count).toBe('1');
+  });
+
+  it('invalidates a public ticket after Registration annulment', async () => {
+    await pool.query(
+      `UPDATE registrations SET status = 'ANNULLED', annulled_at = now(),
+              updated_at = now() WHERE id = $1`,
+      [registrationId],
+    );
+    const response = await api(registrationTicketPath);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({
+      error: { code: 'INVALID_QR' },
+    });
   });
 });

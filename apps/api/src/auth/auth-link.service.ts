@@ -1,5 +1,6 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
+import { authLinkToken } from '@event-registration/utils';
 import { Inject, Injectable } from '@nestjs/common';
 
 import type { ApiConfig } from '../common/config.module.js';
@@ -16,11 +17,12 @@ export class AuthLinkService {
     recordId: string,
     expiresAt: Date,
   ): string {
-    const signature = createHmac('sha256', this.config.AUTH_LINK_SECRET)
-      .update(`${purpose}:${recordId}:${expiresAt.toISOString()}`)
-      .digest('base64url');
-
-    return `${recordId}.${signature}`;
+    return authLinkToken(
+      purpose,
+      recordId,
+      expiresAt,
+      this.config.AUTH_LINK_SECRET,
+    );
   }
 
   public hashToken(token: string): string {

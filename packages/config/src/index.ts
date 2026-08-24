@@ -49,6 +49,12 @@ export const workerEnvironmentSchema = z.object({
   DATABASE_URL: z.url().startsWith('postgresql://'),
   EMAIL_QUEUE_URL: z.url(),
   EMAIL_PROVIDER_API_KEY: z.string().min(1),
+  AUTH_LINK_SECRET: z.string().min(32),
+  AUTH_LINK_BASE_URL: z.url(),
+  QR_SIGNING_SECRET: z.string().min(32),
+  PUBLIC_WEB_BASE_URL: z.url(),
+  EMAIL_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  EMAIL_POLL_INTERVAL_MS: z.coerce.number().int().min(100).default(1_000),
 });
 
 type Environment = Record<string, string | undefined>;

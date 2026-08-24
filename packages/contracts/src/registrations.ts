@@ -127,3 +127,20 @@ export const publicRegistrationResponseSchema = z.object({
 export type PublicRegistrationResponse = z.infer<
   typeof publicRegistrationResponseSchema
 >;
+
+export const ticketResponseSchema = z.object({
+  event: z.object({
+    title: z.string(),
+    startAt: z.iso.datetime({ offset: true }),
+    endAt: z.iso.datetime({ offset: true }),
+    timezone: z.string(),
+    location: z.string(),
+  }),
+  participantName: z.object({
+    lastName: z.string(),
+    firstName: z.string(),
+    middleName: z.string().nullable(),
+  }),
+  qrPayload: z.string().min(40).max(500),
+});
+export type TicketResponse = z.infer<typeof ticketResponseSchema>;

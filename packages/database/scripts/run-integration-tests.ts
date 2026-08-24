@@ -383,8 +383,15 @@ const run = async (): Promise<void> => {
     await runPnpm(['exec', 'prisma', 'migrate', 'deploy'], databaseUrl);
     await runPnpm(['--dir', '../config', 'run', 'build'], databaseUrl);
     await runPnpm(['--dir', '../contracts', 'run', 'build'], databaseUrl);
+    await runPnpm(['--dir', '../utils', 'run', 'build'], databaseUrl);
     await runPnpm(
       ['--dir', '../../apps/api', 'run', 'test:integration'],
+      databaseUrl,
+    );
+    await resetExternalTestDatabase(databaseUrl);
+    await runPnpm(['exec', 'prisma', 'migrate', 'deploy'], databaseUrl);
+    await runPnpm(
+      ['--dir', '../../apps/email-worker', 'run', 'test:integration'],
       databaseUrl,
     );
   } finally {
