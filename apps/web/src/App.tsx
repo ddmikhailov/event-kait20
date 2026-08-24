@@ -4,7 +4,7 @@ import type {
   TicketResponse,
 } from '@event-registration/contracts';
 import { Button } from '@event-registration/ui';
-import { useEffect, useState, type FormEvent } from 'react';
+import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 
 import { PublicApiError, publicApi } from './api-client.js';
 import {
@@ -13,18 +13,31 @@ import {
 } from './registration-values.js';
 
 type Route =
+  | { kind: 'admin' }
   | { kind: 'event'; slug: string }
   | { kind: 'ticket'; publicId: string; signature: string }
   | { kind: 'home' };
 
 export const App = () => {
   const route = currentRoute();
+  if (route.kind === 'admin') {
+    return (
+      <Suspense fallback={<LoadingPage text="Открываем кабинет…" />}>
+        <AdminApp />
+      </Suspense>
+    );
+  }
   if (route.kind === 'event') return <EventPage slug={route.slug} />;
   if (route.kind === 'ticket') {
     return <TicketPage publicId={route.publicId} signature={route.signature} />;
   }
   return <HomePage />;
 };
+
+const AdminApp = lazy(async () => {
+  const module = await import('./AdminApp.js');
+  return { default: module.AdminApp };
+});
 
 const EventPage = ({ slug }: { slug: string }) => {
   const [event, setEvent] = useState<PublicEventResponse>();
@@ -461,6 +474,7 @@ const currentRoute = (): Route => {
     typeof window === 'undefined'
       ? []
       : window.location.pathname.split('/').filter(Boolean);
+  if (parts[0] === 'admin') return { kind: 'admin' };
   if (parts[0] === 'events' && parts[1]) {
     return { kind: 'event', slug: decodeURIComponent(parts[1]) };
   }
