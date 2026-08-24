@@ -152,3 +152,11 @@ A feature is not complete until:
 - migrations are reviewed and reversible/operationally safe;
 - docs/ADR updated when behavior or architecture changes;
 - no secrets/PII accidentally added to source/log fixtures.
+
+## 10. Release validation
+
+CI executes the full repository validation suite and builds the API container.
+After every staging rollout, unauthenticated smoke checks must pass against
+`/health/live` and `/health/ready`. A production promotion additionally requires
+a PostgreSQL 18 migration rehearsal, a current recovery point and the applicable
+browser/device E2E checks from this document.

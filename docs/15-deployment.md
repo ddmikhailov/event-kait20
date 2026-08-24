@@ -1,6 +1,6 @@
 # 15. Deployment & Environments
 
-Статус: **Draft**
+Статус: **Approved release-process baseline / Provider-specific deployment pending**
 
 ## 1. Environments
 
@@ -31,11 +31,28 @@
 6. smoke tests;
 7. manual production promotion для значимых релизов.
 
+GitHub Actions выполняет обязательные проверки pull request и `main`: frozen
+install, formatting, lint, typecheck, полный test suite, build и сборку API
+container без публикации. Рабочие изменения проходят feature branch и review
+перед merge в `main`. Production release создаётся только из уже проверенного
+commit SHA; среда не собирает отличающийся исходный код повторно.
+
 ## 3. Database migrations
 
 - миграции version-controlled;
 - production migration перед app rollout либо совместимая expand/contract стратегия;
 - destructive migration без backup/plan запрещена.
+
+Каноническая команда controlled migration из корня репозитория:
+
+```text
+DATABASE_URL=<environment database URL> pnpm db:migrate:deploy
+```
+
+Команда выполняется отдельным release job до rollout API. Для production перед
+ней должна существовать проверенная точка восстановления. PostgreSQL-specific
+SQL остаётся совместимым с PostgreSQL 18; staging и migration rehearsal также
+используют PostgreSQL 18.
 
 ## 4. Frontend
 
@@ -47,13 +64,37 @@ Scanner PWA update strategy должна учитывать service worker cache
 
 Нужен план rollback приложения отдельно от rollback DB. Нельзя считать «откатить контейнер» достаточным при необратимой миграции.
 
-## 6. TODO
+API image именуется immutable commit SHA, например
+`event-registration-api:<git-sha>`. Rollback приложения переключает runtime на
+предыдущий проверенный SHA. Миграции проектируются backward-compatible; rollback
+БД не выполняется автоматически. При повреждении данных используется
+контролируемое восстановление по `docs/runbooks/backup-restore.md`.
 
-- конкретный CI provider/repository;
-- branches/release policy;
-- container image naming;
-- migration tool commands;
-- health checks;
-- smoke test endpoints;
+## 6. Health and smoke checks
+
+- `GET /health/live` проверяет, что процесс API отвечает, и не зависит от БД;
+- `GET /health/ready` выполняет минимальный `SELECT 1` в PostgreSQL и возвращает
+  `503 SERVICE_UNAVAILABLE`, пока экземпляр нельзя включать в трафик;
+- `GET /health` сохранён как backward-compatible liveness endpoint;
+- после staging rollout запускается `SMOKE_BASE_URL=https://<staging-api> pnpm smoke`.
+
+Runtime использует liveness для перезапуска процесса и readiness для включения
+в балансировку. Smoke не передаёт credentials и не затрагивает business data.
+
+## 7. Current release gates
+
+API имеет воспроизводимый OCI/Docker build. Web и Scanner остаются static Vite
+artifacts для Object Storage/CDN после утверждения доменов.
+
+Email worker пока не считается production-deployable: persistence, claim/retry,
+idempotency boundary и message construction реализованы, но SMTP/API provider и
+его idempotent transport не выбраны. Нельзя подменять этот gate transport-ом,
+который отмечает письмо отправленным без фактической provider acceptance.
+
+## 8. TODO
+
 - domain/certificates;
-- incident/runbook.
+- Yandex Cloud runtime topology, IAM, sizing and budget;
+- email provider and production-safe transport;
+- monitoring alerts and log retention;
+- incident contacts/escalation and first staging deployment rehearsal.

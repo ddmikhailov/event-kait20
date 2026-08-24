@@ -316,6 +316,26 @@ const resetExternalTestDatabase = async (
   }
 };
 
+const assertPostgres18 = async (connectionString: string): Promise<void> => {
+  const client = new Client({ connectionString });
+
+  await client.connect();
+  try {
+    const result = await client.query<{ server_version_num: string }>(
+      `SELECT current_setting('server_version_num') AS server_version_num`,
+    );
+    const version = Number(result.rows[0]?.server_version_num);
+
+    if (!Number.isInteger(version) || version < 180_000 || version >= 190_000) {
+      throw new Error(
+        `Integration tests require PostgreSQL 18; server_version_num=${String(result.rows[0]?.server_version_num)}`,
+      );
+    }
+  } finally {
+    await client.end();
+  }
+};
+
 const runPnpm = async (
   arguments_: string[],
   databaseUrl: string,
@@ -368,6 +388,7 @@ const run = async (): Promise<void> => {
       databaseUrl = disposablePostgres.connectionString;
     }
 
+    await assertPostgres18(databaseUrl);
     await runPnpm(['exec', 'prisma', 'validate'], databaseUrl);
     await runPnpm(['exec', 'prisma', 'migrate', 'deploy'], databaseUrl);
     await runPnpm(

@@ -43,7 +43,10 @@ PostgreSQL не публикуется как клиентский endpoint. API
 
 ## 6. Backup
 
-Ежедневные production backups. Необходимо заранее документировать restore procedure и периодически её проверять.
+Production использует ежедневные managed backups. Перед миграциями дополнительно
+создаётся проверенная точка восстановления. Процедура восстановления и её
+безопасная репетиция зафиксированы в `docs/runbooks/backup-restore.md`; конкретные
+retention/RPO/RTO утверждаются вместе с оплачиваемой конфигурацией среды.
 
 ## 7. Sizing
 
@@ -64,3 +67,4 @@ PostgreSQL не публикуется как клиентский endpoint. API
 - monitoring alerts;
 - exact deployment topology после proof-of-concept Serverless Containers + PostgreSQL connectivity;
 - outbox/idempotent queue publication implementation choice for email delivery.
+- подтверждённый restore drill на созданном staging-окружении.
