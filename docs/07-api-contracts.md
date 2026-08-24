@@ -228,6 +228,18 @@ Returns capacity, active registrations, free places, attended, absent, attendanc
 
 SUPER_ADMIN only in MVP.
 
+The administrator Web workspace lists active and inactive staff accounts,
+creates SCANNER invitation email intent with optional initial Event assignment,
+and supports explicit deactivation with a session-revocation warning. Raw
+invitation tokens are never returned to or stored by the Web client. The
+current signed-in account is not offered a self-deactivation action; the server
+remains authoritative for last-SUPER_ADMIN protection.
+
+Event cards link to an access manager that lists current assignments and only
+offers active SCANNER accounts for new access. New access cannot be assigned to
+an archived Event. Removing access is explicit and confirmed; all authorization
+continues to be enforced server-side.
+
 ## 12. Scanner — event access
 
 ### `GET /scanner/events`

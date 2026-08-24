@@ -87,6 +87,12 @@ state and credentialed search filters. Browser smoke coverage includes the
 participant table, Registration detail, onsite form and narrow-screen table
 scroll containment using synthetic PII only.
 
+Staff administration Web coverage verifies current-account self-deactivation
+protection in the UI, inactive-account state, invitation request shape without
+raw tokens, in-memory CSRF propagation and Event-scoped access routes. Browser
+smoke checks cover the staff directory and access manager at desktop and mobile
+widths using synthetic accounts only.
+
 ## 6. Offline E2E
 
 - prepare bundle;
