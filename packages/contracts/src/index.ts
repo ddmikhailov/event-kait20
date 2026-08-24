@@ -7,6 +7,7 @@ export * from './events.js';
 export * from './excel.js';
 export * from './participants.js';
 export * from './registrations.js';
+export * from './reporting.js';
 export * from './staff.js';
 
 export const healthResponseSchema = z.object({

@@ -1855,6 +1855,145 @@ describe.sequential('backend foundation', () => {
     expect(registration.rows[0]?.person_id).toBe(personId);
   });
 
+  it('returns active-registration statistics and idempotently queues imported tickets', async () => {
+    const admin = await login();
+    const event = await createEvent(admin, 'reporting', 5);
+    const create = async (suffix: string, email?: string) => {
+      const response = await api(
+        `/admin/events/${event.id}/registrations/onsite`,
+        {
+          method: 'POST',
+          cookie: admin.cookie,
+          csrf: admin.csrf,
+          body: onsiteParticipant(suffix, {
+            ...(email ? { email } : {}),
+            capacityOverride: false,
+          }),
+        },
+      );
+      expect(response.status).toBe(201);
+      return (await response.json()) as { registrationId: string };
+    };
+    const first = await create('6000001', 'report-one@example.test');
+    const second = await create('6000002');
+    const onsite = await create('6000003', 'report-onsite@example.test');
+    await pool.query(
+      `UPDATE registrations SET source = 'EXCEL_IMPORT',
+         first_attended_at = CASE id
+           WHEN $1 THEN '2027-06-10T10:01:00.000Z'::timestamptz
+           WHEN $2 THEN '2027-06-10T10:16:00.000Z'::timestamptz
+           ELSE first_attended_at END
+       WHERE id = ANY($3::uuid[])`,
+      [
+        first.registrationId,
+        second.registrationId,
+        [first.registrationId, second.registrationId],
+      ],
+    );
+
+    const statistics = await api(`/admin/events/${event.id}/statistics`, {
+      cookie: admin.cookie,
+    });
+    expect(statistics.status).toBe(200);
+    expect(statistics.headers.get('cache-control')).toBe('private, no-store');
+    expect(await statistics.json()).toMatchObject({
+      capacity: 5,
+      registered: 3,
+      freePlaces: 2,
+      attended: 2,
+      absent: 1,
+      attendancePercentage: 66.7,
+      arrivalSeries: [
+        { bucketStart: '2027-06-10T10:00:00.000Z', count: 1, cumulative: 1 },
+        { bucketStart: '2027-06-10T10:15:00.000Z', count: 1, cumulative: 2 },
+      ],
+    });
+
+    const requestId = randomUUID();
+    const send = () =>
+      api(`/admin/events/${event.id}/send-tickets`, {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: { requestId, selection: 'IMPORTED' },
+      });
+    const queued = await send();
+    expect(queued.status).toBe(201);
+    expect(await queued.json()).toMatchObject({
+      requestId,
+      queuedRows: 1,
+      alreadyQueuedRows: 0,
+      withoutEmailRows: 1,
+      inactiveOrMissingRows: 0,
+    });
+    const repeated = await send();
+    expect(repeated.status).toBe(201);
+    expect(await repeated.json()).toMatchObject({
+      queuedRows: 0,
+      alreadyQueuedRows: 1,
+    });
+    const deliveries = await pool.query<{ registration_id: string }>(
+      `SELECT registration_id FROM email_deliveries
+       WHERE idempotency_key LIKE $1`,
+      [`registration-ticket:bulk:${requestId}:%`],
+    );
+    expect(deliveries.rows).toEqual([
+      { registration_id: first.registrationId },
+    ]);
+    expect(
+      deliveries.rows.some(
+        (row) => row.registration_id === onsite.registrationId,
+      ),
+    ).toBe(false);
+    const audit = await pool.query<{ metadata: Record<string, unknown> }>(
+      `SELECT metadata FROM audit_log
+       WHERE action = 'REGISTRATION_TICKET_BATCH_QUEUED' AND entity_id = $1`,
+      [event.id],
+    );
+    expect(JSON.stringify(audit.rows[0]?.metadata)).not.toContain(
+      '@example.test',
+    );
+
+    const explicit = await api(`/admin/events/${event.id}/send-tickets`, {
+      method: 'POST',
+      cookie: admin.cookie,
+      csrf: admin.csrf,
+      body: {
+        requestId: randomUUID(),
+        selection: 'REGISTRATION_IDS',
+        registrationIds: [onsite.registrationId, randomUUID()],
+      },
+    });
+    expect(explicit.status).toBe(201);
+    expect(await explicit.json()).toMatchObject({
+      queuedRows: 1,
+      withoutEmailRows: 0,
+      inactiveOrMissingRows: 1,
+    });
+
+    const scanner = await login(
+      attendanceScannerEmail,
+      attendanceScannerPassword,
+    );
+    expect(
+      (
+        await api(`/admin/events/${event.id}/statistics`, {
+          cookie: scanner.cookie,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await api(`/admin/events/${event.id}/send-tickets`, {
+          method: 'POST',
+          cookie: scanner.cookie,
+          csrf: scanner.csrf,
+          body: { requestId: randomUUID(), selection: 'IMPORTED' },
+        })
+      ).status,
+    ).toBe(403);
+  });
+
   it('invalidates a public ticket after Registration annulment', async () => {
     const admin = await login();
     const annul = await api(

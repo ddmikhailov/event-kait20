@@ -8,6 +8,7 @@ import {
   passwordResetRequestSchema,
   scannerOnsiteRegistrationRequestSchema,
   publicRegistrationRequestSchema,
+  sendTicketsRequestSchema,
 } from './index';
 
 describe('healthResponseSchema', () => {
@@ -128,5 +129,20 @@ describe('healthResponseSchema', () => {
         ],
       }).capacityOverride,
     ).toBe(false);
+  });
+
+  it('requires an idempotency id and unique explicit ticket recipients', () => {
+    const requestId = '55555555-5555-4555-8555-555555555555';
+    const registrationId = '66666666-6666-4666-8666-666666666666';
+    expect(
+      sendTicketsRequestSchema.parse({ requestId, selection: 'IMPORTED' }),
+    ).toEqual({ requestId, selection: 'IMPORTED' });
+    expect(() =>
+      sendTicketsRequestSchema.parse({
+        requestId,
+        selection: 'REGISTRATION_IDS',
+        registrationIds: [registrationId, registrationId],
+      }),
+    ).toThrow();
   });
 });

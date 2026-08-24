@@ -11,6 +11,7 @@ import { ExcelModule } from './excel/excel.module.js';
 import { HealthController } from './health.controller.js';
 import { ParticipantsModule } from './participants/participants.module.js';
 import { RegistrationsModule } from './registrations/registrations.module.js';
+import { ReportingModule } from './reporting/reporting.module.js';
 import { StaffModule } from './staff/staff.module.js';
 
 @Module({
@@ -23,6 +24,7 @@ import { StaffModule } from './staff/staff.module.js';
     EventsModule,
     ExcelModule,
     RegistrationsModule,
+    ReportingModule,
     ParticipantsModule,
   ],
   controllers: [HealthController],
