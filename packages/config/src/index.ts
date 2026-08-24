@@ -19,6 +19,12 @@ export const apiEnvironmentSchema = z.object({
   NODE_ENV: nodeEnvironmentSchema.default('development'),
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   DATABASE_URL: z.url().startsWith('postgresql://'),
+  DATABASE_CONNECT_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(30_000)
+    .default(5_000),
   SESSION_SECRET: z.string().min(32),
   AUTH_LINK_SECRET: z.string().min(32),
   AUTH_LINK_BASE_URL: z.url(),

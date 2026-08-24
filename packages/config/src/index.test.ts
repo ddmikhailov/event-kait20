@@ -17,6 +17,7 @@ describe('parseApiEnvironment', () => {
     });
 
     expect(result.API_PORT).toBe(3000);
+    expect(result.DATABASE_CONNECT_TIMEOUT_MS).toBe(5_000);
     expect(result.NODE_ENV).toBe('development');
     expect(result.CORS_ORIGINS).toEqual(['http://localhost:5173']);
   });

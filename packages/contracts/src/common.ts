@@ -36,6 +36,7 @@ export const errorCodeSchema = z.enum([
   'REGISTRATION_NOT_FOUND',
   'FORM_VERSION_INVALID',
   'INVALID_QR',
+  'SERVICE_UNAVAILABLE',
 ]);
 
 export type ErrorCode = z.infer<typeof errorCodeSchema>;

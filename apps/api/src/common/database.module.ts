@@ -24,7 +24,11 @@ class DatabaseLifecycle implements OnApplicationShutdown {
       provide: DATABASE_POOL,
       inject: [APP_CONFIG],
       useFactory: (config: ApiConfig): Pool =>
-        new Pool({ connectionString: config.DATABASE_URL, max: 10 }),
+        new Pool({
+          connectionString: config.DATABASE_URL,
+          connectionTimeoutMillis: config.DATABASE_CONNECT_TIMEOUT_MS,
+          max: 10,
+        }),
     },
     DatabaseLifecycle,
   ],
