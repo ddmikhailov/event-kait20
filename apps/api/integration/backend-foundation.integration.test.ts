@@ -590,6 +590,14 @@ describe.sequential('backend foundation', () => {
     });
     expect(created.status).toBe(201);
     const field = (await created.json()) as { id: string };
+    const scanner = await login(scannerEmail, scannerPassword);
+    const scannerFields = await api(`/scanner/events/${eventId}/form-fields`, {
+      cookie: scanner.cookie,
+    });
+    expect(scannerFields.status).toBe(200);
+    expect(await scannerFields.json()).toMatchObject({
+      items: [{ id: field.id, active: true }],
+    });
     const updated = await api(
       `/admin/events/${eventId}/form-fields/${field.id}`,
       {
@@ -614,6 +622,13 @@ describe.sequential('backend foundation', () => {
     );
     expect(deactivated.status).toBe(200);
     expect(await deactivated.json()).toMatchObject({ active: false });
+    expect(
+      await (
+        await api(`/scanner/events/${eventId}/form-fields`, {
+          cookie: scanner.cookie,
+        })
+      ).json(),
+    ).toMatchObject({ items: [] });
     const retained = await pool.query<{ active: boolean }>(
       'SELECT active FROM event_form_fields WHERE id = $1',
       [field.id],

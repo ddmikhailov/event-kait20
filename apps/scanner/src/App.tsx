@@ -1,5 +1,9 @@
 import { Button } from '@event-registration/ui';
-import { useCallback, useEffect, useState } from 'react';
+import type {
+  FormFieldResponse,
+  ScannerOnsiteRegistrationRequest,
+} from '@event-registration/contracts';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { ApiClientError, scannerApi } from './api-client.js';
 import {
@@ -322,6 +326,8 @@ const ScannerScreen = ({
   const [confirmMode, setConfirmMode] = useState<
     'MANUAL_CONFIRM' | 'MANUAL_SEARCH'
   >('MANUAL_CONFIRM');
+  const [formFields, setFormFields] = useState<FormFieldResponse[]>([]);
+  const [formFieldsReady, setFormFieldsReady] = useState(false);
 
   const updatePending = useCallback(async () => {
     const [pending, rejectedItems] = await Promise.all([
@@ -335,6 +341,20 @@ const ScannerScreen = ({
   useEffect(() => {
     void updatePending();
   }, [updatePending]);
+
+  useEffect(() => {
+    if (!online) return;
+    setFormFieldsReady(false);
+    void scannerApi
+      .formFields(event.id)
+      .then((response) => {
+        setFormFields(response.items);
+        setFormFieldsReady(true);
+      })
+      .catch((error: unknown) =>
+        onFeedback({ kind: 'error', text: messageForError(error) }),
+      );
+  }, [event.id, online, onFeedback]);
 
   const record = useCallback(
     async (
@@ -392,6 +412,51 @@ const ScannerScreen = ({
     setBusy(true);
     try {
       setSearchResults(await scannerService.search(event.id, searchQuery));
+    } catch (error) {
+      onFeedback({ kind: 'error', text: messageForError(error) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const registerOnsite = async (
+    values: ScannerOnsiteRegistrationRequest,
+    attendImmediately: boolean,
+  ) => {
+    setBusy(true);
+    onFeedback(undefined);
+    try {
+      const result = await scannerApi.onsite(event.id, values);
+      if (attendImmediately) {
+        const outcome = await scannerService.recordAttendance(
+          event.id,
+          result.registrationId,
+          'ONSITE_REGISTRATION',
+        );
+        onFeedback(feedbackForOutcome(outcome));
+      } else {
+        onFeedback({
+          kind: result.status === 'REGISTERED' ? 'success' : 'already',
+          text:
+            result.status === 'REGISTERED'
+              ? 'Участник зарегистрирован'
+              : 'Регистрация уже существовала и обновлена',
+        });
+      }
+      try {
+        await scannerService.reconnect(event.id);
+        await updatePending();
+      } catch (error) {
+        if (error instanceof ApiClientError && error.code === 'NETWORK_ERROR') {
+          await updatePending();
+          onFeedback({
+            kind: 'offline',
+            text: 'Участник сохранён. Локальный список обновится после восстановления связи.',
+          });
+        } else {
+          throw error;
+        }
+      }
     } catch (error) {
       onFeedback({ kind: 'error', text: messageForError(error) });
     } finally {
@@ -504,6 +569,22 @@ const ScannerScreen = ({
             ))}
           </div>
         </details>
+        <details>
+          <summary>Добавить участника на месте</summary>
+          {online && formFieldsReady ? (
+            <OnsiteRegistrationForm
+              fields={formFields}
+              busy={busy}
+              onSubmit={registerOnsite}
+            />
+          ) : online ? (
+            <p className="muted">Загружаем поля формы…</p>
+          ) : (
+            <p className="muted">
+              Регистрация на месте доступна только при соединении с сервером.
+            </p>
+          )}
+        </details>
       </section>
       {rejected.length > 0 && (
         <details className="rejected-sync">
@@ -519,6 +600,187 @@ const ScannerScreen = ({
         </details>
       )}
     </main>
+  );
+};
+
+const OnsiteRegistrationForm = ({
+  fields,
+  busy,
+  onSubmit,
+}: {
+  fields: FormFieldResponse[];
+  busy: boolean;
+  onSubmit: (
+    values: ScannerOnsiteRegistrationRequest,
+    attendImmediately: boolean,
+  ) => Promise<void>;
+}) => {
+  const [personType, setPersonType] =
+    useState<ScannerOnsiteRegistrationRequest['personType']>('KAIT_STUDENT');
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const optional = (name: string) =>
+      String(form.get(name) ?? '').trim() || null;
+    const customAnswers: ScannerOnsiteRegistrationRequest['customAnswers'] = [];
+    for (const field of fields) {
+      if (field.type === 'BOOLEAN') {
+        customAnswers.push({
+          fieldId: field.id,
+          value: form.has(`field-${field.id}`),
+        });
+        continue;
+      }
+      if (field.type === 'MULTI_CHOICE') {
+        const value = form
+          .getAll(`field-${field.id}`)
+          .map(String)
+          .filter(Boolean);
+        if (value.length > 0) customAnswers.push({ fieldId: field.id, value });
+        continue;
+      }
+      const value = optional(`field-${field.id}`);
+      if (value) customAnswers.push({ fieldId: field.id, value });
+    }
+    void onSubmit(
+      {
+        lastName: String(form.get('lastName') ?? ''),
+        firstName: String(form.get('firstName') ?? ''),
+        middleName: optional('middleName'),
+        birthDate: String(form.get('birthDate') ?? ''),
+        email: optional('email'),
+        phone: String(form.get('phone') ?? ''),
+        studyGroup: optional('studyGroup'),
+        personType,
+        organization: optional('organization'),
+        customAnswers,
+      },
+      form.has('attendImmediately'),
+    );
+  };
+
+  return (
+    <form className="onsite-form" onSubmit={submit}>
+      <div className="form-grid">
+        <label>
+          Фамилия
+          <input name="lastName" required maxLength={100} />
+        </label>
+        <label>
+          Имя
+          <input name="firstName" required maxLength={100} />
+        </label>
+        <label>
+          Отчество
+          <input name="middleName" maxLength={100} />
+        </label>
+        <label>
+          Дата рождения
+          <input name="birthDate" type="date" required />
+        </label>
+        <label>
+          Телефон
+          <input
+            name="phone"
+            type="tel"
+            required
+            placeholder="+7 999 000-00-00"
+          />
+        </label>
+        <label>
+          Email (необязательно)
+          <input name="email" type="email" />
+        </label>
+        <label>
+          Тип участника
+          <select
+            name="personType"
+            value={personType}
+            onChange={(event) =>
+              setPersonType(
+                event.target
+                  .value as ScannerOnsiteRegistrationRequest['personType'],
+              )
+            }
+          >
+            <option value="KAIT_STUDENT">Студент КАИТ</option>
+            <option value="KAIT_TEACHER">Преподаватель КАИТ</option>
+            <option value="EXTERNAL_STUDENT">Внешний студент</option>
+            <option value="EXTERNAL_TEACHER">Внешний преподаватель</option>
+          </select>
+        </label>
+        {personType.endsWith('_STUDENT') && (
+          <label>
+            Группа
+            <input name="studyGroup" required maxLength={100} />
+          </label>
+        )}
+        {personType.startsWith('EXTERNAL_') && (
+          <label>
+            Организация
+            <input name="organization" required maxLength={255} />
+          </label>
+        )}
+      </div>
+      {fields.map((field) => (
+        <OnsiteField key={field.id} field={field} />
+      ))}
+      <label className="checkbox-row">
+        <input name="attendImmediately" type="checkbox" defaultChecked />
+        Сразу отметить посещение
+      </label>
+      <Button type="submit" disabled={busy}>
+        {busy ? 'Сохраняем…' : 'Зарегистрировать'}
+      </Button>
+    </form>
+  );
+};
+
+const OnsiteField = ({ field }: { field: FormFieldResponse }) => {
+  const name = `field-${field.id}`;
+  if (field.type === 'BOOLEAN') {
+    return (
+      <label className="checkbox-row">
+        <input name={name} type="checkbox" required={field.required} />
+        {field.label}
+      </label>
+    );
+  }
+  if (field.type === 'SINGLE_CHOICE') {
+    return (
+      <label>
+        {field.label}
+        <select name={name} required={field.required} defaultValue="">
+          <option value="">Выберите вариант</option>
+          {field.options?.map((option) => (
+            <option key={option}>{option}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+  if (field.type === 'MULTI_CHOICE') {
+    return (
+      <fieldset>
+        <legend>{field.label}</legend>
+        {field.options?.map((option) => (
+          <label className="checkbox-row" key={option}>
+            <input name={name} type="checkbox" value={option} />
+            {option}
+          </label>
+        ))}
+      </fieldset>
+    );
+  }
+  return (
+    <label>
+      {field.label}
+      {field.type === 'LONG_TEXT' ? (
+        <textarea name={name} required={field.required} maxLength={20_000} />
+      ) : (
+        <input name={name} required={field.required} maxLength={20_000} />
+      )}
+    </label>
   );
 };
 
@@ -655,6 +917,9 @@ const messageForError = (error: unknown): string => {
       NETWORK_ERROR: 'Нет соединения с сервером',
       ACCESS_REVALIDATION_REQUIRED: 'Требуется повторный вход',
       OFFLINE_NOT_READY: 'Сначала подготовьте мероприятие онлайн',
+      CAPACITY_FULL: 'На мероприятии нет свободных мест',
+      FORM_VERSION_INVALID:
+        'Поля формы изменились. Закройте и откройте форму снова.',
     };
     return messages[error.code] ?? error.message;
   }

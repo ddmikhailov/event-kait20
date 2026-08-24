@@ -1,16 +1,21 @@
 import {
   attendanceSyncResponseSchema,
+  formFieldListResponseSchema,
   offlineBundleResponseSchema,
+  onsiteRegistrationResponseSchema,
   resolveQrResponseSchema,
   scannerEventListResponseSchema,
   scannerRegistrationListResponseSchema,
   sessionResponseSchema,
   type AttendanceSyncRequest,
   type AttendanceSyncResponse,
+  type FormFieldListResponse,
   type LoginRequest,
   type OfflineBundleResponse,
+  type OnsiteRegistrationResponse,
   type ResolveQrResponse,
   type ScannerEventListResponse,
+  type ScannerOnsiteRegistrationRequest,
   type ScannerRegistrationListResponse,
   type SessionResponse,
 } from '@event-registration/contracts';
@@ -119,6 +124,25 @@ export class ScannerApiClient {
       `/scanner/events/${encodeURIComponent(eventId)}/registrations/search?${parameters.toString()}`,
       { method: 'GET' },
       scannerRegistrationListResponseSchema,
+    );
+  }
+
+  public formFields(eventId: string): Promise<FormFieldListResponse> {
+    return this.request(
+      `/scanner/events/${encodeURIComponent(eventId)}/form-fields`,
+      { method: 'GET' },
+      formFieldListResponseSchema,
+    );
+  }
+
+  public onsite(
+    eventId: string,
+    body: ScannerOnsiteRegistrationRequest,
+  ): Promise<OnsiteRegistrationResponse> {
+    return this.request(
+      `/scanner/events/${encodeURIComponent(eventId)}/registrations/onsite`,
+      { method: 'POST', body: JSON.stringify(body) },
+      onsiteRegistrationResponseSchema,
     );
   }
 

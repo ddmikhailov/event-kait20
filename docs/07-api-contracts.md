@@ -224,6 +224,12 @@ The response contains only Registration id, name, phone, group, participant
 type, organization and first-attendance time. Email and birth date may be search
 keys but are not returned to SCANNER.
 
+### `GET /scanner/events/:eventId/form-fields`
+
+Returns active configurable registration fields required by the online onsite
+form. Requires an active session and explicit EventAccess for SCANNER;
+SUPER_ADMIN retains global access. Inactive historical fields are not exposed.
+
 ### `POST /scanner/events/:eventId/registrations/onsite`
 Online only. Permission: assigned SCANNER or SUPER_ADMIN. SCANNER cannot overbook.
 

@@ -162,4 +162,15 @@ export class ScannerEventsController {
     }
     return this.events.scannerEvents(request.auth.user.id);
   }
+
+  @Get(':eventId/form-fields')
+  public formFields(
+    @Param('eventId') eventId: string,
+    @Req() request: StaffRequest,
+  ): Promise<FormFieldListResponse> {
+    return this.events.scannerFormFields(
+      parseContract(uuidSchema, eventId),
+      request.auth.user,
+    );
+  }
 }

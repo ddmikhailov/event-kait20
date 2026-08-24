@@ -310,6 +310,31 @@ export class EventsService {
     return { items: result.rows.map(mapFormField) };
   }
 
+  public async scannerFormFields(
+    eventId: string,
+    actor: { id: string; role: 'SUPER_ADMIN' | 'SCANNER' },
+  ): Promise<FormFieldListResponse> {
+    if (actor.role === 'SCANNER') {
+      const access = await this.pool.query(
+        `SELECT 1 FROM event_access
+         WHERE event_id = $1 AND user_id = $2 AND role = 'SCANNER'`,
+        [eventId, actor.id],
+      );
+      if (access.rowCount === 0) {
+        throw new ApiError(403, 'FORBIDDEN', 'Event access required');
+      }
+    } else {
+      await this.eventRow(this.pool, eventId);
+    }
+    const result = await this.pool.query<FormFieldRow>(
+      `SELECT * FROM event_form_fields
+       WHERE event_id = $1 AND active = true
+       ORDER BY sort_order, created_at`,
+      [eventId],
+    );
+    return { items: result.rows.map(mapFormField) };
+  }
+
   public async createFormField(
     eventId: string,
     values: CreateFormFieldRequest,
