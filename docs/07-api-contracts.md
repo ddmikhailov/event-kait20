@@ -217,12 +217,23 @@ SUPER_ADMIN only. Returns a private, non-cacheable sanitized XLSX for the Event;
 user-controlled formula prefixes are neutralized.
 
 ### `POST /admin/events/:eventId/send-tickets`
-Queues registration-ticket emails for selected/imported active registrations with email. Requires explicit confirmation in UI.
+SUPER_ADMIN only. Queues registration-ticket emails for either all imported
+registrations (`selection=IMPORTED`) or an explicit bounded list
+(`selection=REGISTRATION_IDS`). Only ACTIVE registrations with email create
+delivery intents. The required client-generated `requestId` is part of every
+delivery idempotency key, so retrying the same confirmed operation cannot queue
+a duplicate; an intentional resend uses a new request id. The UI requires
+explicit confirmation and reports queued, already queued, no-email and
+inactive/missing counts.
 
 ## 10. Statistics
 
 ### `GET /admin/events/:eventId/statistics`
-Returns capacity, active registrations, free places, attended, absent, attendance percentage and time-bucket arrival series.
+SUPER_ADMIN only. Returns capacity, ACTIVE registrations, non-negative free
+places, attended/absent, one-decimal attendance percentage and first-attendance
+arrival series grouped into 15-minute UTC instants. The client renders those
+instants in the Event timezone. ANNULLED registrations do not contribute to any
+metric. The response is private and non-cacheable.
 
 ## 11. Staff & access
 

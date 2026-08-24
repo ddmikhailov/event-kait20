@@ -99,6 +99,13 @@ deletion after commit, one-time commit, capacity recheck, SUPER_ADMIN-only
 authorization, `EXCEL_IMPORT` persistence and formula-safe export. Parser unit
 tests cover the canonical template, formula cells and merged-cell rejection.
 
+MVP reporting coverage proves ACTIVE-only statistics, capacity/free/absence
+arithmetic, one-decimal percentage, 15-minute arrival buckets, private cache
+headers and SUPER_ADMIN authorization. Ticket-batch integration tests prove
+import-only selection, no-email accounting, request-id idempotency, compact
+audit metadata and SCANNER denial. Web tests cover the metrics/empty states and
+in-memory CSRF propagation for a confirmed batch.
+
 ## 6. Offline E2E
 
 - prepare bundle;

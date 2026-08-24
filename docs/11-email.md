@@ -47,6 +47,13 @@ vendor and production credential setup are not selected in this milestone.
 
 После XLSX import письма автоматически не рассылаются. SUPER_ADMIN отдельно нажимает «Отправить QR участникам».
 
+Массовая постановка ticket-писем требует явного подтверждения и
+client-generated UUID операции. Идемпотентный ключ включает UUID операции и
+Registration id: безопасный retry не создаёт вторую delivery, а осознанная
+повторная отправка использует новый UUID. В очередь попадают только ACTIVE
+Registration с email; строки без email и неактивные строки возвращаются
+агрегированными счётчиками без PII.
+
 У конкретной регистрации есть «Повторно отправить письмо».
 
 ## 5. Failure policy
