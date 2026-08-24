@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 
 import { AuthModule } from './auth/auth.module.js';
+import { AttendanceModule } from './attendance/attendance.module.js';
 import { OriginCsrfGuard } from './auth/auth.guards.js';
 import { ApiConfigModule } from './common/config.module.js';
 import { DatabaseModule } from './common/database.module.js';
@@ -16,6 +17,7 @@ import { StaffModule } from './staff/staff.module.js';
     ApiConfigModule,
     DatabaseModule,
     AuthModule,
+    AttendanceModule,
     StaffModule,
     EventsModule,
     RegistrationsModule,

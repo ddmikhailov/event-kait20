@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 export const assertNever = (value: never): never => {
   throw new Error(`Unexpected value: ${String(value)}`);
@@ -16,6 +16,9 @@ export const registrationQrPayload = (
   publicId: string,
   secret: string,
 ): string => `${publicId}.${registrationSignature(publicId, secret)}`;
+
+export const registrationQrPayloadHash = (payload: string): string =>
+  createHash('sha256').update(payload).digest('hex');
 
 export const registrationTicketUrl = (
   publicId: string,

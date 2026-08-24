@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createEventRequestSchema,
+  attendanceSyncRequestSchema,
   healthResponseSchema,
   passwordResetRequestSchema,
   scannerOnsiteRegistrationRequestSchema,
@@ -79,6 +80,24 @@ describe('healthResponseSchema', () => {
       scannerOnsiteRegistrationRequestSchema.parse({
         ...values,
         capacityOverride: true,
+      }),
+    ).toThrow();
+  });
+
+  it('bounds attendance batches and rejects duplicate client event ids', () => {
+    const clientEventId = '11111111-1111-4111-8111-111111111111';
+    const item = {
+      clientEventId,
+      registrationId: '22222222-2222-4222-8222-222222222222',
+      mode: 'FAST_SCAN',
+      source: 'OFFLINE_SYNC',
+      deviceScannedAt: '2027-06-10T10:00:00.000Z',
+      estimatedScannedAt: '2027-06-10T10:00:00.000Z',
+    };
+    expect(() =>
+      attendanceSyncRequestSchema.parse({
+        deviceId: '33333333-3333-4333-8333-333333333333',
+        events: [item, item],
       }),
     ).toThrow();
   });

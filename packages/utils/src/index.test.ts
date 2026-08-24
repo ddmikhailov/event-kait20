@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertNever,
   registrationQrPayload,
+  registrationQrPayloadHash,
   registrationTicketUrl,
   verifyRegistrationSignature,
 } from './index';
@@ -21,6 +22,7 @@ it('signs opaque registration references and rejects tampering', () => {
   const payload = registrationQrPayload(id, secret);
   const signature = payload.split('.')[1]!;
   expect(payload).not.toContain('@');
+  expect(registrationQrPayloadHash(payload)).toMatch(/^[a-f0-9]{64}$/);
   expect(verifyRegistrationSignature(id, signature, secret)).toBe(true);
   expect(verifyRegistrationSignature(id, `${signature}x`, secret)).toBe(false);
   expect(registrationTicketUrl(id, secret, 'https://example.test')).toContain(

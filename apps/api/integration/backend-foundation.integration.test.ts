@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
@@ -37,6 +37,14 @@ let registrationEventId: string;
 let registrationFieldId: string;
 let registrationId: string;
 let registrationTicketPath: string;
+let attendanceEventId: string;
+let attendanceOtherEventId: string;
+let attendanceRegistrationId: string;
+let attendanceSecondRegistrationId: string;
+let attendanceQrPayload: string;
+let attendanceScannerEmail: string;
+let attendanceScannerPassword: string;
+let attendanceBundleVersion: string;
 
 type SessionClient = { cookie: string; csrf: string };
 
@@ -1102,6 +1110,10 @@ describe.sequential('backend foundation', () => {
     const onsiteScannerId = randomUUID();
     const onsiteScannerEmail = 'onsite-scanner@example.test';
     const onsiteScannerPassword = 'onsite scanner secure password';
+    attendanceEventId = event.id;
+    attendanceOtherEventId = unassignedEvent.id;
+    attendanceScannerEmail = onsiteScannerEmail;
+    attendanceScannerPassword = onsiteScannerPassword;
     await pool.query(
       `INSERT INTO staff_users
         (id, email, email_normalized, password_hash, system_role, active,
@@ -1134,7 +1146,13 @@ describe.sequential('backend foundation', () => {
       },
     );
     expect(created.status).toBe(201);
-    const createdBody = (await created.json()) as { registrationId: string };
+    const createdBody = (await created.json()) as {
+      registrationId: string;
+      ticketUrl: string;
+    };
+    attendanceRegistrationId = createdBody.registrationId;
+    const ticketParts = new URL(createdBody.ticketUrl).pathname.split('/');
+    attendanceQrPayload = `${ticketParts.at(-2)}.${ticketParts.at(-1)}`;
     const persisted = await pool.query<{
       consent_accepted: boolean;
       delivery_count: string;
@@ -1238,6 +1256,9 @@ describe.sequential('backend foundation', () => {
       },
     );
     expect(override.status).toBe(201);
+    attendanceSecondRegistrationId = (
+      (await override.json()) as { registrationId: string }
+    ).registrationId;
     const state = await pool.query<{
       active_count: string;
       override_audit_count: string;
@@ -1254,6 +1275,302 @@ describe.sequential('backend foundation', () => {
       active_count: '2',
       override_audit_count: '1',
     });
+  });
+
+  it('resolves signed QR and produces a verifiable minimum offline bundle', async () => {
+    const scanner = await login(
+      attendanceScannerEmail,
+      attendanceScannerPassword,
+    );
+    const bundle = await api(
+      `/scanner/events/${attendanceEventId}/offline-bundle`,
+      { cookie: scanner.cookie },
+    );
+    expect(bundle.status).toBe(200);
+    const bundleBody = (await bundle.json()) as {
+      checksum: string;
+      expiresAt: string;
+      registrationCount: number;
+      registrations: {
+        qrPayloadHash: string;
+        registrationId: string;
+      }[];
+      version: string;
+    };
+    attendanceBundleVersion = bundleBody.version;
+    expect(bundleBody.registrationCount).toBe(2);
+    expect(bundleBody.checksum).toBe(
+      createHash('sha256')
+        .update(JSON.stringify(bundleBody.registrations))
+        .digest('hex'),
+    );
+    const offlineRegistration = bundleBody.registrations.find(
+      (item) => item.registrationId === attendanceRegistrationId,
+    );
+    expect(offlineRegistration?.qrPayloadHash).toBe(
+      createHash('sha256').update(attendanceQrPayload).digest('hex'),
+    );
+    const bundleText = JSON.stringify(bundleBody);
+    expect(bundleText).not.toContain('birthDate');
+    expect(bundleText).not.toContain('email');
+    expect(bundleText).not.toContain('customAnswers');
+
+    const resolved = await api(
+      `/scanner/events/${attendanceEventId}/resolve-qr`,
+      {
+        method: 'POST',
+        cookie: scanner.cookie,
+        csrf: scanner.csrf,
+        body: { qrPayload: attendanceQrPayload },
+      },
+    );
+    expect(resolved.status).toBe(201);
+    expect(await resolved.json()).toMatchObject({
+      registrationId: attendanceRegistrationId,
+      firstAttendedAt: null,
+    });
+    const tampered = await api(
+      `/scanner/events/${attendanceEventId}/resolve-qr`,
+      {
+        method: 'POST',
+        cookie: scanner.cookie,
+        csrf: scanner.csrf,
+        body: { qrPayload: `${attendanceQrPayload}x` },
+      },
+    );
+    expect(tampered.status).toBe(400);
+    expect(await tampered.json()).toMatchObject({
+      error: { code: 'INVALID_QR' },
+    });
+    expect(
+      (
+        await api(`/scanner/events/${attendanceOtherEventId}/offline-bundle`, {
+          cookie: scanner.cookie,
+        })
+      ).status,
+    ).toBe(403);
+
+    const admin = await login();
+    const wrongEvent = await api(
+      `/scanner/events/${attendanceOtherEventId}/resolve-qr`,
+      {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: { qrPayload: attendanceQrPayload },
+      },
+    );
+    expect(wrongEvent.status).toBe(400);
+    expect(await wrongEvent.json()).toMatchObject({
+      error: { code: 'INVALID_QR' },
+    });
+  });
+
+  it('syncs attendance idempotently per item and preserves the first accepted attendance', async () => {
+    const admin = await login();
+    const annulledOnsite = await api(
+      `/admin/events/${attendanceEventId}/registrations/onsite`,
+      {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: onsiteParticipant('4000004', { capacityOverride: true }),
+      },
+    );
+    expect(annulledOnsite.status).toBe(201);
+    const annulledRegistrationId = (
+      (await annulledOnsite.json()) as { registrationId: string }
+    ).registrationId;
+    expect(
+      (
+        await api(
+          `/admin/events/${attendanceEventId}/registrations/${annulledRegistrationId}/annul`,
+          { method: 'POST', cookie: admin.cookie, csrf: admin.csrf },
+        )
+      ).status,
+    ).toBe(201);
+
+    const scanner = await login(
+      attendanceScannerEmail,
+      attendanceScannerPassword,
+    );
+    const deviceId = randomUUID();
+    const acceptedId = randomUUID();
+    const invalidId = randomUUID();
+    const annulledId = randomUUID();
+    const invalidTimestampId = randomUUID();
+    const baseItem = {
+      mode: 'MANUAL_CONFIRM',
+      source: 'OFFLINE_SYNC',
+      deviceScannedAt: '2027-06-10T10:10:00.000Z',
+      estimatedScannedAt: '2027-06-10T10:10:00.000Z',
+    };
+    const sync = await api(
+      `/scanner/events/${attendanceEventId}/attendance/sync`,
+      {
+        method: 'POST',
+        cookie: scanner.cookie,
+        csrf: scanner.csrf,
+        body: {
+          deviceId,
+          events: [
+            {
+              ...baseItem,
+              clientEventId: acceptedId,
+              registrationId: attendanceRegistrationId,
+            },
+            {
+              ...baseItem,
+              clientEventId: invalidId,
+              registrationId: randomUUID(),
+            },
+            {
+              ...baseItem,
+              clientEventId: annulledId,
+              registrationId: annulledRegistrationId,
+            },
+            {
+              ...baseItem,
+              clientEventId: invalidTimestampId,
+              registrationId: attendanceSecondRegistrationId,
+              deviceScannedAt: '2035-01-01T00:00:00.000Z',
+              estimatedScannedAt: '2035-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+      },
+    );
+    expect(sync.status).toBe(201);
+    expect(await sync.json()).toMatchObject({
+      results: [
+        { clientEventId: acceptedId, status: 'ACCEPTED' },
+        { clientEventId: invalidId, status: 'INVALID_REGISTRATION' },
+        { clientEventId: annulledId, status: 'REGISTRATION_ANNULLED' },
+        { clientEventId: invalidTimestampId, status: 'INVALID_TIMESTAMP' },
+      ],
+    });
+
+    const retry = await api(
+      `/scanner/events/${attendanceEventId}/attendance/sync`,
+      {
+        method: 'POST',
+        cookie: scanner.cookie,
+        csrf: scanner.csrf,
+        body: {
+          deviceId,
+          events: [
+            {
+              ...baseItem,
+              clientEventId: acceptedId,
+              registrationId: attendanceRegistrationId,
+            },
+          ],
+        },
+      },
+    );
+    expect(await retry.json()).toMatchObject({
+      results: [{ status: 'ALREADY_PROCESSED' }],
+    });
+
+    const repeatId = randomUUID();
+    const repeat = await api(
+      `/scanner/events/${attendanceEventId}/attendance/sync`,
+      {
+        method: 'POST',
+        cookie: scanner.cookie,
+        csrf: scanner.csrf,
+        body: {
+          deviceId: randomUUID(),
+          events: [
+            {
+              ...baseItem,
+              clientEventId: repeatId,
+              registrationId: attendanceRegistrationId,
+              deviceScannedAt: '2027-06-10T10:05:00.000Z',
+              estimatedScannedAt: '2027-06-10T10:05:00.000Z',
+            },
+          ],
+        },
+      },
+    );
+    expect(await repeat.json()).toMatchObject({
+      results: [
+        {
+          status: 'REGISTRATION_ALREADY_ATTENDED',
+          firstAttendedAt: '2027-06-10T10:10:00.000Z',
+        },
+      ],
+    });
+
+    const concurrentResponses = await Promise.all(
+      ['10:15:00.000Z', '10:16:00.000Z'].map((time) =>
+        api(`/scanner/events/${attendanceEventId}/attendance/sync`, {
+          method: 'POST',
+          cookie: scanner.cookie,
+          csrf: scanner.csrf,
+          body: {
+            deviceId: randomUUID(),
+            events: [
+              {
+                ...baseItem,
+                clientEventId: randomUUID(),
+                registrationId: attendanceSecondRegistrationId,
+                deviceScannedAt: `2027-06-10T${time}`,
+                estimatedScannedAt: `2027-06-10T${time}`,
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    const concurrentStatuses = await Promise.all(
+      concurrentResponses.map(async (response) => {
+        expect(response.status).toBe(201);
+        return ((await response.json()) as { results: { status: string }[] })
+          .results[0]!.status;
+      }),
+    );
+    expect(concurrentStatuses.sort()).toEqual([
+      'ACCEPTED',
+      'REGISTRATION_ALREADY_ATTENDED',
+    ]);
+
+    const persisted = await pool.query<{
+      duplicate: boolean;
+      estimated_scanned_at: Date;
+      registration_id: string;
+      source: string;
+    }>(
+      `SELECT registration_id, estimated_scanned_at, source, duplicate
+       FROM attendance_events WHERE event_id = $1
+       ORDER BY registration_id, estimated_scanned_at`,
+      [attendanceEventId],
+    );
+    expect(persisted.rows).toHaveLength(4);
+    expect(
+      persisted.rows
+        .filter((row) => row.registration_id === attendanceRegistrationId)
+        .map((row) => row.duplicate)
+        .sort(),
+    ).toEqual([false, true]);
+    expect(new Set(persisted.rows.map((row) => row.source))).toEqual(
+      new Set(['OFFLINE_SYNC']),
+    );
+    const firstAttendance = await pool.query<{
+      first_attended_at: Date;
+      offline_data_version: string;
+    }>(
+      `SELECT r.first_attended_at, e.offline_data_version
+       FROM registrations r JOIN events e ON e.id = r.event_id
+       WHERE r.id = $1`,
+      [attendanceRegistrationId],
+    );
+    expect(firstAttendance.rows[0]?.first_attended_at.toISOString()).toBe(
+      '2027-06-10T10:10:00.000Z',
+    );
+    expect(
+      BigInt(firstAttendance.rows[0]!.offline_data_version),
+    ).toBeGreaterThan(BigInt(attendanceBundleVersion));
   });
 
   it('invalidates a public ticket after Registration annulment', async () => {
