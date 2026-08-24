@@ -31,6 +31,10 @@ Final legal URL is an external project input still pending.
 - Online scanner sends QR payload in POST body, not URL.
 - Ticket URL route uses `Referrer-Policy: no-referrer`; logs must redact/mask signature/token segments.
 
+The implemented signature is HMAC-SHA-256 over the Registration public ID and
+is compared in constant time. Ticket responses use `Cache-Control: no-store`.
+Malformed, tampered, missing and annulled references share the same public error.
+
 ## 5. Authentication
 
 Staff only:

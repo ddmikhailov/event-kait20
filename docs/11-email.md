@@ -15,7 +15,13 @@ Registration committed
 
 Ошибки email не откатывают регистрацию.
 
-Invitation/reset producers persist an idempotent `email_deliveries` intent linked to the one-time auth record. The future worker reconstructs the signed link from record id, purpose, expiry and the server-side HMAC secret; raw invitation/reset tokens are never durable delivery context.
+Invitation/reset producers persist an idempotent `email_deliveries` intent linked to the one-time auth record. The worker reconstructs the signed link from record id, purpose, expiry and the server-side HMAC secret; raw invitation/reset tokens are never durable delivery context.
+
+The MVP worker core treats `email_deliveries` as the durable source of truth and
+atomically leases work with PostgreSQL row locking (`FOR UPDATE SKIP LOCKED`). A
+stale `sending` lease can be reclaimed, and every provider call uses the delivery
+ID as its idempotency key. Provider/SMTP transport remains an adapter: a concrete
+vendor and production credential setup are not selected in this milestone.
 
 ## 2. Типы писем MVP
 
@@ -51,7 +57,11 @@ Email delivery имеет состояния:
 - sent;
 - failed.
 
-Worker выполняет ограниченные retries. Ошибка после retries должна быть видна администратору.
+Worker выполняет ограниченные retries (default: 5, environment-configurable with
+an upper bound). Before the last attempt a failure returns the delivery to
+`queued`; after the last attempt it moves to `failed`. Persistent diagnostics
+contain only a bounded error code, not message bodies, tokens or participant PII.
+Ошибка после retries должна быть видна администратору.
 
 ## 6. Credentials
 

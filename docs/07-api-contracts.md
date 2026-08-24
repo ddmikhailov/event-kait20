@@ -68,11 +68,15 @@ Errors include: `VALIDATION_ERROR`, `REGISTRATION_CLOSED`, `CAPACITY_FULL`, `EVE
 ### `GET /tickets/:publicId/:signature`
 Auth: possession of unguessable signed URL.
 
-Returns minimum ticket data: Event name/date/time/location, participant full name and QR payload/rendering data.
+Returns only the Event title/start/end/timezone/location, the historical
+Registration name snapshot and the signed QR payload. Email, phone, birth date,
+form answers and internal identifiers are not returned.
 
-Security headers: `Referrer-Policy: no-referrer`; endpoint/path logging must mask token/signature components.
+Security headers: `Referrer-Policy: no-referrer` and `Cache-Control: no-store`;
+endpoint/path logging must mask token/signature components.
 
-Invalid/annulled ticket returns generic not-valid response without exposing participant data.
+Malformed, incorrectly signed, missing and annulled tickets all return the same
+generic `INVALID_QR` response without exposing participant data.
 
 ## 4. Auth
 
