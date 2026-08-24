@@ -14,6 +14,7 @@
     "lint": "turbo run lint",
     "db:migrate:deploy": "pnpm --filter @event-registration/database exec prisma migrate deploy",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:mvp": "node scripts/mvp-smoke.mjs",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck"
   },

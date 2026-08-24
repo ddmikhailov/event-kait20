@@ -36,7 +36,7 @@ type PostgresBinaryModule = {
   pg_ctl: string;
 };
 
-type DisposablePostgres = {
+export type DisposablePostgres = {
   connectionString: string;
   stop: () => Promise<void>;
 };
@@ -117,7 +117,7 @@ const runBinary = async (
     });
   });
 
-const startDisposablePostgres = async (): Promise<DisposablePostgres> => {
+export async function startDisposablePostgres(): Promise<DisposablePostgres> {
   const temporaryDirectory = await mkdtemp(
     join(tmpdir(), 'event-registration-postgres-'),
   );
@@ -279,7 +279,7 @@ const startDisposablePostgres = async (): Promise<DisposablePostgres> => {
         });
     },
   };
-};
+}
 
 const validateExternalTestUrl = (connectionString: string): void => {
   const url = new URL(connectionString);
@@ -420,4 +420,9 @@ const run = async (): Promise<void> => {
   }
 };
 
-await run();
+if (
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
+  await run();
+}

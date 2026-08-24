@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "acceptance:db": "tsx scripts/start-acceptance-db.ts",
     "build": "prisma generate",
     "lint": "eslint prisma.config.ts scripts tests",
     "test": "pnpm run test:integration",
