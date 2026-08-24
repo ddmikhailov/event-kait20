@@ -80,6 +80,8 @@ API image именуется immutable commit SHA, например
 
 Runtime использует liveness для перезапуска процесса и readiness для включения
 в балансировку. Smoke не передаёт credentials и не затрагивает business data.
+После выкладки всех трёх приложений выполняется общий `pnpm smoke:mvp`, а затем
+scenarios из `docs/runbooks/mvp-acceptance.md`.
 
 ## 7. Current release gates
 

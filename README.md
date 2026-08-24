@@ -29,7 +29,8 @@
 18. `docs/16-roadmap.md` — MVP и дальнейшие версии.
 19. `docs/17-engineering-review.md` — решения engineering review v0.2.
 20. `docs/18-codex-workflow.md` — способ разработки через Codex.
-21. `docs/adr/` — Architecture Decision Records.
+21. `docs/19-mvp-release-status.md` — фактическая готовность release candidate и внешние production gates.
+22. `docs/adr/` — Architecture Decision Records.
 
 ## Зафиксированные фундаментальные решения
 
@@ -49,6 +50,10 @@
 
 ## Статус документации
 
-Product scope, roles, architecture, domain baseline, database baseline, API surface, offline protocol и Codex rules готовы к scaffold проекта.
+MVP engineering baseline реализован последовательными feature milestones.
+Актуальная матрица готовности и оставшиеся внешние решения зафиксированы в
+`docs/19-mvp-release-status.md`.
 
-До production дополнительно закрываются provider-specific deployment details, юридическая ссылка согласия, домен, email provider и финальный security review.
+До production дополнительно закрываются provider-specific deployment details,
+юридическая ссылка согласия, домен, email provider, staging acceptance и
+финальный security review.
