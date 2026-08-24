@@ -2,11 +2,13 @@ import {
   acceptedResponseSchema,
   excelImportCommitResponseSchema,
   excelImportPreviewResponseSchema,
+  eventStatisticsResponseSchema,
   onsiteRegistrationResponseSchema,
   personDetailResponseSchema,
   personListResponseSchema,
   registrationDetailResponseSchema,
   registrationListResponseSchema,
+  sendTicketsResponseSchema,
   staffInvitationResponseSchema,
   staffListResponseSchema,
   eventAccessListResponseSchema,
@@ -21,6 +23,7 @@ import {
   type CreateFormFieldRequest,
   type EventListResponse,
   type EventResponse,
+  type EventStatisticsResponse,
   type EventAccessListResponse,
   type EventAccessRequest,
   type FormFieldListResponse,
@@ -34,6 +37,8 @@ import {
   type PersonListResponse,
   type RegistrationDetailResponse,
   type RegistrationListResponse,
+  type SendTicketsRequest,
+  type SendTicketsResponse,
   type SessionResponse,
   type StaffInvitationRequest,
   type StaffInvitationResponse,
@@ -409,6 +414,25 @@ export class AdminApiClient {
       blob: await response.blob(),
       filename: encoded ? decodeURIComponent(encoded) : 'participants.xlsx',
     };
+  }
+
+  public eventStatistics(eventId: string): Promise<EventStatisticsResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/statistics`,
+      { method: 'GET' },
+      eventStatisticsResponseSchema,
+    );
+  }
+
+  public sendTickets(
+    eventId: string,
+    values: SendTicketsRequest,
+  ): Promise<SendTicketsResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/send-tickets`,
+      { method: 'POST', body: JSON.stringify(values) },
+      sendTicketsResponseSchema,
+    );
   }
 
   private async request<T>(

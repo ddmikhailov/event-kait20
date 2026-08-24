@@ -91,6 +91,31 @@ export const EventParticipants = ({
     }
   };
 
+  const sendImportedTickets = async () => {
+    if (
+      !window.confirm(
+        'Поставить в очередь билеты для всех действующих Excel-регистраций с email?',
+      )
+    )
+      return;
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      const result = await adminApi.sendTickets(event.id, {
+        requestId: crypto.randomUUID(),
+        selection: 'IMPORTED',
+      });
+      setNotice({
+        kind: 'success',
+        text: `В очередь добавлено: ${result.queuedRows}. Без email: ${result.withoutEmailRows}. Уже поставлено этой операцией: ${result.alreadyQueuedRows}.`,
+      });
+    } catch (error) {
+      setNotice(participantError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (selected) {
     return (
       <RegistrationDetail
@@ -149,6 +174,13 @@ export const EventParticipants = ({
             <p>Регистрационные данные относятся только к этому мероприятию.</p>
           </div>
           <div className="row-actions">
+            <button
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => void sendImportedTickets()}
+            >
+              Отправить QR импортированным
+            </button>
             <button
               className="secondary-button"
               disabled={busy}

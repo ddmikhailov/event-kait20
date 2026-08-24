@@ -468,7 +468,7 @@ textarea {
   display: grid;
   gap: 0.55rem;
   align-self: end;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
 }
 .event-card-actions .secondary-button {
   margin-top: 0.75rem;
@@ -1095,6 +1095,85 @@ textarea {
   height: 1.1rem;
 }
 
+/* Event reporting */
+.reporting-layout {
+  display: grid;
+  width: min(100%, 76rem);
+  gap: 1.25rem;
+  margin: 0 auto;
+  padding: clamp(1.25rem, 4vw, 3rem);
+}
+.reporting-layout > * {
+  min-width: 0;
+}
+.reporting-metrics {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(3, 1fr);
+}
+.reporting-metrics article {
+  gap: 0.35rem;
+}
+.reporting-metrics strong {
+  color: #2e1e47;
+  font-size: clamp(1.8rem, 4vw, 3rem);
+  line-height: 1;
+}
+.reporting-metrics span {
+  color: #777589;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.arrival-panel > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.arrival-panel h2,
+.arrival-panel p {
+  margin-bottom: 0.35rem;
+}
+.arrival-panel > header > span {
+  border-radius: 999px;
+  padding: 0.35rem 0.65rem;
+  background: #e9e7ef;
+  color: #555267;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+.arrival-series {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.arrival-series li {
+  display: grid;
+  align-items: center;
+  gap: 0.75rem;
+  grid-template-columns: minmax(8rem, auto) minmax(6rem, 1fr) 2rem 5rem;
+}
+.arrival-series time,
+.arrival-series small {
+  color: #777589;
+  font-size: 0.7rem;
+}
+.arrival-track {
+  display: block;
+  height: 0.8rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eceaf1;
+}
+.arrival-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--kait-color-blue), #8f5bbb);
+}
+
 @media (max-width: 640px) {
   .event-hero {
     min-height: 31rem;
@@ -1169,6 +1248,24 @@ textarea {
   .excel-upload-panel .kait-button,
   .excel-confirm-panel .kait-button {
     width: 100%;
+  }
+  .reporting-layout .admin-page-heading,
+  .arrival-panel > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .reporting-layout .admin-page-heading .kait-button {
+    width: 100%;
+  }
+  .reporting-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .arrival-series li {
+    gap: 0.45rem;
+    grid-template-columns: minmax(7rem, auto) minmax(4rem, 1fr) 1.5rem;
+  }
+  .arrival-series small {
+    grid-column: 2 / -1;
   }
 }
 @media (max-width: 900px) {

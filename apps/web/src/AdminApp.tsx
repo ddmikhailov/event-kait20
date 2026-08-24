@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
 import { EventParticipants, PeopleDirectory } from './AdminParticipants.js';
+import { EventStatistics } from './AdminReporting.js';
 import { EventAccessManager, StaffDirectory } from './AdminStaff.js';
 import {
   eventDefaults,
@@ -93,7 +94,13 @@ const AdminWorkspace = ({
 }) => {
   const [events, setEvents] = useState<EventResponse[]>([]);
   const [view, setView] = useState<
-    'events' | 'editor' | 'participants' | 'people' | 'staff' | 'access'
+    | 'events'
+    | 'editor'
+    | 'participants'
+    | 'statistics'
+    | 'people'
+    | 'staff'
+    | 'access'
   >('events');
   const [selected, setSelected] = useState<EventResponse>();
   const [busy, setBusy] = useState(false);
@@ -147,6 +154,17 @@ const AdminWorkspace = ({
   }
   if (view === 'people') {
     return <PeopleDirectory onBack={() => setView('events')} />;
+  }
+  if (view === 'statistics' && selected) {
+    return (
+      <EventStatistics
+        event={selected}
+        onBack={() => {
+          setSelected(undefined);
+          setView('events');
+        }}
+      />
+    );
   }
   if (view === 'staff') {
     return (
@@ -210,6 +228,10 @@ const AdminWorkspace = ({
               setSelected(event);
               setView('access');
             }}
+            onStatistics={async (event) => {
+              setSelected(event);
+              setView('statistics');
+            }}
           />
         )}
       </section>
@@ -222,11 +244,13 @@ export const EventGrid = ({
   onOpen,
   onParticipants,
   onAccess,
+  onStatistics,
 }: {
   events: EventResponse[];
   onOpen: (event: EventResponse) => Promise<void>;
   onParticipants: (event: EventResponse) => Promise<void>;
   onAccess: (event: EventResponse) => Promise<void>;
+  onStatistics: (event: EventResponse) => Promise<void>;
 }) => (
   <section className="admin-event-grid" aria-label="Список мероприятий">
     {events.map((event) => (
@@ -244,6 +268,12 @@ export const EventGrid = ({
             onClick={() => void onParticipants(event)}
           >
             Участники
+          </button>
+          <button
+            className="secondary-button"
+            onClick={() => void onStatistics(event)}
+          >
+            Статистика
           </button>
           <button
             className="secondary-button"

@@ -196,6 +196,38 @@ describe('admin API client', () => {
     expect(headers.get('content-type')).toBeNull();
     expect(headers.get('x-csrf-token')).toBe(session.csrfToken);
   });
+
+  it('queues an idempotent imported-ticket batch with in-memory CSRF', async () => {
+    const requestId = '80000000-0000-4000-8000-000000000001';
+    const result = {
+      requestId,
+      queuedRows: 2,
+      alreadyQueuedRows: 0,
+      withoutEmailRows: 1,
+      inactiveOrMissingRows: 0,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(session))
+      .mockResolvedValueOnce(jsonResponse(result, 201));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AdminApiClient();
+    await client.restoreSession();
+
+    await client.sendTickets('10000000-0000-4000-8000-000000000001', {
+      requestId,
+      selection: 'IMPORTED',
+    });
+
+    const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({
+      requestId,
+      selection: 'IMPORTED',
+    });
+    expect(new Headers(init.headers).get('x-csrf-token')).toBe(
+      session.csrfToken,
+    );
+  });
 });
 
 const jsonResponse = (body: unknown, status = 200): Response =>

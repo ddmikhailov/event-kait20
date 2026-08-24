@@ -50,6 +50,7 @@ describe('admin console views', () => {
         onOpen={async () => undefined}
         onParticipants={async () => undefined}
         onAccess={async () => undefined}
+        onStatistics={async () => undefined}
       />,
     );
     const form = renderToStaticMarkup(
@@ -62,6 +63,7 @@ describe('admin console views', () => {
     );
     expect(grid).toContain('День открытых дверей');
     expect(grid).toContain('Доступ');
+    expect(grid).toContain('Статистика');
     expect(form).toContain('Регистрация открыта');
     expect(form).not.toContain('Идёт сейчас');
     expect(form).not.toContain('Завершено');
