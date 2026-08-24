@@ -222,7 +222,14 @@ MVP types: `REGISTRATION_TICKET`, `STAFF_INVITATION`, `PASSWORD_RESET`.
 - `id`, `event_id`, `created_by`, status;
 - total/valid/error/duplicate rows;
 - `result_summary jsonb` containing aggregate counts only, not a second permanent copy of all PII;
+- `expires_at`, optional `committed_at`;
 - timestamps.
+
+`import_job_files` is a technical, one-to-one, short-lived preview payload:
+`import_job_id`, `file_data bytea`, SHA-256, `created_at`, `expires_at`. It is not
+business history: deleting an ImportJob may cascade only to this payload. The
+payload is removed immediately after commit and expires after at most 24 hours.
+No parsed participant rows are stored in `result_summary` or audit metadata.
 
 ## 14. `audit_log`
 

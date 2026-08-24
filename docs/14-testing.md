@@ -93,6 +93,12 @@ raw tokens, in-memory CSRF propagation and Event-scoped access routes. Browser
 smoke checks cover the staff directory and access manager at desktop and mobile
 widths using synthetic accounts only.
 
+Excel coverage uses real PostgreSQL 18 and proves empty-database migration,
+preview without business writes, aggregate-only `result_summary`, source-file
+deletion after commit, one-time commit, capacity recheck, SUPER_ADMIN-only
+authorization, `EXCEL_IMPORT` persistence and formula-safe export. Parser unit
+tests cover the canonical template, formula cells and merged-cell rejection.
+
 ## 6. Offline E2E
 
 - prepare bundle;

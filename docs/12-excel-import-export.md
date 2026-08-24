@@ -1,6 +1,6 @@
 # 12. Excel Import / Export
 
-Статус: **Approved workflow / Draft validation details**
+Статус: **Implemented MVP baseline**
 
 ## 1. Import scope
 
@@ -14,7 +14,7 @@ Email у импортируемой записи может отсутствов
 
 1. Выбор Event.
 2. Upload `.xlsx`.
-3. Mapping колонок.
+3. Автоматическое сопоставление канонических колонок.
 4. Server validation.
 5. Preview.
 6. Admin confirmation.
@@ -33,7 +33,11 @@ Email у импортируемой записи может отсутствов
 
 ## 5. Temporary file
 
-Исходный XLSX не должен храниться постоянно без необходимости. Предпочтительно temporary Object Storage с автоматическим удалением, например через 24 часа.
+В MVP исходный XLSX хранится в приватной технической таблице PostgreSQL только
+между preview и commit. Срок жизни — не более 24 часов; payload удаляется сразу
+после успешного commit либо при обнаружении истечения срока. `result_summary`
+содержит только агрегаты и не становится постоянной копией PII. При переходе к
+Object Storage этот временный payload можно вынести без изменения API workflow.
 
 ## 6. Export
 
@@ -56,15 +60,33 @@ Email у импортируемой записи может отсутствов
 ## 7. Security/validation baseline
 
 - extension + MIME/content validation;
-- configurable hard file-size and row-count limit;
+- hard limit 5 MiB and 5000 non-empty data rows;
 - formulas/macros are not executed and unsupported formula cells are rejected or treated as inert values;
 - exported user strings starting with spreadsheet formula prefixes are escaped/neutralized;
-- merged cells are not part of the recommended template and require deterministic rejection/normalization;
+- merged cells are rejected;
 - empty rows are ignored;
 - commit re-checks capacity even after successful preview.
 
-## 8. TODO before Excel feature implementation
+## 8. MVP template
 
-- publish exact recommended XLSX template;
-- choose initial file/row limits based on staging tests;
-- exact accepted Russian column aliases.
+Ровно один непустой worksheet. Первая строка — уникальные заголовки.
+
+Обязательные колонки: `Фамилия`, `Имя`, `Дата рождения`, `Тип участника`,
+`Телефон`. Опциональные: `Отчество`, `Группа`, `Организация`, `Email`.
+Активные дополнительные поля используют заголовок `Поле: <label>`;
+обязательное поле Event должно присутствовать. Регистр и повторяющиеся пробелы
+в заголовках незначимы, произвольные синонимы в MVP не принимаются.
+
+Значения типа участника: enum-идентификаторы либо `Студент КАИТ №20`,
+`Преподаватель КАИТ №20`, `Студент другой организации`,
+`Преподаватель другой организации`. Multi-choice разделяется `;`, boolean
+принимает `Да/Нет`, `true/false` или `1/0`. Дата: `ДД.ММ.ГГГГ` или
+`ГГГГ-ММ-ДД`.
+
+При вероятном совпадении SUPER_ADMIN обязан явно выбрать: пропустить строку,
+создать нового Person с флагом последующей dedup-проверки либо связать с одним
+из предложенных Person. Тихого merge нет. Commit повторно читает исходный файл,
+пересчитывает совпадения и capacity внутри транзакции.
+
+Импорт разрешён для `DRAFT`, `REGISTRATION_OPEN`, `REGISTRATION_CLOSED` и
+`ACTIVE`; завершённую или архивную историю дополнять импортом нельзя.

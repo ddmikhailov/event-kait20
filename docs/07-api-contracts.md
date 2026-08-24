@@ -201,13 +201,20 @@ client.
 ## 9. Excel
 
 ### `POST /admin/events/:eventId/import/preview`
-Multipart `.xlsx`. Returns `importJobId`, column mapping proposal and row categories/errors. No business records committed.
+SUPER_ADMIN only. Multipart field `file` with `.xlsx`. Returns `importJobId`,
+24-hour expiry, canonical column mapping, aggregate capacity impact and row
+categories/errors. No Person or Registration is committed.
 
 ### `POST /admin/events/:eventId/import/:importJobId/commit`
-Commits the validated preview. If Event capacity changed since preview, server re-checks and may return `CAPACITY_FULL`/capacity conflict.
+SUPER_ADMIN only. Accepts the confirmed mapping, explicit decisions for every
+possible match and optional `capacityOverride` (false by default). Re-parses the
+file and commits all accepted rows transactionally. If Event capacity changed
+since preview, returns `CAPACITY_FULL` unless the audited override is explicit.
+The source payload is deleted after success and commit is one-time.
 
 ### `GET /admin/events/:eventId/export.xlsx`
-Returns sanitized XLSX.
+SUPER_ADMIN only. Returns a private, non-cacheable sanitized XLSX for the Event;
+user-controlled formula prefixes are neutralized.
 
 ### `POST /admin/events/:eventId/send-tickets`
 Queues registration-ticket emails for selected/imported active registrations with email. Requires explicit confirmation in UI.
