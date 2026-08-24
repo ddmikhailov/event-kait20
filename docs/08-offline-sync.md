@@ -148,3 +148,19 @@ Required:
 ## 12. Service worker update safety
 
 PWA application-shell updates must not delete pending attendance. Schema migrations for IndexedDB must be backward-safe and tested. A new release cannot force-clear local business data just to fix cache issues.
+
+## 13. Scanner client implementation freeze
+
+The MVP Scanner PWA uses Dexie-backed IndexedDB and keeps the CSRF token only
+in browser memory. A preparation verifies the row count and SHA-256 checksum
+before atomically replacing the active Event bundle. Bundle replacement and
+expiry cleanup do not include `pending_attendance` in their deletion scope.
+
+Reconnect order is fixed in the client as session/EventAccess revalidation,
+pending batch upload, per-item result application, and only then full bundle
+refresh. Confirmed and idempotently processed items are removed; rejected items
+remain locally visible with their machine-readable result. Logout clears all
+offline business tables while retaining only the anonymous device identifier.
+
+`VITE_API_BASE_URL` optionally selects the trusted API origin at build time; an
+empty value uses the Scanner application's own origin. It is not a secret.

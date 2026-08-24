@@ -79,6 +79,12 @@ High-priority codes: `CAPACITY_FULL`, `ALREADY_REGISTERED`, `REGISTRATION_CLOSED
 - expired cache becomes unusable/cleared per policy;
 - app/service-worker update preserves pending events.
 
+The Scanner client test baseline additionally exercises bundle checksum failure
+without replacement, local QR/search resolution, preservation of pending events
+during refresh and expiry, accepted/rejected per-item handling, logout cleanup,
+and the reconnect ordering contract. Camera permission and real service-worker
+upgrade behavior remain browser/device E2E checks before production rollout.
+
 ## 7. Security tests before production
 
 - CSRF/origin/CORS;
