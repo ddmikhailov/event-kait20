@@ -124,6 +124,13 @@ Implemented MVP status transitions:
 
 New Events start as `DRAFT` or `REGISTRATION_OPEN`. The registration deadline cannot be later than Event start, and Event end must be later than start.
 
+The MVP Web administrator workspace is mounted at `/admin`. It restores the
+server-side session using the HttpOnly cookie, retains the returned CSRF value
+in page memory only, and sends credentialed mutations with the CSRF header. A
+SCANNER session is shown an explicit role boundary and cannot enter Event or
+form-field management. Event date/time inputs are interpreted in the Event's
+configured IANA timezone rather than the administrator device timezone.
+
 ## 6. Admin — Form fields
 
 - `GET /admin/events/:eventId/form-fields`
@@ -134,6 +141,10 @@ New Events start as `DRAFT` or `REGISTRATION_OPEN`. The registration deadline ca
 Permission: SUPER_ADMIN.
 
 Structural changes are audited. Existing RegistrationAnswer snapshots remain historical.
+
+The administrator workspace lists active and inactive fields together so that
+soft-deactivated history remains visible. Choice options are entered as an
+ordered list and are validated by the shared API contracts and the server.
 
 ## 7. Admin — Global People
 

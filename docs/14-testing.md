@@ -72,6 +72,14 @@ checks cover the Event form at desktop and mobile widths; full
 registration-to-ticket E2E remains part of staging validation against the real
 API and email flow.
 
+The administrator Web baseline adds contract-level tests for credentialed
+session restoration and in-memory CSRF propagation, timezone-aware Event form
+values, valid status choices, SCANNER role separation, archived Event read-only
+behavior, and form-field option normalization. Browser smoke checks cover
+login, Event list/create/edit and form-field management at desktop and mobile
+widths; the real session/CSRF flow remains part of staging validation against
+the deployed API.
+
 ## 6. Offline E2E
 
 - prepare bundle;
