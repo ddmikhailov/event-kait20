@@ -74,6 +74,12 @@ Every protected handler has explicit permission guard. UI hiding is not authoriz
 
 SCANNER cannot overbook capacity. Administrative capacity override belongs to SUPER_ADMIN and is audited.
 
+Participant-management implementation keeps global Person search and all
+Registration mutations SUPER_ADMIN-only. SCANNER search is restricted by
+EventAccess and returns the documented minimum display snapshot; it does not
+return email or birth date. Audit metadata for participant edits stores changed
+field names and control flags, not before/after PII values.
+
 ## 8. Offline PII
 
 Scanner caches minimum fields only. Cache lifecycle:

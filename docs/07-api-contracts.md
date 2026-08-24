@@ -132,6 +132,11 @@ Structural changes are audited. Existing RegistrationAnswer snapshots remain his
 
 Person detail returns current canonical data and Registration history. Updating Person does not rewrite existing Registration snapshots.
 
+The implemented list uses bounded `page`/`pageSize` pagination (maximum 100)
+and searches current name, email, phone and study group. Person updates are
+audited with changed field names only; PII values are not copied to audit
+metadata.
+
 Manual merge endpoint is intentionally deferred until merge UX/rules are designed.
 
 ## 8. Admin — Registrations
@@ -146,6 +151,17 @@ Manual merge endpoint is intentionally deferred until merge UX/rules are designe
 `onsite` requires online API. Standard call respects capacity.
 
 For SUPER_ADMIN only, request may contain explicit `capacityOverride: true`; this is audit logged. SCANNER endpoint never accepts this flag.
+
+The implemented admin Registration endpoints edit the historical Registration
+snapshot, not the current Person record. Annulment is irreversible through the
+MVP API, releases capacity, invalidates the ticket and increments the Event
+offline-data version. Ticket resend requires an active Registration with email.
+
+Onsite input requires name, birth date, Russian phone, participant type and the
+current Event form answers; email is optional. An onsite record uses source
+`ONSITE` and does not claim public-form consent. It is allowed for
+`REGISTRATION_OPEN`, `REGISTRATION_CLOSED` and `ACTIVE` Events. A confident
+repeat returns the existing active Registration instead of consuming capacity.
 
 ## 9. Excel
 
@@ -192,6 +208,10 @@ Returns participant display data and attendance state. Does not itself create at
 
 ### `GET /scanner/events/:eventId/registrations/search`
 Search by name/phone/email/group within assigned Event.
+
+The response contains only Registration id, name, phone, group, participant
+type, organization and first-attendance time. Email and birth date may be search
+keys but are not returned to SCANNER.
 
 ### `POST /scanner/events/:eventId/registrations/onsite`
 Online only. Permission: assigned SCANNER or SUPER_ADMIN. SCANNER cannot overbook.
