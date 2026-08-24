@@ -7,6 +7,7 @@ import { OriginCsrfGuard } from './auth/auth.guards.js';
 import { ApiConfigModule } from './common/config.module.js';
 import { DatabaseModule } from './common/database.module.js';
 import { EventsModule } from './events/events.module.js';
+import { ExcelModule } from './excel/excel.module.js';
 import { HealthController } from './health.controller.js';
 import { ParticipantsModule } from './participants/participants.module.js';
 import { RegistrationsModule } from './registrations/registrations.module.js';
@@ -20,6 +21,7 @@ import { StaffModule } from './staff/staff.module.js';
     AttendanceModule,
     StaffModule,
     EventsModule,
+    ExcelModule,
     RegistrationsModule,
     ParticipantsModule,
   ],

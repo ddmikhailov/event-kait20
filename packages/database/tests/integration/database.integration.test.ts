@@ -141,6 +141,7 @@ describe('PostgreSQL domain migration', () => {
       'event_access',
       'event_form_fields',
       'events',
+      'import_job_files',
       'import_jobs',
       'password_reset_tokens',
       'persons',

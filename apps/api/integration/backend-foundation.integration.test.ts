@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import type { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import ExcelJS from 'exceljs';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -95,6 +96,42 @@ const login = async (
     cookie: setCookie!.split(';')[0]!,
     csrf: body.csrfToken,
   };
+};
+
+const excelFile = async (rows: (string | null)[][]): Promise<Blob> => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Импорт');
+  sheet.addRow([
+    'Фамилия',
+    'Имя',
+    'Дата рождения',
+    'Тип участника',
+    'Группа',
+    'Телефон',
+    'Email',
+  ]);
+  rows.forEach((row) => sheet.addRow(row));
+  return new Blob([new Uint8Array(await workbook.xlsx.writeBuffer())], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+};
+
+const previewExcel = async (
+  event: string,
+  session: SessionClient,
+  rows: (string | null)[][],
+): Promise<Response> => {
+  const form = new FormData();
+  form.set('file', await excelFile(rows), 'participants.xlsx');
+  return fetch(`${baseUrl}/admin/events/${event}/import/preview`, {
+    method: 'POST',
+    headers: {
+      cookie: session.cookie,
+      origin: trustedOrigin,
+      'x-csrf-token': session.csrf,
+    },
+    body: form,
+  });
 };
 
 const createEvent = async (
@@ -1586,6 +1623,236 @@ describe.sequential('backend foundation', () => {
     expect(
       BigInt(firstAttendance.rows[0]!.offline_data_version),
     ).toBeGreaterThan(BigInt(attendanceBundleVersion));
+  });
+
+  it('previews, commits, and exports Excel without retaining the source payload', async () => {
+    const admin = await login();
+    const event = await createEvent(admin, 'excel', 2);
+    const preview = await previewExcel(event.id, admin, [
+      [
+        '+Сидоров',
+        'Семён',
+        '2003-05-06',
+        'Студент КАИТ №20',
+        'ИС-23',
+        '+79995550101',
+        null,
+      ],
+    ]);
+    expect(preview.status).toBe(201);
+    const previewBody = (await preview.json()) as {
+      importJobId: string;
+      mapping: Record<string, unknown>;
+      summary: { newRows: number; withoutEmailRows: number };
+    };
+    expect(previewBody.summary).toMatchObject({
+      newRows: 1,
+      withoutEmailRows: 1,
+    });
+    const storedPreview = await pool.query<{
+      file_count: string;
+      result_summary: string;
+    }>(
+      `SELECT (SELECT count(*)::text FROM import_job_files
+               WHERE import_job_id = j.id) AS file_count,
+              j.result_summary::text
+       FROM import_jobs j WHERE j.id = $1`,
+      [previewBody.importJobId],
+    );
+    expect(storedPreview.rows[0]?.file_count).toBe('1');
+    expect(storedPreview.rows[0]?.result_summary).not.toContain('Сидоров');
+
+    const commit = await api(
+      `/admin/events/${event.id}/import/${previewBody.importJobId}/commit`,
+      {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: {
+          mapping: previewBody.mapping,
+          decisions: [],
+          capacityOverride: false,
+        },
+      },
+    );
+    expect(commit.status).toBe(201);
+    expect(await commit.json()).toMatchObject({
+      importedRows: 1,
+      withoutEmailRows: 1,
+    });
+    const persisted = await pool.query<{
+      file_count: string;
+      source: string;
+      status: string;
+    }>(
+      `SELECT r.source, j.status,
+              (SELECT count(*)::text FROM import_job_files
+               WHERE import_job_id = j.id) AS file_count
+       FROM registrations r JOIN import_jobs j ON j.event_id = r.event_id
+       WHERE j.id = $1`,
+      [previewBody.importJobId],
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      file_count: '0',
+      source: 'EXCEL_IMPORT',
+      status: 'COMPLETED',
+    });
+
+    const repeated = await api(
+      `/admin/events/${event.id}/import/${previewBody.importJobId}/commit`,
+      {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: {
+          mapping: previewBody.mapping,
+          decisions: [],
+          capacityOverride: false,
+        },
+      },
+    );
+    expect(repeated.status).toBe(409);
+
+    const exported = await api(`/admin/events/${event.id}/export.xlsx`, {
+      cookie: admin.cookie,
+    });
+    expect(exported.status).toBe(200);
+    expect(exported.headers.get('cache-control')).toBe('private, no-store');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await exported.arrayBuffer());
+    expect(workbook.worksheets[0]?.getCell('A2').value).toBe("'+Сидоров");
+  });
+
+  it('rechecks capacity at Excel commit time and enforces SUPER_ADMIN access', async () => {
+    const admin = await login();
+    const event = await createEvent(admin, 'excel-capacity', 1);
+    const rows = [
+      [
+        'Орлов',
+        'Олег',
+        '2002-02-02',
+        'Студент КАИТ №20',
+        'ИС-24',
+        '+79995550102',
+        'orlov@example.test',
+      ],
+    ];
+    const preview = await previewExcel(event.id, admin, rows);
+    const body = (await preview.json()) as {
+      importJobId: string;
+      mapping: Record<string, unknown>;
+    };
+    expect(preview.status).toBe(201);
+
+    const onsite = await api(`/admin/events/${event.id}/registrations/onsite`, {
+      method: 'POST',
+      cookie: admin.cookie,
+      csrf: admin.csrf,
+      body: onsiteParticipant('5000001', { capacityOverride: false }),
+    });
+    expect(onsite.status).toBe(201);
+    const commit = await api(
+      `/admin/events/${event.id}/import/${body.importJobId}/commit`,
+      {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: {
+          mapping: body.mapping,
+          decisions: [],
+          capacityOverride: false,
+        },
+      },
+    );
+    expect(commit.status).toBe(409);
+    expect(await commit.json()).toMatchObject({
+      error: { code: 'CAPACITY_FULL' },
+    });
+
+    const scanner = await login(
+      attendanceScannerEmail,
+      attendanceScannerPassword,
+    );
+    expect((await previewExcel(event.id, scanner, rows)).status).toBe(403);
+  });
+
+  it('requires an explicit decision for an Excel profile match', async () => {
+    const admin = await login();
+    const event = await createEvent(admin, 'excel-match', 10);
+    const personId = randomUUID();
+    await pool.query(
+      `INSERT INTO persons
+        (id, last_name, first_name, birth_date, email, email_normalized,
+         phone, phone_normalized, person_type, organization, study_group,
+         dedup_review_required, created_at, updated_at)
+       VALUES ($1, 'Смирнов', 'Сергей', '1999-01-01',
+               'old-smirnov@example.test', 'old-smirnov@example.test',
+               '+79995550110', '+79995550110', 'KAIT_STUDENT', 'КАИТ №20',
+               'ИС-25', false, now(), now())`,
+      [personId],
+    );
+    const preview = await previewExcel(event.id, admin, [
+      [
+        'Смирнов',
+        'Сергей',
+        '2000-02-02',
+        'Студент КАИТ №20',
+        'ИС-25',
+        '+79995550111',
+        'new-smirnov@example.test',
+      ],
+    ]);
+    expect(preview.status).toBe(201);
+    const body = (await preview.json()) as {
+      importJobId: string;
+      mapping: Record<string, unknown>;
+      rows: {
+        candidates: { personId: string }[];
+        category: string;
+        rowNumber: number;
+      }[];
+    };
+    expect(body.rows[0]).toMatchObject({
+      category: 'POSSIBLE_MATCH',
+      candidates: [{ personId }],
+    });
+    const withoutDecision = await api(
+      `/admin/events/${event.id}/import/${body.importJobId}/commit`,
+      {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: { mapping: body.mapping, decisions: [], capacityOverride: false },
+      },
+    );
+    expect(withoutDecision.status).toBe(409);
+
+    const committed = await api(
+      `/admin/events/${event.id}/import/${body.importJobId}/commit`,
+      {
+        method: 'POST',
+        cookie: admin.cookie,
+        csrf: admin.csrf,
+        body: {
+          mapping: body.mapping,
+          decisions: [
+            {
+              rowNumber: body.rows[0]!.rowNumber,
+              action: 'USE_PERSON',
+              personId,
+            },
+          ],
+          capacityOverride: false,
+        },
+      },
+    );
+    expect(committed.status).toBe(201);
+    const registration = await pool.query<{ person_id: string }>(
+      `SELECT person_id FROM registrations
+       WHERE event_id = $1 AND source = 'EXCEL_IMPORT'`,
+      [event.id],
+    );
+    expect(registration.rows[0]?.person_id).toBe(personId);
   });
 
   it('invalidates a public ticket after Registration annulment', async () => {

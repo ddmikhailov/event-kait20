@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createEventRequestSchema,
   attendanceSyncRequestSchema,
+  excelImportCommitRequestSchema,
   healthResponseSchema,
   passwordResetRequestSchema,
   scannerOnsiteRegistrationRequestSchema,
@@ -100,5 +101,32 @@ describe('healthResponseSchema', () => {
         events: [item, item],
       }),
     ).toThrow();
+  });
+
+  it('requires a Person selection for Excel USE_PERSON decisions', () => {
+    const request = {
+      mapping: {
+        lastName: 'Фамилия',
+        firstName: 'Имя',
+        birthDate: 'Дата рождения',
+        personType: 'Тип участника',
+        phone: 'Телефон',
+        customFields: {},
+      },
+      decisions: [{ rowNumber: 2, action: 'USE_PERSON' }],
+    };
+    expect(() => excelImportCommitRequestSchema.parse(request)).toThrow();
+    expect(
+      excelImportCommitRequestSchema.parse({
+        ...request,
+        decisions: [
+          {
+            rowNumber: 2,
+            action: 'USE_PERSON',
+            personId: '44444444-4444-4444-8444-444444444444',
+          },
+        ],
+      }).capacityOverride,
+    ).toBe(false);
   });
 });

@@ -419,15 +419,32 @@ model ImportJob {
   errorRows     Int             @default(0) @map("error_rows")
   duplicateRows Int             @default(0) @map("duplicate_rows")
   resultSummary Json?           @map("result_summary") @db.JsonB
+  expiresAt     DateTime        @map("expires_at") @db.Timestamptz(3)
+  committedAt   DateTime?       @map("committed_at") @db.Timestamptz(3)
   createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   event     Event     @relation(fields: [eventId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   createdBy StaffUser @relation("ImportJobCreatedBy", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  file      ImportJobFile?
 
   @@index([eventId], map: "import_jobs_event_id_idx")
   @@index([createdById], map: "import_jobs_created_by_idx")
+  @@index([status, expiresAt], map: "import_jobs_status_expires_at_idx")
   @@map("import_jobs")
+}
+
+model ImportJobFile {
+  importJobId String   @id @map("import_job_id") @db.Uuid
+  fileData    Bytes    @map("file_data")
+  sha256      String   @db.Char(64)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz(3)
+
+  importJob ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([expiresAt], map: "import_job_files_expires_at_idx")
+  @@map("import_job_files")
 }
 
 model AuditLog {
