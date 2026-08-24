@@ -161,6 +161,11 @@ metadata.
 
 Manual merge endpoint is intentionally deferred until merge UX/rules are designed.
 
+The administrator Web workspace exposes this as a separate global People
+directory. Editing the current Person card never rewrites Registration
+snapshots; participation history is read-only in this view. Records marked for
+deduplication review are visibly flagged, while manual merge remains deferred.
+
 ## 8. Admin — Registrations
 
 - `GET /admin/events/:eventId/registrations`
@@ -184,6 +189,14 @@ current Event form answers; email is optional. An onsite record uses source
 `ONSITE` and does not claim public-form consent. It is allowed for
 `REGISTRATION_OPEN`, `REGISTRATION_CLOSED` and `ACTIVE` Events. A confident
 repeat returns the existing active Registration instead of consuming capacity.
+
+The Event participant workspace implements bounded search/status filtering,
+Registration detail and snapshot editing, irreversible annulment with an
+explicit confirmation, durable ticket-resend intent and online onsite
+registration with current active form fields. `capacityOverride` is off by
+default and is presented as an exceptional audited SUPER_ADMIN action. Signed
+ticket URLs are not rendered in participant tables or persisted by the Web
+client.
 
 ## 9. Excel
 

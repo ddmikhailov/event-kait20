@@ -80,6 +80,13 @@ login, Event list/create/edit and form-field management at desktop and mobile
 widths; the real session/CSRF flow remains part of staging validation against
 the deployed API.
 
+Participant administration adds Web tests for Registration/Person edit payload
+separation, Russian phone normalization, typed onsite answers, explicit
+capacity override, participant status/source rendering, read-only annulled
+state and credentialed search filters. Browser smoke coverage includes the
+participant table, Registration detail, onsite form and narrow-screen table
+scroll containment using synthetic PII only.
+
 ## 6. Offline E2E
 
 - prepare bundle;
