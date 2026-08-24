@@ -336,6 +336,7 @@ model StaffInvitation {
 
   invitedBy StaffUser @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
   event     Event?    @relation(fields: [eventId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  emailDeliveries EmailDelivery[]
 
   @@index([emailNormalized], map: "staff_invitations_email_normalized_idx")
   @@index([eventId], map: "staff_invitations_event_id_idx")
@@ -367,7 +368,8 @@ model PasswordResetToken {
   usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  user StaffUser @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  user            StaffUser       @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  emailDeliveries EmailDelivery[]
 
   @@index([userId], map: "password_reset_tokens_user_id_idx")
   @@map("password_reset_tokens")
@@ -381,6 +383,8 @@ model EmailDelivery {
   eventId           String?             @map("event_id") @db.Uuid
   registrationId    String?             @map("registration_id") @db.Uuid
   staffUserId       String?             @map("staff_user_id") @db.Uuid
+  staffInvitationId String?             @map("staff_invitation_id") @db.Uuid
+  passwordResetTokenId String?          @map("password_reset_token_id") @db.Uuid
   status            EmailDeliveryStatus
   attempts          Int                 @default(0)
   lastErrorCode     String?             @map("last_error_code") @db.VarChar(255)
@@ -393,11 +397,15 @@ model EmailDelivery {
   event        Event?        @relation(fields: [eventId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   registration Registration? @relation(fields: [registrationId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   staffUser    StaffUser?    @relation(fields: [staffUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  staffInvitation StaffInvitation? @relation(fields: [staffInvitationId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  passwordResetToken PasswordResetToken? @relation(fields: [passwordResetTokenId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([status], map: "email_deliveries_status_idx")
   @@index([eventId], map: "email_deliveries_event_id_idx")
   @@index([registrationId], map: "email_deliveries_registration_id_idx")
   @@index([staffUserId], map: "email_deliveries_staff_user_id_idx")
+  @@index([staffInvitationId], map: "email_deliveries_staff_invitation_id_idx")
+  @@index([passwordResetTokenId], map: "email_deliveries_password_reset_token_id_idx")
   @@map("email_deliveries")
 }
 

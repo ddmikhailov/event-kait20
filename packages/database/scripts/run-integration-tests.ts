@@ -18,6 +18,15 @@ import { pathToFileURL } from 'node:url';
 import { Client } from 'pg';
 
 const TEST_DATABASE_NAME = 'event_registration_test';
+const integrationEnvironment = {
+  AUTH_LINK_BASE_URL: 'http://127.0.0.1:5173/auth',
+  AUTH_LINK_SECRET: randomBytes(32).toString('base64url'),
+  AUTH_RATE_LIMIT_MAX: '1000',
+  CORS_ORIGINS: 'http://127.0.0.1:5173,http://127.0.0.1:4173',
+  NODE_ENV: 'test',
+  QR_SIGNING_SECRET: randomBytes(32).toString('base64url'),
+  SESSION_SECRET: randomBytes(32).toString('base64url'),
+};
 
 type PostgresBinaryModule = {
   initdb: string;
@@ -321,6 +330,7 @@ const runPnpm = async (
       cwd: process.cwd(),
       env: {
         ...process.env,
+        ...integrationEnvironment,
         DATABASE_URL: databaseUrl,
         TEST_DATABASE_URL: databaseUrl,
       },
@@ -364,6 +374,12 @@ const run = async (): Promise<void> => {
         'run',
         'tests/integration/database.integration.test.ts',
       ],
+      databaseUrl,
+    );
+    await resetExternalTestDatabase(databaseUrl);
+    await runPnpm(['exec', 'prisma', 'migrate', 'deploy'], databaseUrl);
+    await runPnpm(
+      ['--dir', '../../apps/api', 'run', 'test:integration'],
       databaseUrl,
     );
   } finally {

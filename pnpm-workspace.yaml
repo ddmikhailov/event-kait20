@@ -3,6 +3,7 @@ packages:
   - packages/*
 
 allowBuilds:
+  argon2: true
   '@embedded-postgres/darwin-arm64': true
   '@embedded-postgres/darwin-x64': true
   '@embedded-postgres/linux-arm64': true

@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "bootstrap:super-admin": "tsx scripts/bootstrap-super-admin.ts",
     "dev": "tsx watch src/main.ts",
-    "lint": "eslint src",
+    "lint": "eslint src integration scripts",
     "start": "node dist/main.js",
-    "test": "vitest run",
+    "test": "vitest run src",
+    "test:integration": "vitest run integration/backend-foundation.integration.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -17,10 +19,15 @@
     "@nestjs/common": "11.2.1",
     "@nestjs/core": "11.2.1",
     "@nestjs/platform-express": "11.2.1",
+    "argon2": "0.45.1",
+    "pg": "8.23.0",
     "reflect-metadata": "0.2.2",
-    "rxjs": "7.8.2"
+    "rxjs": "7.8.2",
+    "zod": "4.4.3"
   },
   "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/pg": "8.23.1",
     "tsx": "4.23.12"
   }
 }

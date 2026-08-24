@@ -1,14 +1,44 @@
 import { z } from 'zod';
 
 const nodeEnvironmentSchema = z.enum(['development', 'test', 'production']);
+const trustedOriginSchema = z.url().refine((value) => {
+  const url = new URL(value);
+
+  return url.pathname === '/' && !url.search && !url.hash;
+}, 'Trusted origins must contain only scheme, host and optional port');
+
+const trustedOriginsSchema = z
+  .string()
+  .transform((value) => value.split(',').map((origin) => origin.trim()))
+  .pipe(z.array(trustedOriginSchema).min(1))
+  .refine((origins) => new Set(origins).size === origins.length, {
+    message: 'Trusted origins must be unique',
+  });
 
 export const apiEnvironmentSchema = z.object({
   NODE_ENV: nodeEnvironmentSchema.default('development'),
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   DATABASE_URL: z.url().startsWith('postgresql://'),
   SESSION_SECRET: z.string().min(32),
+  AUTH_LINK_SECRET: z.string().min(32),
+  AUTH_LINK_BASE_URL: z.url(),
   QR_SIGNING_SECRET: z.string().min(32),
-  CORS_ORIGINS: z.string().min(1),
+  CORS_ORIGINS: trustedOriginsSchema,
+  SESSION_TTL_SECONDS: z.coerce.number().int().min(300).default(28_800),
+  PASSWORD_RESET_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(300)
+    .max(86_400)
+    .default(1_800),
+  INVITATION_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(300)
+    .max(2_592_000)
+    .default(604_800),
+  AUTH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).default(60),
+  AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(10),
 });
 
 export const workerEnvironmentSchema = z.object({
