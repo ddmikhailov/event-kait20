@@ -102,6 +102,53 @@ describe('admin API client', () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('status=ACTIVE');
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('page=2');
   });
+
+  it('sends invitation intent with CSRF without ever receiving a raw token', async () => {
+    const invitation = {
+      id: '30000000-0000-4000-8000-000000000001',
+      expiresAt: '2026-09-01T12:00:00.000Z',
+      status: 'queued' as const,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(session))
+      .mockResolvedValueOnce(jsonResponse(invitation));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AdminApiClient();
+    await client.restoreSession();
+
+    const result = await client.inviteStaff({
+      email: 'scanner@example.test',
+      eventId: '40000000-0000-4000-8000-000000000001',
+    });
+
+    const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(new Headers(init.headers).get('x-csrf-token')).toBe(
+      session.csrfToken,
+    );
+    expect(JSON.parse(String(init.body))).toEqual({
+      email: 'scanner@example.test',
+      eventId: '40000000-0000-4000-8000-000000000001',
+    });
+    expect(result).toEqual(invitation);
+    expect(result).not.toHaveProperty('token');
+  });
+
+  it('uses the event-scoped access route for assignments', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ status: 'accepted' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new AdminApiClient().assignEventAccess(
+      '50000000-0000-4000-8000-000000000001',
+      { userId: '60000000-0000-4000-8000-000000000001' },
+    );
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      '/admin/events/50000000-0000-4000-8000-000000000001/access',
+    );
+  });
 });
 
 const jsonResponse = (body: unknown, status = 200): Response =>

@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
 import { EventParticipants, PeopleDirectory } from './AdminParticipants.js';
+import { EventAccessManager, StaffDirectory } from './AdminStaff.js';
 import {
   eventDefaults,
   eventValues,
@@ -92,7 +93,7 @@ const AdminWorkspace = ({
 }) => {
   const [events, setEvents] = useState<EventResponse[]>([]);
   const [view, setView] = useState<
-    'events' | 'editor' | 'participants' | 'people'
+    'events' | 'editor' | 'participants' | 'people' | 'staff' | 'access'
   >('events');
   const [selected, setSelected] = useState<EventResponse>();
   const [busy, setBusy] = useState(false);
@@ -147,6 +148,26 @@ const AdminWorkspace = ({
   if (view === 'people') {
     return <PeopleDirectory onBack={() => setView('events')} />;
   }
+  if (view === 'staff') {
+    return (
+      <StaffDirectory
+        events={events}
+        currentUserId={session.user.id}
+        onBack={() => setView('events')}
+      />
+    );
+  }
+  if (view === 'access' && selected) {
+    return (
+      <EventAccessManager
+        event={selected}
+        onBack={() => {
+          setSelected(undefined);
+          setView('events');
+        }}
+      />
+    );
+  }
 
   return (
     <main className="admin-shell">
@@ -159,6 +180,12 @@ const AdminWorkspace = ({
             <p>Создавайте события и настраивайте форму регистрации.</p>
           </div>
           <div className="row-actions">
+            <button
+              className="secondary-button"
+              onClick={() => setView('staff')}
+            >
+              Сотрудники
+            </button>
             <button
               className="secondary-button"
               onClick={() => setView('people')}
@@ -179,6 +206,10 @@ const AdminWorkspace = ({
               setSelected(event);
               setView('participants');
             }}
+            onAccess={async (event) => {
+              setSelected(event);
+              setView('access');
+            }}
           />
         )}
       </section>
@@ -190,10 +221,12 @@ export const EventGrid = ({
   events,
   onOpen,
   onParticipants,
+  onAccess,
 }: {
   events: EventResponse[];
   onOpen: (event: EventResponse) => Promise<void>;
   onParticipants: (event: EventResponse) => Promise<void>;
+  onAccess: (event: EventResponse) => Promise<void>;
 }) => (
   <section className="admin-event-grid" aria-label="Список мероприятий">
     {events.map((event) => (
@@ -211,6 +244,12 @@ export const EventGrid = ({
             onClick={() => void onParticipants(event)}
           >
             Участники
+          </button>
+          <button
+            className="secondary-button"
+            onClick={() => void onAccess(event)}
+          >
+            Доступ
           </button>
           <button
             className="secondary-button"

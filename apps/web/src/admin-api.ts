@@ -5,6 +5,9 @@ import {
   personListResponseSchema,
   registrationDetailResponseSchema,
   registrationListResponseSchema,
+  staffInvitationResponseSchema,
+  staffListResponseSchema,
+  eventAccessListResponseSchema,
   eventListResponseSchema,
   eventResponseSchema,
   formFieldListResponseSchema,
@@ -16,6 +19,8 @@ import {
   type CreateFormFieldRequest,
   type EventListResponse,
   type EventResponse,
+  type EventAccessListResponse,
+  type EventAccessRequest,
   type FormFieldListResponse,
   type FormFieldResponse,
   type LoginRequest,
@@ -25,6 +30,9 @@ import {
   type RegistrationDetailResponse,
   type RegistrationListResponse,
   type SessionResponse,
+  type StaffInvitationRequest,
+  type StaffInvitationResponse,
+  type StaffListResponse,
   type UpdateEventRequest,
   type UpdateFormFieldRequest,
   type UpdatePersonRequest,
@@ -285,6 +293,62 @@ export class AdminApiClient {
       `/admin/people/${encodeURIComponent(personId)}`,
       { method: 'PATCH', body: JSON.stringify(values) },
       personDetailResponseSchema,
+    );
+  }
+
+  public staff(): Promise<StaffListResponse> {
+    return this.request(
+      '/admin/staff',
+      { method: 'GET' },
+      staffListResponseSchema,
+    );
+  }
+
+  public inviteStaff(
+    values: StaffInvitationRequest,
+  ): Promise<StaffInvitationResponse> {
+    return this.request(
+      '/admin/staff/invitations',
+      { method: 'POST', body: JSON.stringify(values) },
+      staffInvitationResponseSchema,
+    );
+  }
+
+  public deactivateStaff(userId: string): Promise<AcceptedResponse> {
+    return this.request(
+      `/admin/staff/${encodeURIComponent(userId)}/deactivate`,
+      { method: 'POST' },
+      acceptedResponseSchema,
+    );
+  }
+
+  public eventAccess(eventId: string): Promise<EventAccessListResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/access`,
+      { method: 'GET' },
+      eventAccessListResponseSchema,
+    );
+  }
+
+  public assignEventAccess(
+    eventId: string,
+    values: EventAccessRequest,
+  ): Promise<AcceptedResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/access`,
+      { method: 'POST', body: JSON.stringify(values) },
+      acceptedResponseSchema,
+    );
+  }
+
+  public removeEventAccess(
+    eventId: string,
+    userId: string,
+  ): Promise<AcceptedResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/access/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' },
+      acceptedResponseSchema,
     );
   }
 

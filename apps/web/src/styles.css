@@ -468,7 +468,7 @@ textarea {
   display: grid;
   gap: 0.55rem;
   align-self: end;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
 }
 .event-card-actions .secondary-button {
   margin-top: 0.75rem;
@@ -893,6 +893,101 @@ textarea {
   font-size: 0.75rem;
 }
 
+/* Staff and scanner access */
+.staff-layout {
+  display: grid;
+  width: min(100%, 78rem);
+  align-items: start;
+  gap: 1.25rem;
+  margin: 0 auto;
+  padding: clamp(1.25rem, 4vw, 3rem);
+  grid-template-columns: minmax(19rem, 0.65fr) minmax(0, 1fr);
+}
+.staff-list-panel,
+.access-list-panel {
+  gap: 0.75rem;
+}
+.staff-layout .admin-section-title h1 {
+  font-size: clamp(2rem, 3.5vw, 2.5rem);
+  overflow-wrap: anywhere;
+}
+.staff-list {
+  display: grid;
+  gap: 0.65rem;
+}
+.staff-list article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid #e2dfe8;
+  border-radius: 0.8rem;
+  padding: 0.9rem;
+}
+.staff-list article.inactive {
+  opacity: 0.58;
+}
+.staff-list article > div:first-child {
+  display: grid;
+  gap: 0.3rem;
+}
+.staff-list article > div:first-child span,
+.staff-list em {
+  color: #777589;
+  font-size: 0.73rem;
+  font-style: normal;
+}
+.staff-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.staff-status {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 0.3rem 0.55rem;
+  background: #e8e8ec;
+  color: #5e5e68;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+.staff-status.active {
+  background: #dff3e7;
+  color: #226340;
+}
+.access-content {
+  max-width: 68rem;
+}
+.access-assignment {
+  display: grid;
+  align-items: end;
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+  border: 1px solid #dedbe7;
+  border-radius: 1rem;
+  padding: 1rem;
+  background: #fff;
+  grid-template-columns: minmax(15rem, 1fr) auto;
+}
+.access-assignment label {
+  display: grid;
+  gap: 0.4rem;
+  color: #35354c;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.access-assignment .kait-button {
+  min-height: 3.25rem;
+}
+.access-assignment > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #777589;
+  font-size: 0.78rem;
+}
+
 @media (max-width: 640px) {
   .event-hero {
     min-height: 31rem;
@@ -926,7 +1021,7 @@ textarea {
   .event-card-actions {
     grid-template-columns: 1fr;
   }
-  .event-card-actions .secondary-button + .secondary-button {
+  .event-card-actions .secondary-button:not(:first-child) {
     margin-top: 0;
   }
   .participant-filters,
@@ -948,10 +1043,22 @@ textarea {
   .participant-actions .danger-button {
     width: 100%;
   }
+  .access-assignment {
+    grid-template-columns: 1fr;
+  }
+  .access-assignment .kait-button {
+    width: 100%;
+  }
+  .staff-list article,
+  .staff-row-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 @media (max-width: 900px) {
   .admin-editor-layout,
-  .participant-detail-layout {
+  .participant-detail-layout,
+  .staff-layout {
     grid-template-columns: 1fr;
   }
 }
