@@ -30,6 +30,13 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes age libaio1t64 libnuma1 nginx shellcheck
+          # Ubuntu 24.04 renamed the amd64 libaio SONAME during the t64
+          # transition. MySQL's pinned Ubuntu 22.04 binary still requests the
+          # ABI-compatible legacy name.
+          if [[ ! -e /usr/lib/x86_64-linux-gnu/libaio.so.1 ]]; then
+            sudo ln --symbolic /usr/lib/x86_64-linux-gnu/libaio.so.1t64 \
+              /usr/lib/x86_64-linux-gnu/libaio.so.1
+          fi
           archive="$RUNNER_TEMP/mysql-community-server-core.deb"
           curl --fail --location --retry 3 \
             https://cdn.mysql.com/archives/mysql-8.1/mysql-community-server-core_8.1.0-1ubuntu22.04_amd64.deb \
