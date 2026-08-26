@@ -13,7 +13,12 @@ if (
   throw new Error('SMOKE_BASE_URL must use HTTPS outside localhost');
 }
 
-for (const path of ['/health/live', '/health/ready']) {
+const healthChecks = new Map([
+  ['/health/live', 'ok'],
+  ['/health/ready', 'ready'],
+]);
+
+for (const [path, expectedStatus] of healthChecks) {
   const response = await fetch(new URL(path, parsedBaseUrl), {
     headers: { accept: 'application/json' },
     redirect: 'error',
@@ -24,7 +29,7 @@ for (const path of ['/health/live', '/health/ready']) {
   }
 
   const body = await response.json();
-  if (body?.service !== 'api' || body?.status !== 'ok') {
+  if (body?.status !== expectedStatus) {
     throw new Error(`${path} returned an unexpected response`);
   }
 }

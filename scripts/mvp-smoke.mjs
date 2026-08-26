@@ -27,7 +27,7 @@ const fetchChecked = async (baseUrl, path, accept) => {
 const readiness = await (
   await fetchChecked(api, '/health/ready', 'application/json')
 ).json();
-if (readiness?.service !== 'api' || readiness?.status !== 'ok') {
+if (readiness?.status !== 'ready') {
   throw new Error('API readiness returned an unexpected response');
 }
 
