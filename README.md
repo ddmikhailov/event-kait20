@@ -57,3 +57,10 @@ MVP engineering baseline реализован последовательными
 До production дополнительно закрываются provider-specific deployment details,
 юридическая ссылка согласия, домен, email provider, staging acceptance и
 финальный security review.
+
+## Локальная демонстрация
+
+После установки и запуска Docker Desktop выполните `pnpm demo:up`. Команда
+соберёт и поднимет MySQL 8.1.0, Python API, Web/Admin, Scanner и email-worker,
+выполнит миграции, создаст демонстрационное мероприятие и напечатает временные
+логины. Полная инструкция: `docs/runbooks/local-demo.md`.

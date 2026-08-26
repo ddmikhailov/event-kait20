@@ -1,0 +1,132 @@
+name: event-registration-demo
+
+services:
+  mysql:
+    image: mysql:8.1.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: event_registration
+    command:
+      - --default-time-zone=+00:00
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          'mysqladmin ping -h 127.0.0.1 -p$$MYSQL_ROOT_PASSWORD --silent',
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    volumes:
+      - demo_mysql:/var/lib/mysql
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command:
+      [
+        'sh',
+        '-c',
+        'python -m event_api.migrate && uvicorn event_api.main:app --host 0.0.0.0 --port 3000',
+      ]
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/event_registration
+      CORS_ORIGINS: http://localhost:5173,http://localhost:5174
+      SESSION_SECRET: ${SESSION_SECRET}
+      AUTH_LINK_SECRET: ${AUTH_LINK_SECRET}
+      AUTH_LINK_BASE_URL: http://localhost:5173/auth/
+      QR_SIGNING_SECRET: ${QR_SIGNING_SECRET}
+      PUBLIC_WEB_BASE_URL: http://localhost:5173
+      CONSENT_URL: http://localhost:5173/consent
+      CONSENT_VERSION: demo-v1
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          CMD,
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health/ready')",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    ports:
+      - '3000:3000'
+
+  seed:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ['python', '-m', 'event_api.demo_seed']
+    environment:
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/event_registration
+      CORS_ORIGINS: http://localhost:5173,http://localhost:5174
+      SESSION_SECRET: ${SESSION_SECRET}
+      AUTH_LINK_SECRET: ${AUTH_LINK_SECRET}
+      AUTH_LINK_BASE_URL: http://localhost:5173/auth/
+      QR_SIGNING_SECRET: ${QR_SIGNING_SECRET}
+      PUBLIC_WEB_BASE_URL: http://localhost:5173
+      CONSENT_URL: http://localhost:5173/consent
+      CONSENT_VERSION: demo-v1
+      DEMO_ADMIN_EMAIL: ${DEMO_ADMIN_EMAIL}
+      DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD}
+      DEMO_SCANNER_EMAIL: ${DEMO_SCANNER_EMAIL}
+      DEMO_SCANNER_PASSWORD: ${DEMO_SCANNER_PASSWORD}
+    depends_on:
+      api:
+        condition: service_healthy
+
+  email-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ['python', '-m', 'event_api.email_worker']
+    environment:
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/event_registration
+      CORS_ORIGINS: http://localhost:5173,http://localhost:5174
+      SESSION_SECRET: ${SESSION_SECRET}
+      AUTH_LINK_SECRET: ${AUTH_LINK_SECRET}
+      AUTH_LINK_BASE_URL: http://localhost:5173/auth/
+      QR_SIGNING_SECRET: ${QR_SIGNING_SECRET}
+      PUBLIC_WEB_BASE_URL: http://localhost:5173
+      CONSENT_URL: http://localhost:5173/consent
+      CONSENT_VERSION: demo-v1
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        APP: web
+        VITE_API_BASE_URL: http://localhost:3000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - '5173:80'
+
+  scanner:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        APP: scanner
+        VITE_API_BASE_URL: http://localhost:3000
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    ports:
+      - '5174:80'
+
+volumes:
+  demo_mysql:

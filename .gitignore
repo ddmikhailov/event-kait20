@@ -21,6 +21,7 @@ yarn-error.log*
 .env.*
 !.env.example
 .envrc
+.demo.env
 
 # Terraform local state, plans, overrides and variable values
 *.tfstate

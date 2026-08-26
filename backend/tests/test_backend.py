@@ -9,6 +9,7 @@ from openpyxl import Workbook
 from sqlalchemy import text
 
 from event_api.database import Database
+from event_api.demo_seed import main as seed_demo
 from event_api.errors import ApiError
 from event_api.routers.excel import _parse
 from event_api.security import auth_link_token, hash_password, token_hash
@@ -144,6 +145,28 @@ def test_mysql_specific_invariants(client: TestClient) -> None:
         "schema_migrations",
     } <= tables
     assert "token_hash" in columns and "token" not in columns
+
+
+def test_demo_seed_is_idempotent(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DEMO_ADMIN_EMAIL", "demo-admin@example.com")
+    monkeypatch.setenv("DEMO_ADMIN_PASSWORD", "demo admin safe password")
+    monkeypatch.setenv("DEMO_SCANNER_EMAIL", "demo-scanner@example.com")
+    monkeypatch.setenv("DEMO_SCANNER_PASSWORD", "demo scanner safe password")
+    seed_demo()
+    seed_demo()
+    database: Database = client.app.state.database
+    with database.connect() as connection:
+        event_count = connection.execute(
+            text("SELECT count(*) FROM events WHERE slug='demo-event'")
+        ).scalar_one()
+        access_count = connection.execute(
+            text("""SELECT count(*) FROM event_access a
+            JOIN events e ON e.id=a.event_id JOIN staff_users u ON u.id=a.user_id
+            WHERE e.slug='demo-event' AND u.email_normalized='demo-scanner@example.com'""")
+        ).scalar_one()
+    assert event_count == 1 and access_count == 1
 
 
 def test_public_registration_and_idempotent_attendance(client: TestClient) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 from sqlalchemy import text
@@ -10,7 +11,12 @@ from .database import Database
 
 
 def migration_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "migrations"
+    configured = os.getenv("MIGRATIONS_DIR")
+    return (
+        Path(configured)
+        if configured
+        else Path(__file__).resolve().parents[2] / "migrations"
+    )
 
 
 def apply_migrations() -> None:
