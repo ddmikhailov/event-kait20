@@ -53,6 +53,9 @@ def database_url() -> Iterator[str]:
     temporary = Path(tempfile.mkdtemp(prefix="event-registration-python-mysql-"))
     data = temporary / "data"
     layout_options: list[str] = []
+    runtime_options = (
+        [f"--socket={temporary / 'mysql.sock'}"] if os.name != "nt" else []
+    )
     messages = root / "share" / "mysql-8.1"
     plugins = root / "lib" / "mysql" / "plugin"
     if messages.exists():
@@ -80,6 +83,7 @@ def database_url() -> Iterator[str]:
             f"--basedir={root}",
             f"--datadir={data}",
             *layout_options,
+            *runtime_options,
             f"--port={port}",
             "--bind-address=127.0.0.1",
             "--mysqlx=0",
