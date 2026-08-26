@@ -1,6 +1,6 @@
 # 16. Roadmap
 
-Статус: **Approved MVP boundary + v2 commitment**
+Статус: **Version 1.0 complete; version 2.0 scope recorded**
 
 ## MVP v1
 

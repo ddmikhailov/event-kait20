@@ -1,6 +1,6 @@
 # 14. Testing Strategy
 
-Статус: **Approved baseline required from first feature**
+Статус: **Release 1.0 validation policy**
 
 ## 1. Critical invariants
 
@@ -40,6 +40,7 @@ Tests must prove:
 - attendance idempotency;
 - EventAccess;
 - email delivery idempotency/outbox-equivalent boundary.
+- shared MySQL-backed rate limiting and SMTP worker retry transitions.
 
 ## 4. API contract tests
 
@@ -155,7 +156,8 @@ A feature is not complete until:
 
 ## 10. Release validation
 
-CI executes the full repository validation suite and builds the API container.
+CI executes the full repository validation suite, dependency vulnerability
+audits and builds the API container.
 After every staging rollout, unauthenticated smoke checks must pass against
 `/health/live` and `/health/ready`. A production promotion additionally requires
 a MySQL 8.1.0 migration rehearsal, a current recovery point and the applicable

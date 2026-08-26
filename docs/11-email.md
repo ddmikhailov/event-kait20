@@ -1,83 +1,44 @@
-# 11. Email Specification
+# 11. Email
 
-Статус: **Approved MVP scenarios / Draft provider setup**
+Статус: **Release 1.0 SMTP implementation**
 
-## 1. Архитектура
+## Сценарии
 
-Регистрация не должна ждать SMTP.
+- REGISTRATION_TICKET — ссылка на билет/QR, Event, время и место;
+- STAFF_INVITATION — одноразовая ссылка активации SCANNER;
+- PASSWORD_RESET — одноразовая ссылка установки нового пароля.
 
-```text
-Registration committed
-→ email job queued
-→ response success to participant
-→ worker sends email
-```
+Регистрация и административная операция сначала фиксируют business transaction
+и durable email_deliveries intent. SMTP не находится в request path, поэтому
+ошибка почты не откатывает регистрацию.
 
-Ошибки email не откатывают регистрацию.
+## Worker
 
-Invitation/reset producers persist an idempotent `email_deliveries` intent linked to the one-time auth record. The worker reconstructs the signed link from record id, purpose, expiry and the server-side HMAC secret; raw invitation/reset tokens are never durable delivery context.
+Отдельный Python worker:
 
-The MVP worker core treats `email_deliveries` as the durable source of truth and
-atomically leases work with MySQL InnoDB row locking (`FOR UPDATE SKIP LOCKED`). A
-stale `sending` lease can be reclaimed, and every provider call uses the delivery
-ID as its idempotency key. Provider/SMTP transport remains an adapter: a concrete
-vendor and production credential setup are not selected in this milestone.
+1. атомарно выбирает одну запись через FOR UPDATE SKIP LOCKED;
+2. переводит её в SENDING и увеличивает attempts;
+3. реконструирует ссылку из server HMAC, не читая raw token из БД;
+4. отправляет text/plain и HTML через SMTP STARTTLS с обязательной проверкой
+   сертификата системным trust store;
+5. переводит запись в SENT либо возвращает в QUEUED;
+6. после EMAIL_MAX_ATTEMPTS переводит в FAILED;
+7. повторно подхватывает SENDING lease старше десяти минут после сбоя процесса.
 
-## 2. Типы писем MVP
+В БД не сохраняются тело письма, participant PII snapshot, SMTP credential или
+raw token. provider_message_id и ограниченный error code используются для
+диагностики. Message-ID основан на delivery ID.
 
-- `REGISTRATION_TICKET`
-- `STAFF_INVITATION`
-- `PASSWORD_RESET`
+## Массовые билеты
 
-## 3. Registration email
+Импорт сам письма не отправляет. SUPER_ADMIN отдельно подтверждает ticket batch
+с client-generated request UUID. Idempotency key включает request UUID и
+Registration ID; повтор одного запроса не создаёт дубликаты.
 
-Содержит:
-- название мероприятия;
-- дату;
-- время;
-- место;
-- ФИО;
-- QR прямо в письме;
-- кнопку «Открыть билет»;
-- короткую инструкцию.
+## Production
 
-Финальный текст и визуальный шаблон будут утверждены отдельно.
+Обязательны SMTP_HOST, SMTP_FROM_EMAIL и при необходимости username/app
+password. Личный основной пароль почтового ящика запрещён. SMTP secret хранится
+в Lockbox или защищённом deployment env. Demo без SMTP оставляет intents QUEUED.
 
-## 4. Imported participants
-
-После XLSX import письма автоматически не рассылаются. SUPER_ADMIN отдельно нажимает «Отправить QR участникам».
-
-Массовая постановка ticket-писем требует явного подтверждения и
-client-generated UUID операции. Идемпотентный ключ включает UUID операции и
-Registration id: безопасный retry не создаёт вторую delivery, а осознанная
-повторная отправка использует новый UUID. В очередь попадают только ACTIVE
-Registration с email; строки без email и неактивные строки возвращаются
-агрегированными счётчиками без PII.
-
-У конкретной регистрации есть «Повторно отправить письмо».
-
-## 5. Failure policy
-
-Email delivery имеет состояния:
-- queued;
-- sending;
-- sent;
-- failed.
-
-Worker выполняет ограниченные retries (default: 5, environment-configurable with
-an upper bound). Before the last attempt a failure returns the delivery to
-`queued`; after the last attempt it moves to `failed`. Persistent diagnostics
-contain only a bounded error code, not message bodies, tokens or participant PII.
-Ошибка после retries должна быть видна администратору.
-
-## 6. Credentials
-
-Не использовать основной пароль почтового аккаунта в коде. Используется отдельный SMTP app password/API credential, сохранённый как server secret.
-
-## 7. Версия 2.0
-
-Обязательный backlog: массовые email-рассылки участникам выбранного мероприятия (перенос, изменение места, объявление и т. п.).
-
-Архитектура MVP должна позволять добавить `EVENT_BROADCAST` без изменения Registration model.
-
-Автоматические reminders — future capability, не MVP.
+Произвольные массовые объявления относятся к версии 2.0.

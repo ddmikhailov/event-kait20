@@ -1,6 +1,6 @@
 # 12. Excel Import / Export
 
-Статус: **Implemented MVP baseline**
+Статус: **Release 1.0 implementation**
 
 ## 1. Import scope
 

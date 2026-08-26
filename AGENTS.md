@@ -46,7 +46,7 @@ Current stack:
 - MySQL 8.1.0
 - shared Zod contracts
 - Dexie/IndexedDB in scanner
-- Yandex Cloud + Terraform
+- Docker Compose deployment template; Yandex Cloud remains the target platform
 
 Do not introduce Next.js, GraphQL, microservices, Kubernetes, Supabase/Firebase or a second primary database without an explicit ADR/owner decision.
 

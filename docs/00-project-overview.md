@@ -1,6 +1,6 @@
 # 00. Project Overview
 
-Статус: **Approved for MVP v1**
+Статус: **Release 1.0 product overview**
 
 ## 1. Проблема
 

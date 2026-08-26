@@ -1,6 +1,6 @@
 # 06. MySQL Database Specification
 
-Статус: **Approved MySQL 8.1.0 SQL/SQLAlchemy baseline — v0.3**
+Статус: **Release 1.0 MySQL 8.1.0 schema**
 
 ## 1. Таблицы MVP
 
@@ -18,6 +18,7 @@
 12. `email_deliveries`
 13. `import_jobs`
 14. `audit_log`
+15. `security_rate_limits` — HMACed shared abuse-control buckets; no raw IP/email.
 
 ## 2. Common conventions
 

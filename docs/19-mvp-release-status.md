@@ -1,56 +1,54 @@
-# 19. MVP release status
+# 19. Release 1.0 status
 
-Дата среза: **26 августа 2026**
+Дата: **26 августа 2026**  
+Статус: **application release 1.0**
 
-Статус: **Release candidate engineering baseline; external production gates open**
+## Состав релиза
 
-## Implemented
+- Python 3.12 / FastAPI API и MySQL 8.1.0 persistence;
+- SUPER_ADMIN и SCANNER, Argon2id, server-side sessions, invitations и reset;
+- распределённый между API-процессами MySQL rate limit для auth;
+- Event, form fields, EventAccess, участники, tickets и onsite registration;
+- Scanner PWA, offline bundle, idempotent attendance sync;
+- безопасный XLSX preview/commit/export;
+- статистика, audit log и ticket batches;
+- SMTP worker с durable intents, one-time auth links, retries и stale-lease recovery;
+- production Docker Compose template, health/readiness и runbooks.
 
-- Python 3.12/FastAPI backend with MySQL 8.1.0 SQLAlchemy persistence, migrations and historical constraints;
-- staff auth, sessions, password reset, invitations, RBAC and EventAccess;
-- Event/form management and SUPER_ADMIN Web workspace;
-- public registration, conservative Person deduplication, capacity and tickets;
-- participant administration, onsite registration and audit metadata;
-- Scanner PWA, online/offline attendance and synchronization;
-- XLSX preview/commit/export with capacity and formula safety;
-- statistics and idempotent ticket-batch delivery intents;
-- email persistence, claim/retry processor and message/QR construction;
-- API container, CI, health/readiness, deployment smoke and recovery runbooks.
+## Релизные свойства
 
-## Verified in the repository
+- production OpenAPI/Swagger отключены;
+- admin API всегда проверяет серверную роль; знание URL доступа не даёт;
+- cookie: HttpOnly, Secure в production, SameSite=Lax, явный срок;
+- mutations: exact Origin + session-bound CSRF;
+- frontend CSP/frame/referrer/content-type headers включены;
+- API чувствительные ответы получают Cache-Control: no-store;
+- demo seed запрещён вне development;
+- raw session, reset, invitation и QR secrets не хранятся и не логируются;
+- dependency audits входят в CI.
 
-- full formatting, lint, typecheck, test and build suite;
-- empty-database migration on disposable MySQL 8.1.0;
-- HTTP integration tests for auth, CSRF/CORS, RBAC, registration, attendance,
-  Excel, reporting and email persistence;
-- Web/Scanner component and offline-storage tests;
-- clean Linux API container build in GitHub Actions;
-- local API + Web + production Scanner PWA manifest deployment smoke;
-- repeat registration with matching normalized FIO and strong identifier returns
-  `ALREADY_REGISTERED`; FIO changes remain conservatively separate by design.
+## Что предоставляет организация при переносе
 
-## External production gates
+Код не может безопасно придумать production-секреты и внешние реквизиты. До
+открытия реальных регистраций должны быть заполнены:
 
-These inputs cannot be correctly invented in application code:
+1. три домена, DNS и TLS reverse proxy;
+2. юридически утверждённые consent URL и version;
+3. SMTP host, отдельный app password и подтверждённый sender;
+4. уникальные DB/session/auth-link/QR secrets;
+5. backup schedule, проверка восстановления, monitoring и ответственные;
+6. решение владельца инфраструктуры о принятии риска MySQL 8.1.0.
 
-1. legal consent URL and approved consent text/version;
-2. production domains, DNS and TLS certificates;
-3. email SMTP/API provider, verified sender/domain and idempotent transport;
-4. Yandex Cloud folder, budget, zones, resource sizes, IAM and network topology;
-5. backup retention/RPO/RTO plus a successful restore rehearsal;
-6. monitoring destinations, alert thresholds and incident contacts;
-7. staging browser/device acceptance, camera/PWA upgrade checks and the planned
-   1000-participant concurrency rehearsal;
-8. final privacy/security owner approval for real personal data processing.
+Это deployment inputs, а не незавершённые функции приложения.
 
-Process-local auth rate limiting is acceptable only for a single API instance.
-Distributed enforcement remains a gate before horizontal scaling.
+## Ограничение MySQL
 
-## Promotion sequence
+Production и integration target остаётся **ровно MySQL 8.1.0** по требованию
+существующего сервера. Версия завершила жизненный цикл и не получает новые
+security updates. База не публикуется в Интернет; доступ разрешается только API
+и worker в закрытой сети. Риск должен быть письменно принят владельцем сервера.
 
-1. Approve the external inputs above and provision isolated staging.
-2. Connect the chosen email transport without changing the outbox contract.
-3. Deploy the exact release commit and run `docs/runbooks/mvp-acceptance.md`.
-4. Fix all findings, repeat CI/acceptance and freeze the release candidate SHA.
-5. Complete backup restore and security review, then manually promote the same
-   immutable artifacts to production.
+## Следующая версия
+
+Версия 2.0: массовые произвольные сообщения участникам выбранного Event.
+В 1.0 реализована только отправка билетов и служебных auth-писем.

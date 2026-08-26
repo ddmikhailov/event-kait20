@@ -1,6 +1,6 @@
 # 07. API Contracts v1
 
-Статус: **Approved API surface baseline — request/response schemas become code in `packages/contracts`**
+Статус: **Release 1.0 REST contracts; client schemas live in `packages/contracts`**
 
 ## 1. Conventions
 
@@ -97,6 +97,11 @@ never displays that raw payload as text. The web document declares a
 - `POST /auth/password/forgot`
 - `POST /auth/password/reset`
 - `POST /auth/invitations/:token/accept` — set initial password and activate invitation.
+
+Email links open Web routes `/auth/password-reset/:token` and
+`/auth/invitation/:token`. The admin login links to `/auth/password-forgot`.
+These pages never store raw auth tokens outside the current browser URL and
+submit them directly to the API over HTTPS.
 
 Mutating cookie-authenticated routes require CSRF/origin protection according to `09-security.md`.
 

@@ -1,6 +1,6 @@
 # 02. User Roles & Permissions
 
-Статус: **Approved for MVP**
+Статус: **Release 1.0 authorization model**
 
 ## 1. Participant
 

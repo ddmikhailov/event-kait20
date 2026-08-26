@@ -1,6 +1,6 @@
 # 03. User Flows
 
-Статус: **Approved core flows**
+Статус: **Release 1.0 user flows**
 
 ## Flow A — публичная регистрация
 

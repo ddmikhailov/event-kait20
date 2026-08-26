@@ -14,7 +14,7 @@
 - Миграции — проверенные SQL-файлы с неизменяемой контрольной суммой после применения.
 - Авторизация остаётся session-based: Argon2id, хеши непрозрачных токенов, HttpOnly cookie, точный CORS allowlist и CSRF.
 - React/Vite Web и Scanner сохраняются; их публичные REST-контракты не меняются.
-- Email worker входит в Python-пакет. Интеграция с реальным почтовым провайдером остаётся отдельным production gate.
+- Email worker входит в Python-пакет и использует настраиваемый SMTP STARTTLS transport.
 
 ## Последствия
 

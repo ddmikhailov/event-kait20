@@ -1,6 +1,6 @@
 # 08. Offline Scanner & Synchronization
 
-Статус: **Approved protocol baseline — v0.2**
+Статус: **Release 1.0 offline protocol**
 
 ## 1. Guaranteed offline scope
 

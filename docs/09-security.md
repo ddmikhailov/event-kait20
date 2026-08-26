@@ -1,6 +1,6 @@
 # 09. Security & Personal Data
 
-Статус: **Engineering security baseline v0.2 — final production review still mandatory**
+Статус: **Release 1.0 security baseline**
 
 > Документ описывает технические меры и не является юридическим заключением по 152-ФЗ.
 
@@ -48,7 +48,7 @@ Staff only:
 - password reset token one-time + short TTL;
 - invitation token one-time + TTL.
 
-Milestone A implementation freeze:
+Release implementation:
 
 - first `SUPER_ADMIN` is created only by the `bootstrap:super-admin` CLI using ephemeral environment input; the command refuses to overwrite any existing SUPER_ADMIN;
 - opaque session tokens contain 256 random bits and only their SHA-256 hashes are persisted;
@@ -61,7 +61,7 @@ Preferred deployment uses application subdomains under one parent domain (e.g. w
 
 Mutating cookie-authenticated requests require explicit Origin/Referer validation and CSRF protection appropriate to chosen same-site topology. Exact implementation is frozen during auth scaffold and covered by integration tests.
 
-Milestone A uses exact `Origin` matching against validated Web/Scanner configuration plus a session-bound HMAC CSRF token in `X-CSRF-Token`. The opaque session is stored in the `staff_session` cookie with `HttpOnly`, `SameSite=Lax`, explicit expiry and `Secure` in production. Wildcard credentialed CORS is not supported.
+Release 1.0 uses exact `Origin` matching against validated Web/Scanner configuration plus a session-bound HMAC CSRF token in `X-CSRF-Token`. The opaque session is stored in the `staff_session` cookie with `HttpOnly`, `SameSite=Lax`, explicit expiry and `Secure` in production. Wildcard credentialed CORS is not supported. Public login/reset/invitation operations remain usable with a stale cookie but still require trusted Origin and rate limits.
 
 ## 7. Authorization
 
@@ -104,7 +104,7 @@ download, resolve or sync for the Event.
 
 ## 10. Secrets
 
-Yandex Lockbox/environment secret injection for DB, session, QR, SMTP/API and storage credentials.
+Yandex Lockbox/environment secret injection for DB, session, QR, SMTP and external API credentials.
 
 Rules:
 - never commit `.env` secrets;
@@ -124,11 +124,12 @@ At minimum:
 
 Return generic authentication/reset responses to reduce account enumeration.
 
-Milestone A rate limiting is process-local and bounds login, forgot/reset and invitation acceptance. Distributed multi-instance rate limiting remains a mandatory production security gate before horizontal API scaling; no external rate-limit service is introduced in MVP foundation code.
-
-Public registration uses the same process-local foundation and exact trusted
-Origin policy. Its production distributed enforcement remains part of the same
-security gate.
+Authentication rate limits are stored in MySQL and shared by all API workers.
+Buckets cover source IP and, for login, normalized account identity. Persisted
+keys are server-HMAC values, not raw IP/email. Public registration/ticket abuse
+limits use the same shared foundation and exact trusted Origin policy where a
+browser mutation is involved. The reverse proxy must pass client IP only from
+its explicitly trusted address.
 
 ## 12. Logging/audit
 
@@ -166,6 +167,10 @@ Production baseline includes:
 - frame protection via CSP `frame-ancestors`;
 - `Referrer-Policy`;
 - secure cache policy for ticket/admin responses.
+
+Swagger, ReDoc and OpenAPI JSON are disabled in production. Unexpected errors
+return a generic stable envelope without exception detail. Demo seed refuses to
+run outside development.
 
 ## 15. Backups
 

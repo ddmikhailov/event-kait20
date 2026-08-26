@@ -1,6 +1,6 @@
 # 01. Product Specification — MVP v1
 
-Статус: **Approved**
+Статус: **Release 1.0 product specification**
 
 ## 1. Публичная регистрация
 

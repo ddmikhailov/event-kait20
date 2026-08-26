@@ -1,6 +1,6 @@
 # 05. Domain Model
 
-Статус: **Approved core model — v0.2**
+Статус: **Release 1.0 domain model**
 
 ## 1. Базовые сущности
 

@@ -1,102 +1,69 @@
-# 15. Deployment & Environments
+# 15. Перенос на сервер и релиз
 
-Статус: **Approved release-process baseline / Provider-specific deployment pending**
+Статус: **Release 1.0 runbook**
 
-## 1. Environments
+## 1. Подготовить сервер
 
-### Staging
-- фиктивные мероприятия;
-- тестовая БД;
-- безопасные test email recipients/provider settings;
-- проверка миграций;
-- offline tests;
-- интеграционные проверки.
+- Linux x86_64, Docker Engine с Compose, минимум 4 CPU / 8 GB RAM / 60 GB SSD;
+- открыты только 22 (через allowlist), 80 и 443;
+- MySQL/API/Web/Scanner ports наружу не открываются;
+- настроены три HTTPS-адреса: web, scanner, api;
+- настроены off-host backups, monitoring и синхронизация времени.
 
-### Production
-- реальные участники;
-- реальные ПД;
-- production DB;
-- production email;
-- backups и monitoring.
+MySQL 8.1.0 — обязательная существующая совместимость проекта.
 
-## 2. Deployment principle
+## 2. Подготовить конфигурацию
 
-Предпочтительно автоматизированный pipeline:
+Скопировать deploy/production.env.example в deploy/production.env и заменить
+все example/replace значения. Сгенерировать независимые secrets не менее
+32 random bytes. Файл должен иметь доступ только владельцу deployment.
 
-1. lint/typecheck/tests;
-2. build apps;
-3. build container images;
-4. apply migrations controlled step;
-5. deploy staging;
-6. smoke tests;
-7. manual production promotion для значимых релизов.
+Проверить:
 
-GitHub Actions выполняет обязательные проверки pull request и `main`: frozen
-install, formatting, lint, typecheck, полный test suite, build и сборку API
-container без публикации. Рабочие изменения проходят feature branch и review
-перед merge в `main`. Production release создаётся только из уже проверенного
-commit SHA; среда не собирает отличающийся исходный код повторно.
+    docker compose --env-file deploy/production.env -f compose.production.yml config
 
-## 3. Database migrations
+Нельзя использовать demo credentials или переносить .demo.env.
 
-- миграции version-controlled;
-- production migration перед app rollout либо совместимая expand/contract стратегия;
-- destructive migration без backup/plan запрещена.
+## 3. Reverse proxy
 
-Каноническая команда controlled migration из корня репозитория:
+Настроить TLS:
 
-```text
-DATABASE_URL=<environment database URL> pnpm db:migrate:deploy
-```
+- PUBLIC_WEB_URL → 127.0.0.1:8080;
+- PUBLIC_SCANNER_URL → 127.0.0.1:8081;
+- PUBLIC_API_URL → 127.0.0.1:3000.
 
-Команда выполняется отдельным release job до rollout API. Для production перед
-ней должна существовать проверенная точка восстановления. MySQL-specific
-SQL остаётся совместимым с MySQL 8.1.0; staging и migration rehearsal также
-используют MySQL 8.1.0.
+Передавать X-Forwarded-For/Proto только от доверенного proxy. Значение
+TRUSTED_PROXY_IPS должно содержать точный адрес reverse proxy, а не wildcard.
+Ограничить размер HTTP body на proxy согласно API (XLSX максимум 10 MB).
 
-## 4. Frontend
+## 4. Первый запуск
 
-Static build → Object Storage/CDN after domain setup.
+    docker compose --env-file deploy/production.env -f compose.production.yml build
+    docker compose --env-file deploy/production.env -f compose.production.yml up -d
+    docker compose --env-file deploy/production.env -f compose.production.yml ps
 
-Scanner PWA update strategy должна учитывать service worker cache, чтобы устройство не застревало на несовместимой версии.
+Миграции применяются до старта API и защищены checksum. После readiness создать
+первого администратора интерактивной CLI-командой внутри API container. Команда
+откажется работать, если SUPER_ADMIN уже существует; пароль не передаётся в
+аргументах и не сохраняется в deployment-файлах.
 
-## 5. Rollback
+## 5. Приёмка
 
-Нужен план rollback приложения отдельно от rollback DB. Нельзя считать «откатить контейнер» достаточным при необратимой миграции.
+1. Проверить health/live и health/ready.
+2. Убедиться, что docs, redoc и openapi.json возвращают 404.
+3. Выполнить docs/runbooks/mvp-acceptance.md на тестовом Event.
+4. Отправить invitation, reset и participant ticket на тестовые адреса.
+5. Проверить Scanner на реальном телефоне: камера, install, offline/reconnect.
+6. Выполнить backup и восстановить его в отдельную пустую MySQL 8.1.0.
+7. Проверить alerts и только затем открыть публичную регистрацию.
 
-API image именуется immutable commit SHA, например
-`event-registration-api:<git-sha>`. Rollback приложения переключает runtime на
-предыдущий проверенный SHA. Миграции проектируются backward-compatible; rollback
-БД не выполняется автоматически. При повреждении данных используется
-контролируемое восстановление по `docs/runbooks/backup-restore.md`.
+## 6. Обновление и rollback
 
-## 6. Health and smoke checks
+- выпускать immutable Git tag/image версии;
+- до миграции создавать recovery point;
+- сначала staging, затем тот же commit production;
+- не редактировать применённые SQL-файлы;
+- rollback приложения выполняется предыдущими images;
+- rollback данных — только восстановлением по runbook, не обратной миграцией наугад.
 
-- `GET /health/live` проверяет, что процесс API отвечает, и не зависит от БД;
-- `GET /health/ready` выполняет минимальный `SELECT 1` в MySQL и возвращает
-  `503 SERVICE_UNAVAILABLE`, пока экземпляр нельзя включать в трафик;
-- `GET /health` сохранён как backward-compatible liveness endpoint;
-- после staging rollout запускается `SMOKE_BASE_URL=https://<staging-api> pnpm smoke`.
-
-Runtime использует liveness для перезапуска процесса и readiness для включения
-в балансировку. Smoke не передаёт credentials и не затрагивает business data.
-После выкладки всех трёх приложений выполняется общий `pnpm smoke:mvp`, а затем
-scenarios из `docs/runbooks/mvp-acceptance.md`.
-
-## 7. Current release gates
-
-API имеет воспроизводимый OCI/Docker build. Web и Scanner остаются static Vite
-artifacts для Object Storage/CDN после утверждения доменов.
-
-Email worker пока не считается production-deployable: persistence, claim/retry,
-idempotency boundary и message construction реализованы, но SMTP/API provider и
-его idempotent transport не выбраны. Нельзя подменять этот gate transport-ом,
-который отмечает письмо отправленным без фактической provider acceptance.
-
-## 8. TODO
-
-- domain/certificates;
-- Yandex Cloud runtime topology, IAM, sizing and budget;
-- email provider and production-safe transport;
-- monitoring alerts and log retention;
-- incident contacts/escalation and first staging deployment rehearsal.
+Команды полного validation описаны в README и docs/14-testing.md.

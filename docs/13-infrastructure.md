@@ -1,71 +1,57 @@
-# 13. Infrastructure — Yandex Cloud
+# 13. Production infrastructure
 
-Статус: **Approved platform / Draft resource sizing**
+Статус: **Release 1.0 deployment contract**
 
-## 1. Принцип
+## Целевая схема
 
-Целевое российское размещение сохраняется, MySQL 8.1.0 — источник истины. Провайдер базы должен быть утверждён отдельно: совместимость с точной устаревшей версией 8.1.0 нельзя предполагать у managed-сервисов.
+Первая production-установка рассчитана на один сервер организации или одну VM
+в Yandex Cloud:
 
-## 2. Компоненты
+    TLS reverse proxy
+      ├── Web 127.0.0.1:8080
+      ├── Scanner 127.0.0.1:8081
+      └── API 127.0.0.1:3000
+            ├── MySQL 8.1.0 в private Docker network
+            └── отдельный email-worker
 
-Предварительно:
+compose.production.yml не публикует MySQL. Внешний reverse proxy — единственная
+публичная точка входа; он завершает TLS и передаёт запросы на loopback-порты.
+Kubernetes, Redis и message broker для нагрузки MVP не требуются.
 
-- изолированный MySQL 8.1.0 service;
-- Serverless Containers / подходящий container runtime для API;
-- отдельный email worker;
-- Object Storage;
-- Message Queue;
-- Lockbox;
-- Container Registry;
-- Logging/Monitoring;
-- Certificate Manager/CDN после появления домена;
-- Terraform.
+## MySQL policy
 
-### MySQL version policy
+- production target: ровно MySQL 8.1.0;
+- staging и integration tests: ровно MySQL 8.1.0;
+- миграции обязаны сохранять совместимость с MySQL 8.1.0;
+- приложение не выполняет автоматическое обновление версии сервера;
+- production container сохраняет mysqld 8.1.0, но обновляет Oracle Linux
+  packages, удаляет ненужный mysql-shell/Python toolchain и пересобирает gosu;
+- из-за завершённого lifecycle сервер изолируется, регулярно резервируется и
+  не получает публичный сетевой endpoint.
 
-- Application production target: MySQL 8.1.0 exactly.
-- Staging and integration tests must use MySQL 8.1.0.
-- MySQL-specific migrations must remain compatible with MySQL 8.1.0.
-- MySQL 8.1 is an expired Innovation release. A security-maintained hosting approach and approved upgrade path are mandatory production gates.
-- The downloaded MySQL archive is test-only tooling and is cached outside the repository; it must not be included in application runtime dependencies or images.
+## Secrets и доступ
 
-## 3. Network
+- production secrets находятся вне Git (Lockbox или защищённый env-файл);
+- DB runtime user ограничен одной application database;
+- root credential используется только для администрирования/инициализации;
+- SMTP использует отдельный app password, не пароль личной почты;
+- SESSION_SECRET, AUTH_LINK_SECRET и QR_SIGNING_SECRET уникальны;
+- доступ к хосту и backups выдаётся по минимальным правам.
 
-MySQL не публикуется как клиентский endpoint. API получает доступ в контролируемой сети.
+## Надёжность
 
-## 4. Secrets
+- restart policy включена для runtime services;
+- liveness и readiness доступны на API;
+- MySQL data хранится в отдельном persistent volume;
+- ежедневный encrypted backup выносится за пределы VM;
+- перед каждой миграцией создаётся проверенная recovery point;
+- monitoring контролирует доступность, свободное место, ошибки API/worker,
+  очередь FAILED/QUEUED email и срок сертификатов.
 
-Раздельные service accounts и минимальные IAM permissions. Secrets — Lockbox.
+## Yandex Cloud
 
-## 5. Staging/Production
-
-Отдельные ресурсы и базы. Production secrets не используются в staging.
-
-## 6. Backup
-
-Production использует ежедневные managed backups. Перед миграциями дополнительно
-создаётся проверенная точка восстановления. Процедура восстановления и её
-безопасная репетиция зафиксированы в `docs/runbooks/backup-restore.md`; конкретные
-retention/RPO/RTO утверждаются вместе с оплачиваемой конфигурацией среды.
-
-## 7. Sizing
-
-Целевая нагрузка MVP — 100–1000 участников на Event. Не использовать Kubernetes без нового обоснования: текущая нагрузка его не требует.
-
-## 8. Terraform
-
-Инфраструктура описывается кодом, чтобы staging/production были воспроизводимыми.
-
-## 9. TODO
-
-- конкретные resource sizes и budget estimate;
-- зоны доступности;
-- backup retention;
-- log retention;
-- домены/DNS;
-- SMTP provider;
-- monitoring alerts;
-- exact deployment topology после proof-of-concept application runtime + MySQL 8.1.0 connectivity;
-- production hosting decision for unsupported MySQL 8.1.0 and a supported-version upgrade plan;
-- outbox/idempotent queue publication implementation choice for email delivery.
-- подтверждённый restore drill на созданном staging-окружении.
+Проект сохраняет российское размещение. Для переноса нужны folder ID, сеть,
+зона, VM size, домены, бюджет и IAM-схема организации. Фиктивный Terraform
+scaffold удалён из релиза: он создавал ложное впечатление готовой инфраструктуры.
+Terraform добавляется отдельным проверенным изменением после получения реальных
+организационных параметров; платные ресурсы код приложения не создаёт.
