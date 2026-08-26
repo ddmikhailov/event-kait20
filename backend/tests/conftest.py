@@ -44,9 +44,7 @@ def database_url() -> Iterator[str]:
         None,
     )
     if mysqld is None:
-        pytest.fail(
-            "MySQL 8.1.0 is required; set TEST_DATABASE_URL or MYSQL_HOME"
-        )
+        pytest.fail("MySQL 8.1.0 is required; set TEST_DATABASE_URL or MYSQL_HOME")
     version = subprocess.run(  # noqa: S603 - executable is an explicit local path
         [str(mysqld), "--version"], check=True, capture_output=True, text=True
     )
