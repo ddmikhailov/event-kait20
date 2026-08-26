@@ -13,7 +13,7 @@
 - безопасный XLSX preview/commit/export;
 - статистика, audit log и ticket batches;
 - SMTP worker с durable intents, one-time auth links, retries и stale-lease recovery;
-- production Docker Compose template, health/readiness и runbooks.
+- native systemd/Nginx production template, health/readiness и runbooks.
 
 ## Релизные свойства
 

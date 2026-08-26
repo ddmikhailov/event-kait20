@@ -11,24 +11,8 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      DATABASE_URL: mysql://root:ci@127.0.0.1:3306/event_registration_test
-      TEST_DATABASE_URL: mysql://root:ci@127.0.0.1:3306/event_registration_test
-    services:
-      mysql:
-        image: mysql:8.1.0@sha256:f61944ff3f2961363a4d22913b2ac581523273679d7e14dd26e8db8c9f571a7e
-        env:
-          MYSQL_ROOT_PASSWORD: ci
-          MYSQL_DATABASE: event_registration_test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -40,6 +24,21 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+      - name: Install native MySQL 8.1.0 test binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes libaio1t64 libnuma1
+          archive="$RUNNER_TEMP/mysql-community-server-core.deb"
+          curl --fail --location --retry 3 \
+            https://cdn.mysql.com/archives/mysql-8.1/mysql-community-server-core_8.1.0-1ubuntu22.04_amd64.deb \
+            --output "$archive"
+          echo "fda27497acbb2deb2b422c13a6466d9e9c5745a3b4446f13319c2bd3368b41d0  $archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/mysql-8.1.0"
+          dpkg-deb --extract "$archive" "$RUNNER_TEMP/mysql-8.1.0"
+          echo "MYSQL_HOME=$RUNNER_TEMP/mysql-8.1.0/usr" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/mysql-8.1.0/usr/sbin/mysqld" --version | grep --fixed-strings 'Ver 8.1.0'
       - run: python -m pip install -e 'backend[dev]'
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit:dependencies
@@ -48,11 +47,3 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-
-  api-container:
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: docker build --file backend/Dockerfile --tag event-registration-api:ci .

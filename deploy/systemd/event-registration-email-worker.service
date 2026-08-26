@@ -1,0 +1,34 @@
+[Unit]
+Description=Event Registration email worker
+Wants=network-online.target
+Requires=event-registration-mysql.service
+After=network-online.target event-registration-mysql.service
+
+[Service]
+Type=simple
+User=event-registration
+Group=event-registration
+WorkingDirectory=/opt/event-registration
+EnvironmentFile=/etc/event-registration/event-registration.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/event-registration/backend/.venv/bin/python -m event_api.email_worker
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

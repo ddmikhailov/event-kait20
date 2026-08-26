@@ -75,7 +75,7 @@ Scanner PWA ──────┼── HTTPS ──> FastAPI ─────> M
 - SQLAlchemy 2 + PyMySQL;
 - Dexie/IndexedDB;
 - GitHub Actions;
-- Docker Compose deployment template; целевая площадка — Yandex Cloud/сервер организации.
+- нативные systemd services и Nginx; целевая площадка — Yandex Cloud/сервер организации.
 
 Версии Node-пакетов фиксируются lockfile, Python-зависимости — точными версиями в `backend/pyproject.toml`. Shared Zod schemas в `packages/contracts` обслуживают Web/Scanner, а эквивалентная server-side проверка публичной границы выполняется Pydantic-моделями.
 

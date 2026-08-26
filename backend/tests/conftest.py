@@ -26,24 +26,48 @@ def database_url() -> Iterator[str]:
     if configured:
         yield configured
         return
+    configured_home = os.getenv("MYSQL_HOME")
     root = (
-        Path(os.getenv("LOCALAPPDATA", ""))
+        Path(configured_home)
+        if configured_home
+        else Path(os.getenv("LOCALAPPDATA", ""))
         / "event-registration-test"
         / "mysql-8.1.0-winx64"
     )
-    mysqld = root / "bin" / "mysqld.exe"
-    if not mysqld.exists():
+    executable = "mysqld.exe" if os.name == "nt" else "mysqld"
+    mysqld = next(
+        (
+            candidate
+            for candidate in (root / "bin" / executable, root / "sbin" / executable)
+            if candidate.exists()
+        ),
+        None,
+    )
+    if mysqld is None:
         pytest.fail(
-            "MySQL 8.1.0 is required; set TEST_DATABASE_URL or install the test binary"
+            "MySQL 8.1.0 is required; set TEST_DATABASE_URL or MYSQL_HOME"
         )
+    version = subprocess.run(  # noqa: S603 - executable is an explicit local path
+        [str(mysqld), "--version"], check=True, capture_output=True, text=True
+    )
+    if "Ver 8.1.0" not in f"{version.stdout}{version.stderr}":
+        pytest.fail("The disposable integration database must be exactly MySQL 8.1.0")
     temporary = Path(tempfile.mkdtemp(prefix="event-registration-python-mysql-"))
     data = temporary / "data"
+    layout_options: list[str] = []
+    messages = root / "share" / "mysql-8.1"
+    plugins = root / "lib" / "mysql" / "plugin"
+    if messages.exists():
+        layout_options.append(f"--lc-messages-dir={messages}")
+    if plugins.exists():
+        layout_options.append(f"--plugin-dir={plugins}")
     subprocess.run(  # noqa: S603 - executable is a verified local MySQL binary
         [
             str(mysqld),
             "--no-defaults",
             f"--basedir={root}",
             f"--datadir={data}",
+            *layout_options,
             "--initialize-insecure",
             "--console",
         ],
@@ -57,6 +81,7 @@ def database_url() -> Iterator[str]:
             "--no-defaults",
             f"--basedir={root}",
             f"--datadir={data}",
+            *layout_options,
             f"--port={port}",
             "--bind-address=127.0.0.1",
             "--mysqlx=0",

@@ -21,9 +21,10 @@
     "backend:install": "node scripts/python.mjs -m pip install -e backend[dev]",
     "backend:dev": "node scripts/python.mjs -m uvicorn event_api.main:app --reload --host 127.0.0.1 --port 3000",
     "backend:format": "node scripts/python.mjs -m ruff format backend",
-    "demo:up": "node scripts/demo.mjs up",
-    "demo:down": "node scripts/demo.mjs down",
-    "demo:reset": "node scripts/demo.mjs reset"
+    "demo:doctor": "node scripts/native-demo.mjs doctor",
+    "demo:up": "node scripts/native-demo.mjs up",
+    "demo:down": "node scripts/native-demo.mjs down",
+    "demo:reset": "node scripts/native-demo.mjs reset"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
