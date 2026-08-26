@@ -114,6 +114,7 @@ def client(database_url: str) -> Iterator[TestClient]:
         PUBLIC_WEB_BASE_URL="http://localhost:5173",
         CONSENT_URL="http://localhost:5173/consent",
         CONSENT_VERSION="test-v1",
+        AUTH_RATE_LIMIT_MAX="10000",
     )
     from event_api.config import get_settings
 

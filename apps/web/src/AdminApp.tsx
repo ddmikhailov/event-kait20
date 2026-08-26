@@ -800,6 +800,9 @@ export const AdminLogin = ({
           </label>
           <Button type="submit">Войти</Button>
         </form>
+        <a className="text-button" href="/auth/password-forgot">
+          Не помню пароль
+        </a>
         {notice && <AdminNotice notice={notice} />}
       </section>
     </main>

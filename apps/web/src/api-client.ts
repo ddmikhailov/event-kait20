@@ -8,6 +8,7 @@ import {
   type TicketResponse,
 } from '@event-registration/contracts';
 import type { ZodType } from 'zod';
+import { z } from 'zod';
 
 const apiBaseUrl = String(import.meta.env.VITE_API_BASE_URL ?? '').replace(
   /\/$/,
@@ -51,6 +52,36 @@ export class PublicApiClient {
       `/tickets/${encodeURIComponent(publicId)}/${encodeURIComponent(signature)}`,
       { method: 'GET', cache: 'no-store' },
       ticketResponseSchema,
+    );
+  }
+
+  public forgotPassword(email: string): Promise<{ status: 'accepted' }> {
+    return this.request(
+      '/auth/password/forgot',
+      { method: 'POST', body: JSON.stringify({ email }) },
+      z.object({ status: z.literal('accepted') }),
+    );
+  }
+
+  public resetPassword(
+    token: string,
+    password: string,
+  ): Promise<{ status: 'accepted' }> {
+    return this.request(
+      '/auth/password/reset',
+      { method: 'POST', body: JSON.stringify({ token, password }) },
+      z.object({ status: z.literal('accepted') }),
+    );
+  }
+
+  public acceptInvitation(
+    token: string,
+    password: string,
+  ): Promise<{ status: 'accepted' }> {
+    return this.request(
+      `/auth/invitations/${encodeURIComponent(token)}/accept`,
+      { method: 'POST', body: JSON.stringify({ password }) },
+      z.object({ status: z.literal('accepted') }),
     );
   }
 

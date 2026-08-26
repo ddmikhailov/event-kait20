@@ -23,6 +23,8 @@ def required(name: str) -> str:
 
 
 def main() -> None:
+    if get_settings().node_env != "development":
+        raise RuntimeError("Demo seed is disabled outside development")
     admin_email = required("DEMO_ADMIN_EMAIL").strip().lower()
     admin_password = required("DEMO_ADMIN_PASSWORD")
     scanner_email = required("DEMO_SCANNER_EMAIL").strip().lower()

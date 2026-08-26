@@ -8,11 +8,13 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 from sqlalchemy import text
 
+from event_api.config import Settings
 from event_api.database import Database
 from event_api.demo_seed import main as seed_demo
+from event_api.email_worker import process_once
 from event_api.errors import ApiError
 from event_api.routers.excel import _parse
-from event_api.security import auth_link_token, hash_password, token_hash
+from event_api.security import RateLimiter, auth_link_token, hash_password, token_hash
 
 ORIGIN = {"Origin": "http://localhost:5173"}
 
@@ -59,7 +61,10 @@ def _login(client: TestClient) -> tuple[dict[str, str], str]:
 
 
 def test_health_and_security_foundation(client: TestClient) -> None:
-    assert client.get("/health/ready").json() == {"status": "ready"}
+    health = client.get("/health/ready")
+    assert health.json() == {"status": "ready"}
+    assert health.headers["x-content-type-options"] == "nosniff"
+    assert health.headers["x-frame-options"] == "DENY"
     _seed_admin(client)
     unknown = client.post(
         "/auth/login",
@@ -76,11 +81,21 @@ def test_health_and_security_foundation(client: TestClient) -> None:
         "INVALID_CREDENTIALS",
     )
     assert invalid.json()["error"]["code"] == "INVALID_CREDENTIALS"
+    client.cookies.set("staff_session", "revoked-or-malformed-cookie")
+    assert (
+        client.post(
+            "/auth/login",
+            headers=ORIGIN,
+            json={"email": "admin@example.com", "password": "correct horse battery"},
+        ).status_code
+        == 200
+    )
     headers, raw_session = _login(client)
     database: Database = client.app.state.database
     with database.connect() as connection:
         stored = connection.execute(
-            text("SELECT token_hash FROM sessions")
+            text("SELECT token_hash FROM sessions WHERE token_hash=:hash"),
+            {"hash": token_hash(raw_session)},
         ).scalar_one()
     assert stored == token_hash(raw_session)
     assert raw_session != stored
@@ -93,6 +108,55 @@ def test_health_and_security_foundation(client: TestClient) -> None:
     assert client.post("/auth/logout", headers=ORIGIN).status_code == 403
     assert client.post("/auth/logout", headers=headers).status_code == 200
     assert client.get("/auth/session").status_code == 401
+
+
+def test_production_configuration_hides_api_schema(database_url: str) -> None:
+    from event_api.main import create_app
+
+    config = Settings(
+        database_url=database_url,
+        node_env="production",
+        cors_origins=["https://events.example.org", "https://scanner.example.org"],
+        session_secret="s" * 43,
+        auth_link_secret="a" * 43,
+        auth_link_base_url="https://events.example.org/auth",
+        qr_signing_secret="q" * 43,
+        public_web_base_url="https://events.example.org",
+        consent_url="https://example.org/privacy",
+        consent_version="2026-08-26",
+    )
+    with pytest.raises(ValueError, match="STARTTLS"):
+        Settings.model_validate(
+            {
+                **config.model_dump(),
+                "smtp_host": "smtp.example.org",
+                "smtp_from_email": "noreply@example.org",
+                "smtp_starttls": False,
+            }
+        )
+    with TestClient(create_app(config)) as production:
+        assert production.get("/docs").status_code == 404
+        assert production.get("/openapi.json").status_code == 404
+        response = production.get("/health")
+        assert "max-age=31536000" in response.headers["strict-transport-security"]
+
+
+def test_shared_rate_limiter_hides_identifiers(client: TestClient) -> None:
+    database: Database = client.app.state.database
+    config = client.app.state.settings.model_copy(
+        update={"auth_rate_limit_max": 2, "auth_rate_limit_window_seconds": 60}
+    )
+    limiter = RateLimiter(config, database)
+    limiter.consume("test-release", "person@example.org")
+    limiter.consume("test-release", "person@example.org")
+    with pytest.raises(ApiError) as caught:
+        limiter.consume("test-release", "person@example.org")
+    assert caught.value.status == 429
+    with database.connect() as connection:
+        keys = connection.execute(
+            text("SELECT bucket_key FROM security_rate_limits")
+        ).scalars()
+    assert all("person@example.org" not in key for key in keys)
 
 
 def test_domain_constraints_and_event_crud(client: TestClient) -> None:
@@ -150,12 +214,19 @@ def test_mysql_specific_invariants(client: TestClient) -> None:
 def test_demo_seed_is_idempotent(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from event_api.config import get_settings
+
+    monkeypatch.setenv("NODE_ENV", "development")
     monkeypatch.setenv("DEMO_ADMIN_EMAIL", "demo-admin@example.com")
     monkeypatch.setenv("DEMO_ADMIN_PASSWORD", "demo admin safe password")
     monkeypatch.setenv("DEMO_SCANNER_EMAIL", "demo-scanner@example.com")
     monkeypatch.setenv("DEMO_SCANNER_PASSWORD", "demo scanner safe password")
-    seed_demo()
-    seed_demo()
+    get_settings.cache_clear()
+    try:
+        seed_demo()
+        seed_demo()
+    finally:
+        get_settings.cache_clear()
     database: Database = client.app.state.database
     with database.connect() as connection:
         event_count = connection.execute(
@@ -446,3 +517,34 @@ def test_password_reset_is_one_time_and_revokes_sessions(client: TestClient) -> 
             {"hash": token_hash(raw_session)},
         ).scalar_one()
     assert revoked is not None
+
+
+def test_email_worker_sends_durable_intent_without_persisting_link(
+    client: TestClient,
+) -> None:
+    database: Database = client.app.state.database
+    config = client.app.state.settings.model_copy(
+        update={
+            "smtp_host": "smtp.example.test",
+            "smtp_from_email": "noreply@example.test",
+        }
+    )
+    captured: list[str] = []
+
+    def fake_sender(message: object, _config: Settings) -> str:
+        captured.append(str(message))
+        return "provider-test-id"
+
+    assert process_once(database, config, fake_sender) == 1
+    assert captured and "provider-test-id" not in captured[0]
+    with database.connect() as connection:
+        delivery = (
+            connection.execute(
+                text(
+                    "SELECT status,provider_message_id FROM email_deliveries WHERE status='SENT' ORDER BY sent_at DESC LIMIT 1"
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert delivery == {"status": "SENT", "provider_message_id": "provider-test-id"}

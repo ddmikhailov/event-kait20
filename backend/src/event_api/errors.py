@@ -1,9 +1,13 @@
+import logging
+import re
 from typing import Any
 from uuid import uuid4
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+LOGGER = logging.getLogger("event_api")
 
 
 class ApiError(Exception):
@@ -22,7 +26,10 @@ class ApiError(Exception):
 
 
 def error_response(request: Request, error: ApiError) -> JSONResponse:
-    request_id = request.headers.get("x-request-id") or str(uuid4())
+    supplied = request.headers.get("x-request-id", "")
+    request_id = (
+        supplied if re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", supplied) else str(uuid4())
+    )
     payload: dict[str, Any] = {
         "error": {
             "code": error.code,
@@ -53,7 +60,10 @@ async def validation_error_handler(
     )
 
 
-async def unexpected_error_handler(request: Request, _error: Exception) -> JSONResponse:
+async def unexpected_error_handler(request: Request, error: Exception) -> JSONResponse:
+    route = request.scope.get("route")
+    template = getattr(route, "path", "unknown")
+    LOGGER.error("Unhandled error type=%s route=%s", type(error).__name__, template)
     return error_response(
-        request, ApiError(500, "CONFLICT", "Request could not be completed")
+        request, ApiError(500, "INTERNAL_ERROR", "Request could not be completed")
     )

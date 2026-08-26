@@ -38,9 +38,11 @@ def invalid_link() -> ApiError:
     )
 
 
-def limit(request: Request, scope: str) -> None:
+def limit(request: Request, scope: str, account: str | None = None) -> None:
     limiter: RateLimiter = request.app.state.rate_limiter
-    limiter.consume(scope, request.client.host if request.client else "unknown")
+    limiter.consume(f"{scope}:ip", request.client.host if request.client else "unknown")
+    if account:
+        limiter.consume(f"{scope}:account", account)
 
 
 def set_cookie(
@@ -65,7 +67,7 @@ def login(
     db: Annotated[Database, Depends(database)],
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, object]:
-    limit(request, "login")
+    limit(request, "login", str(values.email))
     with db.connect() as connection:
         user = row(
             connection,

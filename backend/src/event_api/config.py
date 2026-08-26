@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import AnyHttpUrl, Field, MySQLDsn, field_validator
+from pydantic import AnyHttpUrl, Field, MySQLDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     consent_version: str = Field(min_length=1, max_length=255)
     email_max_attempts: int = Field(default=5, ge=1, le=20)
     email_poll_interval_ms: int = Field(default=1_000, ge=100, le=60_000)
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65_535)
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str | None = None
+    smtp_from_name: str = "Регистрация на мероприятие"
+    smtp_starttls: bool = True
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -48,6 +55,29 @@ class Settings(BaseSettings):
             if parsed.path not in (None, "/") or parsed.query or parsed.fragment:
                 raise ValueError("Trusted origins must not contain path/query/fragment")
         return origins
+
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        if not self.production:
+            return self
+        urls = [
+            *self.cors_origins,
+            str(self.auth_link_base_url),
+            str(self.public_web_base_url),
+            str(self.consent_url),
+        ]
+        if any(not value.lower().startswith("https://") for value in urls):
+            raise ValueError("Production browser-facing URLs must use HTTPS")
+        if (
+            len({self.session_secret, self.auth_link_secret, self.qr_signing_secret})
+            != 3
+        ):
+            raise ValueError("Production cryptographic secrets must be distinct")
+        if self.smtp_host and not self.smtp_from_email:
+            raise ValueError("SMTP_FROM_EMAIL is required when SMTP_HOST is set")
+        if self.smtp_host and not self.smtp_starttls:
+            raise ValueError("SMTP STARTTLS is required in production")
+        return self
 
     @property
     def production(self) -> bool:

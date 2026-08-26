@@ -4,6 +4,7 @@ import argparse
 import getpass
 import uuid
 
+from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy import text
 
 from .config import get_settings
@@ -15,6 +16,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Create the first SUPER_ADMIN safely")
     parser.add_argument("--email", required=True)
     args = parser.parse_args()
+    try:
+        email = str(TypeAdapter(EmailStr).validate_python(args.email.strip())).lower()
+    except ValidationError as error:
+        raise SystemExit("A valid email address is required") from error
     password = getpass.getpass("Password (minimum 12 characters): ")
     if len(password) < 12:
         raise SystemExit("Password must contain at least 12 characters")
@@ -37,8 +42,8 @@ def main() -> None:
             ),
             {
                 "id": str(uuid.uuid4()),
-                "email": args.email.strip(),
-                "normalized": args.email.strip().lower(),
+                "email": email,
+                "normalized": email,
                 "password": hash_password(password),
             },
         )

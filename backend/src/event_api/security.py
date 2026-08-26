@@ -2,16 +2,15 @@ import base64
 import hashlib
 import hmac
 import secrets
-import threading
-import time
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
 from argon2 import PasswordHasher, Type
 from argon2.exceptions import InvalidHashError, VerificationError
+from sqlalchemy import text
 
 from .config import Settings
+from .database import Database
 from .errors import ApiError
 
 PASSWORD_HASHER = PasswordHasher(
@@ -117,27 +116,47 @@ def verify_registration(public_id: str, signature: str, secret: str) -> bool:
     return hmac.compare_digest(registration_signature(public_id, secret), signature)
 
 
-@dataclass
-class Bucket:
-    count: int
-    reset_at: float
-
-
 class RateLimiter:
-    def __init__(self, settings: Settings) -> None:
+    """A shared MySQL-backed limiter that works across API instances.
+
+    Bucket identifiers are HMACed before persistence so client IP addresses and
+    account identifiers do not become a second store of personal data.
+    """
+
+    def __init__(self, settings: Settings, database: Database) -> None:
         self.max = settings.auth_rate_limit_max
         self.window = settings.auth_rate_limit_window_seconds
-        self.buckets: dict[str, Bucket] = {}
-        self.lock = threading.Lock()
+        self.secret = settings.session_secret
+        self.database = database
+
+    def _key(self, scope: str, client: str) -> str:
+        material = f"rate-limit:{scope}:{client.strip().lower()}"
+        return hmac.new(
+            self.secret.encode(), material.encode(), hashlib.sha256
+        ).hexdigest()
 
     def consume(self, scope: str, client: str) -> None:
-        now = time.monotonic()
-        key = f"{scope}:{client}"
-        with self.lock:
-            current = self.buckets.get(key)
-            if current is None or current.reset_at <= now:
-                self.buckets[key] = Bucket(1, now + self.window)
-                return
-            if current.count >= self.max:
+        key = self._key(scope, client)
+        with self.database.transaction() as connection:
+            connection.exec_driver_sql(
+                "DELETE FROM security_rate_limits WHERE expires_at <= UTC_TIMESTAMP(3) LIMIT 100"
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO security_rate_limits
+                       (bucket_key,attempts,expires_at,updated_at)
+                       VALUES (:key,1,DATE_ADD(UTC_TIMESTAMP(3), INTERVAL :window SECOND),UTC_TIMESTAMP(3))
+                       ON DUPLICATE KEY UPDATE
+                         attempts=IF(expires_at <= UTC_TIMESTAMP(3),1,LEAST(attempts+1,:ceiling)),
+                         expires_at=IF(expires_at <= UTC_TIMESTAMP(3),
+                           DATE_ADD(UTC_TIMESTAMP(3), INTERVAL :window SECOND),expires_at),
+                         updated_at=UTC_TIMESTAMP(3)"""
+                ),
+                {"key": key, "window": self.window, "ceiling": self.max + 1},
+            )
+            attempts = connection.execute(
+                text("SELECT attempts FROM security_rate_limits WHERE bucket_key=:key"),
+                {"key": key},
+            ).scalar_one()
+            if int(attempts) > self.max:
                 raise ApiError(429, "RATE_LIMITED", "Too many requests")
-            current.count += 1

@@ -16,6 +16,9 @@ type Route =
   | { kind: 'admin' }
   | { kind: 'event'; slug: string }
   | { kind: 'ticket'; publicId: string; signature: string }
+  | { kind: 'password-reset'; token: string }
+  | { kind: 'invitation'; token: string }
+  | { kind: 'password-forgot' }
   | { kind: 'home' };
 
 export const App = () => {
@@ -31,7 +34,140 @@ export const App = () => {
   if (route.kind === 'ticket') {
     return <TicketPage publicId={route.publicId} signature={route.signature} />;
   }
+  if (route.kind === 'password-reset' || route.kind === 'invitation') {
+    return <AuthLinkPage kind={route.kind} token={route.token} />;
+  }
+  if (route.kind === 'password-forgot') return <PasswordForgotPage />;
   return <HomePage />;
+};
+
+const PasswordForgotPage = () => {
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string>();
+  return (
+    <main className="registration-shell">
+      <section className="registration-panel compact-panel">
+        <p className="eyebrow">Безопасность учётной записи</p>
+        <h1>Восстановление пароля</h1>
+        {sent ? (
+          <Message kind="notice">
+            Если активная учётная запись существует, инструкция отправлена на
+            указанный адрес.
+          </Message>
+        ) : (
+          <form
+            className="registration-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const email = String(
+                new FormData(event.currentTarget).get('email') ?? '',
+              );
+              void publicApi
+                .forgotPassword(email)
+                .then(() => setSent(true))
+                .catch((caught) => setError(messageForError(caught)));
+            }}
+          >
+            <label>
+              Email
+              <input name="email" type="email" autoComplete="email" required />
+            </label>
+            {error ? <Message kind="error">{error}</Message> : null}
+            <Button type="submit">Отправить инструкцию</Button>
+          </form>
+        )}
+      </section>
+    </main>
+  );
+};
+
+const AuthLinkPage = ({
+  kind,
+  token,
+}: {
+  kind: 'password-reset' | 'invitation';
+  token: string;
+}) => {
+  const [message, setMessage] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    const password = String(values.get('password') ?? '');
+    const confirmation = String(values.get('confirmation') ?? '');
+    if (password.length < 12 || password !== confirmation) {
+      setError(
+        'Пароль должен содержать минимум 12 символов, а значения — совпадать',
+      );
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    try {
+      if (kind === 'invitation')
+        await publicApi.acceptInvitation(token, password);
+      else await publicApi.resetPassword(token, password);
+      setMessage('Пароль сохранён. Теперь можно войти в рабочий интерфейс.');
+    } catch (caught) {
+      setError(messageForError(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <main className="registration-shell">
+      <section className="registration-panel compact-panel">
+        <p className="eyebrow">Безопасность учётной записи</p>
+        <h1>
+          {kind === 'invitation' ? 'Активация сотрудника' : 'Новый пароль'}
+        </h1>
+        {message ? (
+          <>
+            <Message kind="notice">{message}</Message>
+            <a
+              className="primary-link"
+              href={kind === 'invitation' ? '/scanner' : '/admin'}
+            >
+              Перейти ко входу
+            </a>
+          </>
+        ) : (
+          <form
+            className="registration-form"
+            onSubmit={(event) => void submit(event)}
+          >
+            <label>
+              Новый пароль
+              <input
+                name="password"
+                type="password"
+                minLength={12}
+                maxLength={128}
+                autoComplete="new-password"
+                required
+              />
+            </label>
+            <label>
+              Повторите пароль
+              <input
+                name="confirmation"
+                type="password"
+                minLength={12}
+                maxLength={128}
+                autoComplete="new-password"
+                required
+              />
+            </label>
+            {error ? <Message kind="error">{error}</Message> : null}
+            <Button type="submit" disabled={busy}>
+              {busy ? 'Сохраняем…' : 'Сохранить пароль'}
+            </Button>
+          </form>
+        )}
+      </section>
+    </main>
+  );
 };
 
 const AdminApp = lazy(async () => {
@@ -484,6 +620,15 @@ const currentRoute = (): Route => {
       publicId: decodeURIComponent(parts[1]),
       signature: decodeURIComponent(parts[2]),
     };
+  }
+  if (parts[0] === 'auth' && parts[1] === 'password-reset' && parts[2]) {
+    return { kind: 'password-reset', token: decodeURIComponent(parts[2]) };
+  }
+  if (parts[0] === 'auth' && parts[1] === 'password-forgot') {
+    return { kind: 'password-forgot' };
+  }
+  if (parts[0] === 'auth' && parts[1] === 'invitation' && parts[2]) {
+    return { kind: 'invitation', token: decodeURIComponent(parts[2]) };
   }
   return { kind: 'home' };
 };

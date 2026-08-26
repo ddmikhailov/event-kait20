@@ -1,6 +1,6 @@
 {
   "name": "event-registration-system",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "packageManager": "pnpm@11.22.0",
   "engines": {
@@ -17,6 +17,7 @@
     "smoke:mvp": "node scripts/mvp-smoke.mjs",
     "test": "turbo run test && node scripts/python.mjs -m pytest backend/tests",
     "typecheck": "turbo run typecheck && node scripts/python.mjs -m mypy backend/src/event_api",
+    "audit:dependencies": "pnpm audit --prod --audit-level high && node scripts/python.mjs -m pip_audit",
     "backend:install": "node scripts/python.mjs -m pip install -e backend[dev]",
     "backend:dev": "node scripts/python.mjs -m uvicorn event_api.main:app --reload --host 127.0.0.1 --port 3000",
     "backend:format": "node scripts/python.mjs -m ruff format backend",

@@ -2,7 +2,7 @@ name: event-registration-demo
 
 services:
   mysql:
-    image: mysql:8.1.0
+    image: mysql:8.1.0@sha256:f61944ff3f2961363a4d22913b2ac581523273679d7e14dd26e8db8c9f571a7e
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: event_registration
@@ -112,6 +112,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    environment:
+      API_ORIGIN: http://localhost:3000
     ports:
       - '5173:80'
 
@@ -125,6 +127,8 @@ services:
     depends_on:
       seed:
         condition: service_completed_successfully
+    environment:
+      API_ORIGIN: http://localhost:3000
     ports:
       - '5174:80'
 
