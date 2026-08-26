@@ -106,7 +106,11 @@ def database_url() -> Iterator[str]:
             time.sleep(0.1)
     if connection is None:
         server.kill()
-        pytest.fail("Disposable MySQL 8.1.0 did not start")
+        output, _ = server.communicate(timeout=5)
+        diagnostics = output.decode(errors="replace")[-4000:] if output else ""
+        pytest.fail(
+            f"Disposable MySQL 8.1.0 did not start. Last server output:\n{diagnostics}"
+        )
     with connection, connection.cursor() as cursor:
         cursor.execute("SELECT VERSION()")
         assert str(cursor.fetchone()[0]).startswith("8.1.0")
