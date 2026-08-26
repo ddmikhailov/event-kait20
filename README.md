@@ -86,4 +86,5 @@ MySQL 8.1.0 оставлена точной целью по требованию
 - `docs/14-testing.md` — проверки;
 - `docs/15-deployment.md` — перенос на сервер и релиз;
 - `docs/19-mvp-release-status.md` — фактический состав релиза;
+- `docs/20-release-improvement-plan.md` — план оставшихся release-gates;
 - `docs/adr/` — принятые архитектурные решения.

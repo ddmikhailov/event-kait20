@@ -36,8 +36,10 @@ SMOKE_SCANNER_BASE_URL=https://<scanner> \
 pnpm smoke:mvp
 ```
 
-Smoke проверяет readiness MySQL, обе application shells и production PWA
-manifest. Он не авторизуется и не создаёт business data.
+Smoke проверяет liveness/readiness MySQL, закрытые production API docs, точный
+CORS для Web, отклонение mutation с постороннего Origin, security headers/CSP
+после Nginx, обе application shells и production PWA manifest. Он не
+авторизуется, не передаёт credentials и не создаёт business data.
 
 Python integration tests автоматически запускают test-only MySQL 8.1.0 на
 loopback и удаляют одноразовую БД после прогона. В CI можно передать локальный
