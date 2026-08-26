@@ -18,7 +18,7 @@ Registration committed
 Invitation/reset producers persist an idempotent `email_deliveries` intent linked to the one-time auth record. The worker reconstructs the signed link from record id, purpose, expiry and the server-side HMAC secret; raw invitation/reset tokens are never durable delivery context.
 
 The MVP worker core treats `email_deliveries` as the durable source of truth and
-atomically leases work with PostgreSQL row locking (`FOR UPDATE SKIP LOCKED`). A
+atomically leases work with MySQL InnoDB row locking (`FOR UPDATE SKIP LOCKED`). A
 stale `sending` lease can be reclaimed, and every provider call uses the delivery
 ID as its idempotency key. Provider/SMTP transport remains an adapter: a concrete
 vendor and production credential setup are not selected in this milestone.

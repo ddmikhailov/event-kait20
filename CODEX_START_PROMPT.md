@@ -26,7 +26,7 @@ Use pnpm workspaces and Turborepo. Configure strict TypeScript, ESLint, Prettier
 - TypeScript throughout.
 - React + Vite for web applications; do not switch to Next.js.
 - NestJS API as a modular monolith; do not split into microservices.
-- PostgreSQL is the system of record.
+- MySQL 8.1.0 is the system of record (ADR-008 supersedes the original scaffold choice).
 - Prisma for database access/migrations.
 - Scanner is an installable offline-first PWA using IndexedDB/Dexie.
 - REST API, not GraphQL.

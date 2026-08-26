@@ -35,7 +35,7 @@
 ## Зафиксированные фундаментальные решения
 
 - Российское размещение: Yandex Cloud.
-- Основная БД: PostgreSQL, не Google Sheets/Яндекс Таблицы.
+- Основная БД: MySQL 8.1.0, не Google Sheets/Яндекс Таблицы.
 - Backend: NestJS modular monolith.
 - Web/Admin: React + Vite.
 - Scanner: отдельное React/Vite PWA; App Store/Google Play не являются целью проекта.

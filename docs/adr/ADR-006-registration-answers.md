@@ -3,7 +3,7 @@
 Status: **Accepted**
 
 ## Decision
-Store dynamic participant answers in `registration_answers` rather than one `registrations.custom_answers` JSONB object.
+Store dynamic participant answers in `registration_answers` rather than one `registrations.custom_answers` JSON object.
 
 ## Why
 - preserves a stable relation to each form field;

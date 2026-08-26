@@ -6,7 +6,7 @@
 
 ## Implemented
 
-- PostgreSQL 18/Prisma domain, migrations and historical constraints;
+- MySQL 8.1.0/Prisma domain, migrations and historical constraints;
 - staff auth, sessions, password reset, invitations, RBAC and EventAccess;
 - Event/form management and SUPER_ADMIN Web workspace;
 - public registration, conservative Person deduplication, capacity and tickets;
@@ -20,7 +20,7 @@
 ## Verified in the repository
 
 - full formatting, lint, typecheck, test and build suite;
-- empty-database migration on disposable PostgreSQL 18;
+- empty-database migration on disposable MySQL 8.1.0;
 - HTTP integration tests for auth, CSRF/CORS, RBAC, registration, attendance,
   Excel, reporting and email persistence;
 - Web/Scanner component and offline-storage tests;

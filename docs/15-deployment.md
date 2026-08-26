@@ -50,9 +50,9 @@ DATABASE_URL=<environment database URL> pnpm db:migrate:deploy
 ```
 
 Команда выполняется отдельным release job до rollout API. Для production перед
-ней должна существовать проверенная точка восстановления. PostgreSQL-specific
-SQL остаётся совместимым с PostgreSQL 18; staging и migration rehearsal также
-используют PostgreSQL 18.
+ней должна существовать проверенная точка восстановления. MySQL-specific
+SQL остаётся совместимым с MySQL 8.1.0; staging и migration rehearsal также
+используют MySQL 8.1.0.
 
 ## 4. Frontend
 
@@ -73,7 +73,7 @@ API image именуется immutable commit SHA, например
 ## 6. Health and smoke checks
 
 - `GET /health/live` проверяет, что процесс API отвечает, и не зависит от БД;
-- `GET /health/ready` выполняет минимальный `SELECT 1` в PostgreSQL и возвращает
+- `GET /health/ready` выполняет минимальный `SELECT 1` в MySQL и возвращает
   `503 SERVICE_UNAVAILABLE`, пока экземпляр нельзя включать в трафик;
 - `GET /health` сохранён как backward-compatible liveness endpoint;
 - после staging rollout запускается `SMOKE_BASE_URL=https://<staging-api> pnpm smoke`.

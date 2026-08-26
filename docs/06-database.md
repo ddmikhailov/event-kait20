@@ -1,4 +1,4 @@
-# 06. PostgreSQL Database Specification
+# 06. MySQL Database Specification
 
 Статус: **Approved baseline for first Prisma schema — v0.2**
 
@@ -22,17 +22,17 @@
 ## 2. Common conventions
 
 - Primary identifiers: UUID.
-- Business timestamps: `timestamptz`, persisted in UTC.
+- Business timestamps: `datetime(3)`, persisted and read in UTC.
 - Event timezone stored separately; default `Europe/Moscow`.
 - All tables with mutable records use `created_at` / `updated_at` where applicable.
 - Hard delete is avoided for business entities referenced by history.
 
-### PostgreSQL version policy
+### MySQL version policy
 
-- Production target: PostgreSQL 18.
-- Staging and integration tests must use PostgreSQL 18.
-- Patch and minor upgrades within PostgreSQL 18 are managed by the managed database service and are not an application-level compatibility target.
-- PostgreSQL-specific migrations must remain compatible with PostgreSQL 18.
+- Application compatibility target: MySQL 8.1.0 exactly.
+- Staging and integration tests must use MySQL 8.1.0 and reject a different server version.
+- MySQL-specific migrations must remain compatible with MySQL 8.1.0.
+- MySQL 8.1 is an expired Innovation release. The owner explicitly accepted this lifecycle risk; a supported production hosting option and an upgrade plan remain release gates.
 
 ## 3. `persons`
 
@@ -66,16 +66,16 @@ Do not impose global `UNIQUE(email_normalized)` or `UNIQUE(phone_normalized)`: b
 - `slug varchar not null unique`
 - `description text null`
 - `cover_object_key varchar null`
-- `start_at timestamptz not null`
-- `end_at timestamptz not null`
+- `start_at datetime(3) not null`
+- `end_at datetime(3) not null`
 - `timezone varchar not null default 'Europe/Moscow'`
 - `location varchar not null`
-- `registration_deadline timestamptz not null`
+- `registration_deadline datetime(3) not null`
 - `capacity integer not null check capacity > 0`
 - `status enum not null`
 - `created_by uuid FK staff_users(id)`
 - `offline_data_version bigint not null default 1`
-- `archived_at timestamptz null`
+- `archived_at datetime(3) null`
 - timestamps
 
 Event status: `DRAFT`, `REGISTRATION_OPEN`, `REGISTRATION_CLOSED`, `ACTIVE`, `COMPLETED`, `ARCHIVED`.
@@ -90,7 +90,7 @@ Business validation additionally requires `end_at >= start_at` and deadline rule
 - `label varchar not null`
 - `required boolean not null default false`
 - `sort_order integer not null`
-- `options jsonb null` — only option configuration, not participant answers
+- `options json null` — only option configuration, not participant answers
 - `active boolean not null default true`
 - timestamps
 
@@ -110,10 +110,10 @@ Changes after registrations are allowed but audited. Existing RegistrationAnswer
 - `consent_accepted boolean not null`
 - `consent_version varchar null`
 - `consent_url varchar null`
-- `consent_accepted_at timestamptz null`
-- `registered_at timestamptz not null`
-- `first_attended_at timestamptz null`
-- `annulled_at timestamptz null`
+- `consent_accepted_at datetime(3) null`
+- `registered_at datetime(3) not null`
+- `first_attended_at datetime(3) null`
+- `annulled_at datetime(3) null`
 - `annulled_by uuid null FK staff_users(id)`
 - timestamps
 
@@ -121,7 +121,7 @@ Sources: `PUBLIC_FORM`, `EXCEL_IMPORT`, `ONSITE`, `ADMIN_MANUAL`.
 
 Status: `ACTIVE`, `ANNULLED`.
 
-Critical constraint: partial unique index on `(event_id, person_id)` where `status = 'ACTIVE'`.
+Critical constraint: a virtual generated column is `1` only when `status = 'ACTIVE'` and `NULL` otherwise; a unique index on `(event_id, person_id, active_registration)` enforces one ACTIVE Registration while allowing multiple historical ANNULLED rows.
 
 Capacity counts only `ACTIVE` registrations.
 
@@ -132,9 +132,9 @@ Capacity counts only `ACTIVE` registrations.
 - `field_id uuid FK event_form_fields(id)`
 - `field_label_snapshot varchar not null`
 - `field_type_snapshot enum not null`
-- `answer jsonb not null`
-- `created_at timestamptz not null`
-- `updated_at timestamptz not null`
+- `answer json not null`
+- `created_at datetime(3) not null`
+- `updated_at datetime(3) not null`
 
 Constraint: `UNIQUE(registration_id, field_id)`.
 
@@ -150,11 +150,11 @@ Constraint: `UNIQUE(registration_id, field_id)`.
 - `device_id uuid null`
 - `mode enum not null`
 - `source enum not null`
-- `device_scanned_at timestamptz not null`
-- `estimated_scanned_at timestamptz not null`
-- `received_at timestamptz not null`
+- `device_scanned_at datetime(3) not null`
+- `estimated_scanned_at datetime(3) not null`
+- `received_at datetime(3) not null`
 - `duplicate boolean not null default false`
-- `created_at timestamptz not null`
+- `created_at datetime(3) not null`
 
 Modes: `MANUAL_CONFIRM`, `FAST_SCAN`, `MANUAL_SEARCH`, `ONSITE_REGISTRATION`.
 
@@ -169,8 +169,8 @@ Source may distinguish `ONLINE` and `OFFLINE_SYNC`.
 - `password_hash varchar not null`
 - `system_role enum not null`
 - `active boolean not null default true`
-- `last_login_at timestamptz null`
-- `password_changed_at timestamptz not null`
+- `last_login_at datetime(3) null`
+- `password_changed_at datetime(3) not null`
 - timestamps
 
 MVP roles: `SUPER_ADMIN`, `SCANNER`.
@@ -182,7 +182,7 @@ MVP roles: `SUPER_ADMIN`, `SCANNER`.
 - `user_id uuid FK staff_users(id)`
 - `role enum not null`
 - `created_by uuid FK staff_users(id)`
-- `created_at timestamptz not null`
+- `created_at datetime(3) not null`
 
 Constraint: `UNIQUE(event_id, user_id)`.
 
@@ -221,12 +221,12 @@ MVP types: `REGISTRATION_TICKET`, `STAFF_INVITATION`, `PASSWORD_RESET`.
 
 - `id`, `event_id`, `created_by`, status;
 - total/valid/error/duplicate rows;
-- `result_summary jsonb` containing aggregate counts only, not a second permanent copy of all PII;
+- `result_summary json` containing aggregate counts only, not a second permanent copy of all PII;
 - `expires_at`, optional `committed_at`;
 - timestamps.
 
 `import_job_files` is a technical, one-to-one, short-lived preview payload:
-`import_job_id`, `file_data bytea`, SHA-256, `created_at`, `expires_at`. It is not
+`import_job_id`, `file_data longblob`, SHA-256, `created_at`, `expires_at`. It is not
 business history: deleting an ImportJob may cascade only to this payload. The
 payload is removed immediately after commit and expires after at most 24 hours.
 No parsed participant rows are stored in `result_summary` or audit metadata.
@@ -238,8 +238,8 @@ No parsed participant rows are stored in `result_summary` or audit metadata.
 - `action varchar not null`
 - `entity_type varchar not null`
 - `entity_id uuid null`
-- `metadata jsonb null`
-- `created_at timestamptz not null`
+- `metadata json null`
+- `created_at datetime(3) not null`
 
 By default metadata contains changed field names and operational context, not full duplicated PII values.
 
@@ -257,8 +257,9 @@ Public and normal onsite registration:
 8. create/update Registration and answers;
 9. commit.
 
-The service serializes overlapping strong Person identity keys with PostgreSQL
-transaction advisory locks before matching/creating Person. This prevents two
+The service serializes overlapping strong Person identity keys with MySQL named
+locks (`GET_LOCK`/`RELEASE_LOCK`) before matching/creating Person. Locks are
+released explicitly on the same connection after commit or rollback. This prevents two
 concurrent public submissions with the same normalized name plus email, phone
 or birth date from silently creating separate Person rows. Matching remains in
 the service layer; no deduplication trigger is introduced.
@@ -277,7 +278,7 @@ SUPER_ADMIN administrative overbooking is a separate explicit action/flag and mu
 
 - `persons(email_normalized)`
 - `persons(phone_normalized)`
-- name search index strategy chosen during Prisma/PostgreSQL implementation
+- name search index strategy chosen during Prisma/MySQL implementation
 - `persons(birth_date)`
 - `registrations(event_id, status)`
 - `registrations(event_id, last_name)`
@@ -293,9 +294,9 @@ SUPER_ADMIN administrative overbooking is a separate explicit action/flag and mu
 
 ## 18. Stage 1 implementation decisions
 
-Resolved in the initial Prisma/PostgreSQL domain migration:
+Resolved in the MySQL 8.1.0 baseline migration:
 
-- exact enum identifiers are defined in `packages/database/prisma/schema.prisma` and persisted as PostgreSQL enum values;
-- the baseline Person name index is a B-tree on `(last_name, first_name, middle_name)`; no PostgreSQL extension is enabled before staging LIKE/ILIKE measurements justify it;
-- business `timestamptz` columns use millisecond precision (`timestamptz(3)`);
-- one ACTIVE Registration per `(event_id, person_id)` is enforced by the reviewed PostgreSQL partial unique index `registrations_event_id_person_id_active_key` in the SQL migration because Prisma cannot express its `WHERE status = 'ACTIVE'` predicate declaratively.
+- exact enum identifiers are defined in `packages/database/prisma/schema.prisma` and persisted as MySQL enum values;
+- the baseline Person name index is a B-tree on `(last_name, first_name, middle_name)`; no optional database extension is required;
+- business timestamp columns use UTC `datetime(3)` values;
+- one ACTIVE Registration per `(event_id, person_id)` is enforced by the reviewed generated-column unique index `registrations_event_id_person_id_active_key` because MySQL 8.1 has no partial unique indexes.

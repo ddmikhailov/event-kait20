@@ -44,7 +44,7 @@ Codex should:
 
 ## 5. Architecture changes
 
-A task must not silently replace PostgreSQL, Yandex Cloud, PWA scanner, modular monolith, React/Vite or NestJS. Architecture changes require an updated ADR and explicit owner approval.
+A task must not silently replace MySQL 8.1.0, the approved deployment direction, PWA scanner, modular monolith, React/Vite or NestJS. Architecture changes require an updated ADR and explicit owner approval.
 
 ## 6. Documentation as code
 

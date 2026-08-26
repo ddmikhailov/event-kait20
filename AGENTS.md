@@ -27,7 +27,7 @@ MVP facts that must not be silently changed:
 - Only SUPER_ADMIN creates Events.
 - QR is unique per Registration/Event and contains no plaintext PII.
 - Scanner is an installable PWA. Do not introduce App Store/Google Play release work.
-- PostgreSQL is the source of truth; spreadsheets are import/export only.
+- MySQL 8.1.0 is the source of truth; spreadsheets are import/export only.
 - Infrastructure target is Yandex Cloud.
 - Scanner offline mode is required for prepared registrations/attendance.
 - Brand-new onsite Registration is online-only in MVP.
@@ -43,7 +43,7 @@ Current stack:
 - `apps/scanner`: React + Vite PWA
 - `apps/api`: NestJS modular monolith
 - `apps/email-worker`: background email processing
-- PostgreSQL + Prisma
+- MySQL 8.1.0 + Prisma
 - shared Zod contracts
 - Dexie/IndexedDB in scanner
 - Yandex Cloud + Terraform
@@ -81,7 +81,7 @@ Preserve these in DB constraints and tests where possible:
 - All schema changes require a migration and relevant docs/contracts update.
 - Do not use destructive production migrations without an explicit migration/rollback plan.
 - Business history uses archive/annul/deactivate rather than hard delete.
-- If Prisma cannot express a required PostgreSQL invariant (e.g. partial unique index), use a reviewed SQL migration rather than dropping the invariant.
+- If Prisma cannot express a required MySQL invariant, use a reviewed SQL migration rather than dropping the invariant.
 
 ## 7. API/contracts
 

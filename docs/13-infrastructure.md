@@ -4,13 +4,13 @@
 
 ## 1. Принцип
 
-Основная инфраструктура размещается в Yandex Cloud. PostgreSQL — источник истины.
+Целевое российское размещение сохраняется, MySQL 8.1.0 — источник истины. Провайдер базы должен быть утверждён отдельно: совместимость с точной устаревшей версией 8.1.0 нельзя предполагать у managed-сервисов.
 
 ## 2. Компоненты
 
 Предварительно:
 
-- Managed PostgreSQL;
+- изолированный MySQL 8.1.0 service;
 - Serverless Containers / подходящий container runtime для API;
 - отдельный email worker;
 - Object Storage;
@@ -21,17 +21,17 @@
 - Certificate Manager/CDN после появления домена;
 - Terraform.
 
-### PostgreSQL version policy
+### MySQL version policy
 
-- Production target: PostgreSQL 18.
-- Staging and integration tests must use PostgreSQL 18.
-- Patch and minor upgrades within PostgreSQL 18 are managed by the managed database service and are not an application-level compatibility target.
-- PostgreSQL-specific migrations must remain compatible with PostgreSQL 18.
-- Embedded PostgreSQL distributions are test-only tooling and must not be included in runtime or production dependencies or deployments.
+- Application production target: MySQL 8.1.0 exactly.
+- Staging and integration tests must use MySQL 8.1.0.
+- MySQL-specific migrations must remain compatible with MySQL 8.1.0.
+- MySQL 8.1 is an expired Innovation release. A security-maintained hosting approach and approved upgrade path are mandatory production gates.
+- The downloaded MySQL archive is test-only tooling and is cached outside the repository; it must not be included in application runtime dependencies or images.
 
 ## 3. Network
 
-PostgreSQL не публикуется как клиентский endpoint. API получает доступ в контролируемой сети.
+MySQL не публикуется как клиентский endpoint. API получает доступ в контролируемой сети.
 
 ## 4. Secrets
 
@@ -65,6 +65,7 @@ retention/RPO/RTO утверждаются вместе с оплачиваем�
 - домены/DNS;
 - SMTP provider;
 - monitoring alerts;
-- exact deployment topology после proof-of-concept Serverless Containers + PostgreSQL connectivity;
+- exact deployment topology после proof-of-concept application runtime + MySQL 8.1.0 connectivity;
+- production hosting decision for unsupported MySQL 8.1.0 and a supported-version upgrade plan;
 - outbox/idempotent queue publication implementation choice for email delivery.
 - подтверждённый restore drill на созданном staging-окружении.

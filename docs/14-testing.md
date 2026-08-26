@@ -29,11 +29,11 @@ Tests must prove:
 - XLSX row mapping/sanitization;
 - offline clock/duplicate resolution.
 
-## 3. Integration tests — real PostgreSQL
+## 3. Integration tests — real MySQL 8.1.0
 
 - registration transaction;
 - capacity race with parallel requests;
-- partial unique active-registration constraint;
+- generated-column unique active-registration constraint;
 - annulment/re-registration;
 - RegistrationAnswer persistence;
 - session/invitation/reset token lifecycle;
@@ -93,7 +93,7 @@ raw tokens, in-memory CSRF propagation and Event-scoped access routes. Browser
 smoke checks cover the staff directory and access manager at desktop and mobile
 widths using synthetic accounts only.
 
-Excel coverage uses real PostgreSQL 18 and proves empty-database migration,
+Excel coverage uses real MySQL 8.1.0 and proves empty-database migration,
 preview without business writes, aggregate-only `result_summary`, source-file
 deletion after commit, one-time commit, capacity recheck, SUPER_ADMIN-only
 authorization, `EXCEL_IMPORT` persistence and formula-safe export. Parser unit
@@ -158,5 +158,5 @@ A feature is not complete until:
 CI executes the full repository validation suite and builds the API container.
 After every staging rollout, unauthenticated smoke checks must pass against
 `/health/live` and `/health/ready`. A production promotion additionally requires
-a PostgreSQL 18 migration rehearsal, a current recovery point and the applicable
+a MySQL 8.1.0 migration rehearsal, a current recovery point and the applicable
 browser/device E2E checks from this document.

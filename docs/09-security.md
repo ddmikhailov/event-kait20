@@ -97,7 +97,7 @@ download, resolve or sync for the Event.
 
 ## 9. Database/network
 
-- PostgreSQL not publicly exposed to client apps.
+- MySQL not publicly exposed to client apps.
 - API/worker use least-privilege service accounts/connectivity.
 - TLS for service connections where supported/required.
 - DB migrations run with controlled credentials separate from runtime when practical.
@@ -151,7 +151,7 @@ Audit log records significant admin actions but should store field names/compact
 - exports escape cells that could become spreadsheet formulas (`=`, `+`, `-`, `@` prefixes) when data is user-controlled;
 - temporary import object retention is short and access private.
 
-The MVP preview payload is private PostgreSQL `bytea`, not an application log
+The MVP preview payload is private MySQL `longblob`, not an application log
 or aggregate result. It expires after at most 24 hours and is deleted
 immediately after commit. Only SUPER_ADMIN endpoints can preview, commit, or
 export. `.xlsm`, multiple worksheets, merged cells and formula cells are not

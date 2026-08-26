@@ -9,7 +9,7 @@ Review Documentation v0.1 for contradictions and unresolved implementation block
 ## Decisions closed
 
 ### 1. Dynamic answers
-Changed from ambiguous `registrations.custom_answers JSONB` vs separate entity to explicit `registration_answers` table. Each answer stores field label/type snapshot plus typed JSON value.
+Changed from ambiguous `registrations.custom_answers JSON` vs separate entity to explicit `registration_answers` table. Each answer stores field label/type snapshot plus typed JSON value.
 
 ### 2. Capacity
 Only ACTIVE Registration counts. ANNULLED frees capacity. Normal public/onsite operations cannot exceed capacity. Only SUPER_ADMIN may explicitly overbook; SCANNER cannot.

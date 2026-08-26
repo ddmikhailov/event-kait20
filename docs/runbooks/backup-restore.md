@@ -4,13 +4,13 @@
 
 ## Purpose and safety boundary
 
-PostgreSQL 18 в Yandex Managed Service остаётся source of truth. Production
-использует managed daily backups и point-in-time recovery в пределах
-утверждённого retention. До первого production запуска владелец утверждает RPO,
-RTO, retention и ответственного за recovery.
+MySQL 8.1.0 остаётся source of truth. Production должна использовать ежедневные
+зашифрованные backups и, если выбранный сервис поддерживает, point-in-time
+recovery в пределах утверждённого retention. До первого production запуска
+владелец утверждает провайдера, RPO, RTO, retention и ответственного за recovery.
 
 Восстановление никогда не выполняется поверх действующей production БД. Сначала
-создаётся новый изолированный PostgreSQL 18 cluster/database, проверяется
+создаётся новый изолированный MySQL 8.1.0 instance/database, проверяется
 целостность, затем отдельно принимается решение о переключении приложения.
 
 ## Before a production migration
@@ -28,8 +28,8 @@ backup. Connection strings поступают только из secret manager/�
 защищённого окружения и не записываются в shell history или репозиторий.
 
 ```text
-pg_dump --format=custom --no-owner --no-acl --file=<protected-path> <source-url>
-pg_restore --list <protected-path>
+mysqldump --single-transaction --routines --triggers --result-file=<protected-path> <database>
+mysql --database=<isolated-target> --execute="SHOW TABLES"
 ```
 
 Backup содержит персональные данные. Он хранится зашифрованно, с минимальным
@@ -37,11 +37,11 @@ Backup содержит персональные данные. Он хранит
 
 ## Restore rehearsal
 
-1. Создать пустую изолированную PostgreSQL 18 database с отдельными credentials.
+1. Создать пустую изолированную MySQL 8.1.0 database с отдельными credentials.
 2. Восстановить backup только в неё:
 
 ```text
-pg_restore --exit-on-error --no-owner --no-acl --dbname=<new-target-url> <protected-path>
+mysql --database=<isolated-target> < <protected-path>
 ```
 
 3. Выполнить schema/migration inspection и read-only проверки количества Events,
@@ -55,7 +55,7 @@ pg_restore --exit-on-error --no-owner --no-acl --dbname=<new-target-url> <protec
 ## Production recovery
 
 При инциденте сначала остановить business writes либо вывести API из трафика.
-Определить recovery point, восстановить новый cluster/database и провести
+Определить recovery point, восстановить новый instance/database и провести
 проверки из rehearsal. Переключение connection secret и возврат трафика требуют
 явного решения ответственного. Старую БД не удалять до завершения расследования
 и подтверждения целостности новой среды.

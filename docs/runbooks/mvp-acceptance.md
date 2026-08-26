@@ -5,7 +5,7 @@
 ## Purpose
 
 Этот прогон проверяет собранный MVP как единый продукт, а не повторяет unit и
-integration tests. Он выполняется сначала на одноразовой локальной PostgreSQL 18,
+integration tests. Он выполняется сначала на одноразовой локальной MySQL 8.1.0,
 затем на staging с теми же immutable artifacts, которые предлагаются к
 production promotion.
 
@@ -15,7 +15,7 @@ production promotion.
 ## Automated gates
 
 1. Зафиксировать release commit SHA и дождаться зелёного GitHub CI.
-2. Применить migrations к пустой PostgreSQL 18.
+2. Применить migrations к пустой MySQL 8.1.0.
 3. Выполнить из корня репозитория:
 
 ```text
@@ -36,10 +36,10 @@ SMOKE_SCANNER_BASE_URL=https://<scanner> \
 pnpm smoke:mvp
 ```
 
-Smoke проверяет readiness PostgreSQL, обе application shells и production PWA
+Smoke проверяет readiness MySQL, обе application shells и production PWA
 manifest. Он не авторизуется и не создаёт business data.
 
-Для локального расследования можно запустить test-only PostgreSQL 18 командой
+Для локального расследования можно запустить test-only MySQL 8.1.0 командой
 `pnpm --filter @event-registration/database acceptance:db`. Она создаёт
 одноразовую БД на loopback, печатает временный connection string и удаляет данные
 после остановки. Этот пакет не входит в runtime/production dependencies.

@@ -115,7 +115,7 @@ No distributed locking between phones.
 
 If two devices scan the same participant while disconnected, both local events can exist. Server accepts idempotent client event IDs and determines first valid attendance. Later event is marked repeated/duplicate but retained according to attendance/audit policy.
 
-The first item accepted under a PostgreSQL Registration row lock becomes the
+The first item accepted under a MySQL InnoDB Registration row lock becomes the
 primary attendance and its estimated time is retained. Later-arriving events,
 even with an earlier device timestamp, remain diagnostic duplicates and do not
 rewrite `first_attended_at`.

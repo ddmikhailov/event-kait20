@@ -52,7 +52,7 @@ NestJS backend.
 
 ```text
 Public/Admin Web ─┐
-Scanner PWA ──────┼── HTTPS ──> NestJS API ──> PostgreSQL
+Scanner PWA ──────┼── HTTPS ──> NestJS API ──> MySQL 8.1.0
                   │                  │
                   │                  ├──> Object Storage
                   │                  └──> Message Queue ──> Email Worker ──> SMTP/API
@@ -71,7 +71,7 @@ Scanner PWA ──────┼── HTTPS ──> NestJS API ──> Postgre
 - Tailwind CSS + собственная design system;
 - NestJS;
 - Zod;
-- PostgreSQL;
+- MySQL 8.1.0;
 - Prisma;
 - Dexie/IndexedDB;
 - TanStack Query;
@@ -84,7 +84,7 @@ Scanner PWA ──────┼── HTTPS ──> NestJS API ──> Postgre
 
 ## 5. Backend доступ к БД
 
-Frontend и Scanner не получают прямой доступ к PostgreSQL. Вся работа идёт через API и server-side authorization.
+Frontend и Scanner не получают прямой доступ к MySQL. Вся работа идёт через API и server-side authorization.
 
 ## 6. Staging и Production
 
