@@ -29,6 +29,7 @@ export default defineConfig({
     url: 'http://127.0.0.1:5173/events/demo-event',
     reuseExistingServer: false,
     timeout: 120_000,
+    gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
     env: { DEMO_PRINT_CREDENTIALS: 'false' },
   },
 });
