@@ -9,7 +9,7 @@ server {
   listen 443 ssl http2;
   listen [::]:443 ssl http2;
   server_name __WEB_DOMAIN__;
-  root /var/www/event-registration/web;
+  root /opt/event-registration/current/apps/web/dist;
   index index.html;
   server_tokens off;
 
@@ -31,7 +31,7 @@ server {
   listen 443 ssl http2;
   listen [::]:443 ssl http2;
   server_name __SCANNER_DOMAIN__;
-  root /var/www/event-registration/scanner;
+  root /opt/event-registration/current/apps/scanner/dist;
   index index.html;
   server_tokens off;
 

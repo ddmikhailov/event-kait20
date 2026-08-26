@@ -57,6 +57,15 @@ API и worker работают как изолированные systemd-слу�
 Nginx, а MySQL 8.1.0 слушает только loopback. Пошаговая инструкция:
 `docs/15-deployment.md`.
 
+Конфигурация проверяется и безопасно преобразуется в готовые шаблоны командами:
+
+    pnpm deploy:check -- --env /etc/event-registration/event-registration.env --check-files
+    pnpm deploy:render -- --env /etc/event-registration/event-registration.env --output /root/event-registration-rendered --check-files
+
+Нативные скрипты поддерживают первичную установку шаблонов, неизменяемые релизы
+по полному Git SHA, атомарный rollback application-кода и ежедневные потоковые
+зашифрованные backup. Они не устанавливают Docker и не обновляют MySQL.
+
 Перед включением реальных участников организация обязана предоставить домены,
 TLS, юридически утверждённую ссылку согласия, SMTP-доступ, резервное копирование
 и мониторинг.

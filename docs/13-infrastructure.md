@@ -28,8 +28,10 @@ Internet
   `event-registration`;
 - MySQL запускается от отдельного пользователя `mysql`;
 - systemd включает restart и filesystem/kernel hardening;
-- Web/Scanner являются read-only static artifacts под `/var/www`;
-- secrets находятся в root-owned env-файле с mode `0600`;
+- релизы неизменяемы и хранятся под `/opt/event-registration/releases/<SHA>`,
+  а `current` переключается атомарно;
+- Web/Scanner являются read-only static artifacts текущего релиза;
+- secrets находятся в root-owned env-файлах с mode `0640` или строже;
 - Nginx раздаёт CSP, HSTS, MIME, frame, referrer и cache policy;
 - demo seed и локальные credentials не переносятся на сервер.
 
@@ -54,7 +56,10 @@ root credential не находится в application environment.
 
 - liveness и readiness доступны на API;
 - MySQL data находится в `/var/lib/mysql-8.1`, не в каталоге приложения;
-- ежедневный encrypted backup выносится за пределы VM;
+- отдельный непривилегированный `event-backup` ежедневно создаёт потоковый
+  encrypted age backup без промежуточного plaintext SQL;
+- SHA-256 проверяет локальную целостность, а encrypted backup обязательно
+  выносится за пределы VM;
 - перед каждой миграцией создаётся и проверяется recovery point;
 - monitoring контролирует доступность systemd units, свободное место, ошибки
   API/worker, очередь FAILED/QUEUED email и срок TLS-сертификатов;

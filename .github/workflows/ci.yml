@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes libaio1t64 libnuma1
+          sudo apt-get install --yes age libaio1t64 libnuma1 nginx shellcheck
           archive="$RUNNER_TEMP/mysql-community-server-core.deb"
           curl --fail --location --retry 3 \
             https://cdn.mysql.com/archives/mysql-8.1/mysql-community-server-core_8.1.0-1ubuntu22.04_amd64.deb \
@@ -47,3 +47,24 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: Validate native deployment scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n deploy/bin/*.sh
+          shellcheck deploy/bin/*.sh
+          runtime="$RUNNER_TEMP/native-deploy"
+          mkdir -p "$runtime"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj '/CN=web.ci.invalid' \
+            -keyout "$runtime/key.pem" -out "$runtime/cert.pem"
+          node scripts/verify-native-deploy.mjs \
+            --output "$runtime/rendered" \
+            --certificate "$runtime/cert.pem" \
+            --certificate-key "$runtime/key.pem"
+          sudo install -m 0644 "$runtime/rendered/nginx/event-registration-web-security.conf" /etc/nginx/snippets/
+          sudo install -m 0644 "$runtime/rendered/nginx/event-registration-scanner-security.conf" /etc/nginx/snippets/
+          sudo install -m 0644 "$runtime/rendered/nginx/event-registration.conf" /etc/nginx/conf.d/
+          sudo rm -f /etc/nginx/sites-enabled/default
+          sudo nginx -t
+          deploy/bin/install-native.sh --rendered-dir "$runtime/rendered" --dry-run

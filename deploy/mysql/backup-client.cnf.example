@@ -1,0 +1,8 @@
+# Install as /etc/event-registration/mysql-backup.cnf, owned by
+# event-backup:event-backup, mode 0400. Replace the password.
+[client]
+user=event_backup
+password=replace-with-dedicated-backup-password
+host=127.0.0.1
+port=3306
+protocol=TCP
