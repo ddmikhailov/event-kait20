@@ -44,6 +44,7 @@ Production-совместимость: **Python 3.12, Node.js 24, MySQL 8.1.0**
     pnpm typecheck
     pnpm test
     pnpm build
+    pnpm test:e2e
     pnpm audit:dependencies
 
 Python-тесты используют реальную одноразовую MySQL 8.1.0. Процедура приёмки:

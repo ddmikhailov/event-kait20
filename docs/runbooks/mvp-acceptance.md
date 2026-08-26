@@ -25,7 +25,14 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:e2e
 ```
+
+Browser E2E поднимает нативный локальный контур без Docker на MySQL 8.1.0 и
+проверяет public registration → ticket, видимость участника администратору,
+online scan, offline persistence после reload, reconnect/sync, mobile overflow и
+critical/serious accessibility violations. Демо-реквизиты генерируются локально,
+не выводятся в CI и не сохраняются в Git.
 
 4. После deployment API, Web и Scanner выполнить:
 

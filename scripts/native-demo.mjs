@@ -460,12 +460,14 @@ const start = async () => {
   console.log('Web/Admin: http://localhost:5173');
   console.log('Scanner:   http://localhost:5174');
   console.log('API:       http://localhost:3000/health/ready');
-  console.log(
-    `Admin:     ${values.DEMO_ADMIN_EMAIL} / ${values.DEMO_ADMIN_PASSWORD}`,
-  );
-  console.log(
-    `Scanner:   ${values.DEMO_SCANNER_EMAIL} / ${values.DEMO_SCANNER_PASSWORD}`,
-  );
+  if (process.env.DEMO_PRINT_CREDENTIALS !== 'false') {
+    console.log(
+      `Admin:     ${values.DEMO_ADMIN_EMAIL} / ${values.DEMO_ADMIN_PASSWORD}`,
+    );
+    console.log(
+      `Scanner:   ${values.DEMO_SCANNER_EMAIL} / ${values.DEMO_SCANNER_PASSWORD}`,
+    );
+  }
   console.log('\nKeep this terminal open. Press Ctrl+C to stop the demo.');
 };
 

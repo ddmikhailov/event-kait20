@@ -38,8 +38,8 @@
 
 ## Этап 2. Release-readiness отчёт и security regression
 
-Приоритет: **критический**. Статус: **release-readiness завершён, security
-regression расширяется; реальные evidence заполняются после staging-проверок**.
+Приоритет: **критический**. Статус: **автоматизация завершена; реальные evidence
+заполняются после staging-проверок**.
 
 - сформировать единый отчёт с commit SHA, CI run, migration list, временем,
   средой и результатами обязательных gates;
@@ -55,7 +55,9 @@ regression расширяется; реальные evidence заполняют�
 
 ## Этап 3. Браузерный E2E и доступность
 
-Приоритет: **высокий**.
+Приоритет: **высокий**. Статус: **Chromium E2E, offline reload/reconnect,
+mobile layout и автоматический accessibility-аудит работают локально и в CI;
+физические Chrome/Edge и Android-проверки ожидают staging**.
 
 - public registration → ticket;
 - admin login → Event/form/participant lifecycle;

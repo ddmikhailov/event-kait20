@@ -24,6 +24,8 @@ yarn-error.log*
 .demo.env
 deploy/native.env
 deploy/release-evidence.json
+playwright-report/
+test-results/
 .runtime/
 
 # Terraform local state, plans, overrides and variable values

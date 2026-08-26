@@ -67,12 +67,14 @@ def main() -> None:
                     'Локальный контур со всеми возможностями MVP',:start,:end,
                     'Europe/Moscow','КАИТ №20',:deadline,100,'REGISTRATION_OPEN',
                     :admin,1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
-            ON DUPLICATE KEY UPDATE status='REGISTRATION_OPEN',updated_at=UTC_TIMESTAMP(3)"""),
+            ON DUPLICATE KEY UPDATE start_at=VALUES(start_at),end_at=VALUES(end_at),
+              registration_deadline=VALUES(registration_deadline),
+              status='REGISTRATION_OPEN',updated_at=UTC_TIMESTAMP(3)"""),
             {
                 "id": event_id,
-                "start": now + timedelta(days=7),
-                "end": now + timedelta(days=7, hours=4),
-                "deadline": now + timedelta(days=6),
+                "start": now + timedelta(hours=1),
+                "end": now + timedelta(hours=5),
+                "deadline": now + timedelta(minutes=30),
                 "admin": admin_id,
             },
         )

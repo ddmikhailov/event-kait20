@@ -11,10 +11,11 @@
     "dev": "turbo run dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "turbo run lint && node scripts/python.mjs -m ruff check backend",
+    "lint": "turbo run lint && eslint e2e playwright.config.ts && node scripts/python.mjs -m ruff check backend",
     "db:migrate:deploy": "node scripts/python.mjs -m event_api.migrate",
     "smoke": "node scripts/smoke.mjs",
     "smoke:mvp": "node scripts/mvp-smoke.mjs",
+    "test:e2e": "playwright test",
     "test": "turbo run test && node scripts/python.mjs -m pytest backend/tests && node --test scripts/deploy-config.test.mjs scripts/mvp-smoke.test.mjs scripts/release-readiness.test.mjs",
     "typecheck": "turbo run typecheck && node scripts/python.mjs -m mypy backend/src/event_api",
     "audit:dependencies": "pnpm audit --prod --audit-level high && node scripts/python.mjs -m pip_audit",
@@ -30,7 +31,9 @@
     "demo:reset": "node scripts/native-demo.mjs reset"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.11.1",
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.58.2",
     "@types/node": "26.2.0",
     "eslint": "10.9.0",
     "prettier": "3.9.6",
