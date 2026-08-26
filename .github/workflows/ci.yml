@@ -37,13 +37,19 @@ jobs:
             sudo ln --symbolic /usr/lib/x86_64-linux-gnu/libaio.so.1t64 \
               /usr/lib/x86_64-linux-gnu/libaio.so.1
           fi
-          archive="$RUNNER_TEMP/mysql-community-server-core.deb"
+          server_archive="$RUNNER_TEMP/mysql-community-server-core.deb"
+          client_archive="$RUNNER_TEMP/mysql-community-client-core.deb"
           curl --fail --location --retry 3 \
             https://cdn.mysql.com/archives/mysql-8.1/mysql-community-server-core_8.1.0-1ubuntu22.04_amd64.deb \
-            --output "$archive"
-          echo "fda27497acbb2deb2b422c13a6466d9e9c5745a3b4446f13319c2bd3368b41d0  $archive" | sha256sum --check --strict
+            --output "$server_archive"
+          curl --fail --location --retry 3 \
+            https://cdn.mysql.com/archives/mysql-8.1/mysql-community-client-core_8.1.0-1ubuntu22.04_amd64.deb \
+            --output "$client_archive"
+          echo "fda27497acbb2deb2b422c13a6466d9e9c5745a3b4446f13319c2bd3368b41d0  $server_archive" | sha256sum --check --strict
+          echo "571a4805a33cc4c9f66677f7f280f39d6eb3ccfff8e57f7a494f6f3fb85a7020  $client_archive" | sha256sum --check --strict
           mkdir -p "$RUNNER_TEMP/mysql-8.1.0"
-          dpkg-deb --extract "$archive" "$RUNNER_TEMP/mysql-8.1.0"
+          dpkg-deb --extract "$server_archive" "$RUNNER_TEMP/mysql-8.1.0"
+          dpkg-deb --extract "$client_archive" "$RUNNER_TEMP/mysql-8.1.0"
           echo "MYSQL_HOME=$RUNNER_TEMP/mysql-8.1.0/usr" >> "$GITHUB_ENV"
           "$RUNNER_TEMP/mysql-8.1.0/usr/sbin/mysqld" --version | grep --fixed-strings 'Ver 8.1.0'
       - run: python -m pip install -e 'backend[dev]'
