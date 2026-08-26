@@ -256,6 +256,15 @@ const waitForMysql = async (mysql, values) => {
 const startMysql = async (mysql, values) => {
   mkdirSync(runtime, { recursive: true });
   const fresh = !existsSync(join(dataDirectory, 'mysql'));
+  const layoutOptions = [];
+  const messages = join(mysql.home, 'share', 'mysql-8.1');
+  const plugins = join(mysql.home, 'lib', 'mysql', 'plugin');
+  if (existsSync(messages)) layoutOptions.push(`--lc-messages-dir=${messages}`);
+  if (existsSync(plugins)) layoutOptions.push(`--plugin-dir=${plugins}`);
+  const platformOptions =
+    process.platform === 'win32'
+      ? []
+      : [`--socket=${join(runtime, 'mysql.sock')}`];
   if (fresh) {
     mkdirSync(dataDirectory, { recursive: true });
     run(
@@ -264,6 +273,7 @@ const startMysql = async (mysql, values) => {
         '--no-defaults',
         `--basedir=${mysql.home}`,
         `--datadir=${dataDirectory}`,
+        ...layoutOptions,
         '--initialize-insecure',
         '--console',
       ],
@@ -296,6 +306,8 @@ const startMysql = async (mysql, values) => {
       '--no-defaults',
       `--basedir=${mysql.home}`,
       `--datadir=${dataDirectory}`,
+      ...layoutOptions,
+      ...platformOptions,
       `--port=${mysqlPort}`,
       '--bind-address=127.0.0.1',
       '--mysqlx=0',
