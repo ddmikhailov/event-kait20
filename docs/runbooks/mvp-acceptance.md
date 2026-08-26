@@ -94,3 +94,7 @@ loopback и удаляют одноразовую БД после прогона
 отклонений. Production promotion запрещён при незавершённых пунктах email,
 offline/device, backup restore rehearsal, legal consent URL, domain/TLS или
 security review. Waiver для критических security/data invariants не допускается.
+
+После завершения проверок сформировать `.runtime/release-readiness.json` по
+`docs/runbooks/release-decision.md`. Статус `READY` является обязательным, но не
+заменяет явного решения ответственного за production promotion.

@@ -27,6 +27,7 @@ from ..service_utils import db_json
 router = APIRouter(prefix="/admin/events", tags=["excel"])
 MAX_FILE = 5 * 1024 * 1024
 MAX_ROWS = 5_000
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 HEADERS = {
     "lastName": "Фамилия",
     "firstName": "Имя",
@@ -45,6 +46,12 @@ def _safe(value: Any) -> Any:
         return value
     value = ILLEGAL_CHARACTERS_RE.sub("", value)
     return f"'{value}" if value.startswith(("=", "+", "-", "@")) else value
+
+
+def _validate_upload(file: UploadFile) -> None:
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx") or file.content_type != XLSX_MIME:
+        raise ApiError(400, "VALIDATION_ERROR", "Only an XLSX file is accepted")
 
 
 def _mapping(headers: list[str], supplied: str | None) -> dict[str, Any]:
@@ -228,6 +235,7 @@ async def preview(
     db: Annotated[Database, Depends(database)],
     mapping: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
+    _validate_upload(file)
     source = await file.read(MAX_FILE + 1)
     headers, resolved, parsed = _parse(source, mapping)
     expires = datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=24)

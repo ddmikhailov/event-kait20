@@ -38,7 +38,8 @@
 
 ## Этап 2. Release-readiness отчёт и security regression
 
-Приоритет: **критический**.
+Приоритет: **критический**. Статус: **release-readiness завершён, security
+regression расширяется; реальные evidence заполняются после staging-проверок**.
 
 - сформировать единый отчёт с commit SHA, CI run, migration list, временем,
   средой и результатами обязательных gates;

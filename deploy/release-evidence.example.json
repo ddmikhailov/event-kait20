@@ -1,0 +1,21 @@
+{
+  "releaseCommit": "0000000000000000000000000000000000000000",
+  "environment": "production",
+  "gates": {
+    "ci": { "passed": false, "evidence": "GitHub Actions run URL" },
+    "legalConsent": { "passed": false, "evidence": "approval record ID" },
+    "mysqlRisk": { "passed": false, "evidence": "risk acceptance record ID" },
+    "backupRestore": { "passed": false, "evidence": "restore drill record ID" },
+    "smtpDelivery": { "passed": false, "evidence": "staging test record ID" },
+    "deviceE2e": { "passed": false, "evidence": "device test record ID" },
+    "securityReview": {
+      "passed": false,
+      "evidence": "security review record ID"
+    },
+    "rollbackRehearsal": {
+      "passed": false,
+      "evidence": "rollback drill record ID"
+    },
+    "monitoringAlerts": { "passed": false, "evidence": "alert test record ID" }
+  }
+}

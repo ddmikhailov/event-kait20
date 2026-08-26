@@ -87,4 +87,5 @@ MySQL 8.1.0 оставлена точной целью по требованию
 - `docs/15-deployment.md` — перенос на сервер и релиз;
 - `docs/19-mvp-release-status.md` — фактический состав релиза;
 - `docs/20-release-improvement-plan.md` — план оставшихся release-gates;
+- `docs/runbooks/release-decision.md` — итоговый отчёт готовности к выпуску;
 - `docs/adr/` — принятые архитектурные решения.
