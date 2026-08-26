@@ -17,10 +17,6 @@
     "test": {
       "dependsOn": ["^build"]
     },
-    "@event-registration/database#test": {
-      "cache": false,
-      "dependsOn": ["^build"]
-    },
     "typecheck": {
       "dependsOn": ["^typecheck"]
     }

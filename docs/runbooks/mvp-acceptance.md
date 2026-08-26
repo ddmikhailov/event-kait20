@@ -39,10 +39,9 @@ pnpm smoke:mvp
 Smoke проверяет readiness MySQL, обе application shells и production PWA
 manifest. Он не авторизуется и не создаёт business data.
 
-Для локального расследования можно запустить test-only MySQL 8.1.0 командой
-`pnpm --filter @event-registration/database acceptance:db`. Она создаёт
-одноразовую БД на loopback, печатает временный connection string и удаляет данные
-после остановки. Этот пакет не входит в runtime/production dependencies.
+Python integration tests автоматически запускают test-only MySQL 8.1.0 на
+loopback и удаляют одноразовую БД после прогона. В CI можно передать локальный
+`TEST_DATABASE_URL`; production credentials для этого не используются.
 
 ## Staging user journeys
 

@@ -1,12 +1,12 @@
 # 19. MVP release status
 
-Дата среза: **24 августа 2026**
+Дата среза: **26 августа 2026**
 
 Статус: **Release candidate engineering baseline; external production gates open**
 
 ## Implemented
 
-- MySQL 8.1.0/Prisma domain, migrations and historical constraints;
+- Python 3.12/FastAPI backend with MySQL 8.1.0 SQLAlchemy persistence, migrations and historical constraints;
 - staff auth, sessions, password reset, invitations, RBAC and EventAccess;
 - Event/form management and SUPER_ADMIN Web workspace;
 - public registration, conservative Person deduplication, capacity and tickets;

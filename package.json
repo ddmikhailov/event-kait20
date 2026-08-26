@@ -7,16 +7,19 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "turbo run build",
+    "build": "turbo run build && node scripts/python.mjs -m compileall -q backend/src",
     "dev": "turbo run dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "turbo run lint",
-    "db:migrate:deploy": "pnpm --filter @event-registration/database exec prisma migrate deploy",
+    "lint": "turbo run lint && node scripts/python.mjs -m ruff check backend",
+    "db:migrate:deploy": "node scripts/python.mjs -m event_api.migrate",
     "smoke": "node scripts/smoke.mjs",
     "smoke:mvp": "node scripts/mvp-smoke.mjs",
-    "test": "turbo run test --filter=!@event-registration/database && pnpm --dir packages/database run test",
-    "typecheck": "turbo run typecheck"
+    "test": "turbo run test && node scripts/python.mjs -m pytest backend/tests",
+    "typecheck": "turbo run typecheck && node scripts/python.mjs -m mypy backend/src/event_api",
+    "backend:install": "node scripts/python.mjs -m pip install -e backend[dev]",
+    "backend:dev": "node scripts/python.mjs -m uvicorn event_api.main:app --reload --host 127.0.0.1 --port 3000",
+    "backend:format": "node scripts/python.mjs -m ruff format backend"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

@@ -30,8 +30,8 @@ React + Vite.
 
 Причина разделения — собственный service worker, offline storage, lifecycle камеры и синхронизация.
 
-### `apps/api`
-NestJS backend.
+### `backend`
+Python 3.12 + FastAPI backend.
 
 Модули:
 - auth;
@@ -45,14 +45,14 @@ NestJS backend.
 - statistics;
 - audit.
 
-### `apps/email-worker`
-Получает задачи отправки писем из очереди.
+### `backend/src/event_api/email_worker.py`
+Обрабатывает durable email-delivery intents. Подключение реального провайдера остаётся production gate.
 
 ## 3. Общая схема
 
 ```text
 Public/Admin Web ─┐
-Scanner PWA ──────┼── HTTPS ──> NestJS API ──> MySQL 8.1.0
+Scanner PWA ──────┼── HTTPS ──> FastAPI ─────> MySQL 8.1.0
                   │                  │
                   │                  ├──> Object Storage
                   │                  └──> Message Queue ──> Email Worker ──> SMTP/API
@@ -64,15 +64,16 @@ Scanner PWA ──────┼── HTTPS ──> NestJS API ──> MySQL 8
 
 Предварительно зафиксирован:
 
-- TypeScript;
+- Python 3.12 для backend;
+- TypeScript для Web/Scanner;
 - pnpm workspaces;
 - Turborepo;
 - React + Vite;
 - Tailwind CSS + собственная design system;
-- NestJS;
-- Zod;
+- FastAPI + Pydantic 2;
+- Zod в клиентских контрактах;
 - MySQL 8.1.0;
-- Prisma;
+- SQLAlchemy 2 + PyMySQL;
 - Dexie/IndexedDB;
 - TanStack Query;
 - React Hook Form;
@@ -80,7 +81,7 @@ Scanner PWA ──────┼── HTTPS ──> NestJS API ──> MySQL 8
 - GitHub Actions;
 - Yandex Cloud.
 
-Версии пакетов фиксируются lockfile и обновляются только контролируемо. Shared Zod request/response schemas живут в `packages/contracts`; API и клиенты не поддерживают параллельные самодельные типы одного контракта.
+Версии Node-пакетов фиксируются lockfile, Python-зависимости — точными версиями в `backend/pyproject.toml`. Shared Zod schemas в `packages/contracts` обслуживают Web/Scanner, а эквивалентная server-side проверка публичной границы выполняется Pydantic-моделями.
 
 ## 5. Backend доступ к БД
 

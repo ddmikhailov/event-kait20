@@ -364,4 +364,4 @@ HTTP status is meaningful but client behavior keys off stable code.
 
 ## 16. Contract implementation rule
 
-Before implementing an endpoint, create its Zod request/response schema in `packages/contracts` and API tests for success + authorization + key business errors. The TypeScript contract is allowed to add exact field names, but may not change product semantics in this document without updating docs/ADR.
+Before implementing an endpoint, update the Pydantic API boundary and the matching client Zod schema in `packages/contracts`, then add tests for success, authorization and key business errors. Exact field names may not change product semantics in this document without updating docs/ADR.

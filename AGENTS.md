@@ -38,12 +38,12 @@ MVP facts that must not be silently changed:
 
 Current stack:
 
-- TypeScript monorepo, pnpm workspaces + Turborepo
+- Python 3.12 backend plus TypeScript frontend workspaces
 - `apps/web`: React + Vite
 - `apps/scanner`: React + Vite PWA
-- `apps/api`: NestJS modular monolith
-- `apps/email-worker`: background email processing
-- MySQL 8.1.0 + Prisma
+- `backend`: FastAPI modular monolith and background email worker
+- SQLAlchemy 2 with reviewed SQL migrations
+- MySQL 8.1.0
 - shared Zod contracts
 - Dexie/IndexedDB in scanner
 - Yandex Cloud + Terraform
@@ -81,7 +81,7 @@ Preserve these in DB constraints and tests where possible:
 - All schema changes require a migration and relevant docs/contracts update.
 - Do not use destructive production migrations without an explicit migration/rollback plan.
 - Business history uses archive/annul/deactivate rather than hard delete.
-- If Prisma cannot express a required MySQL invariant, use a reviewed SQL migration rather than dropping the invariant.
+- Preserve required MySQL invariants in reviewed SQL migrations.
 
 ## 7. API/contracts
 

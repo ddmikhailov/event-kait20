@@ -11,7 +11,7 @@ MySQL 8.1.0 — Innovation release с завершённым жизненным 
 ## Decision
 
 - MySQL 8.1.0 является единственной основной БД приложения.
-- Prisma использует connector `mysql`; runtime SQL выполняется через `mysql2`.
+- Python runtime использует SQLAlchemy 2 и PyMySQL; изменения структуры выполняются reviewed SQL migrations.
 - Время хранится в UTC в `datetime(3)`, timezone Event хранится отдельно.
 - Единственная ACTIVE Registration обеспечивается virtual generated column и unique index, поскольку MySQL 8.1 не поддерживает partial unique indexes.
 - Конкурентное сопоставление Person использует ограниченные по времени MySQL named locks, явно освобождаемые на том же соединении.

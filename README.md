@@ -16,7 +16,7 @@
 5. `docs/03-user-flows.md` — ключевые сценарии.
 6. `docs/04-architecture.md` — системная архитектура.
 7. `docs/05-domain-model.md` — предметная модель.
-8. `docs/06-database.md` — финальная DB baseline перед Prisma.
+8. `docs/06-database.md` — финальная MySQL DB baseline.
 9. `docs/07-api-contracts.md` — API baseline v1.
 10. `docs/08-offline-sync.md` — offline-first scanner protocol.
 11. `docs/09-security.md` — security baseline.
@@ -36,7 +36,7 @@
 
 - Российское размещение: Yandex Cloud.
 - Основная БД: MySQL 8.1.0, не Google Sheets/Яндекс Таблицы.
-- Backend: NestJS modular monolith.
+- Backend: Python 3.12 + FastAPI modular monolith.
 - Web/Admin: React + Vite.
 - Scanner: отдельное React/Vite PWA; App Store/Google Play не являются целью проекта.
 - Участнику личный кабинет в MVP не нужен.

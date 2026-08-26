@@ -1,6 +1,6 @@
 # 06. MySQL Database Specification
 
-Статус: **Approved baseline for first Prisma schema — v0.2**
+Статус: **Approved MySQL 8.1.0 SQL/SQLAlchemy baseline — v0.3**
 
 ## 1. Таблицы MVP
 
@@ -278,7 +278,7 @@ SUPER_ADMIN administrative overbooking is a separate explicit action/flag and mu
 
 - `persons(email_normalized)`
 - `persons(phone_normalized)`
-- name search index strategy chosen during Prisma/MySQL implementation
+- name search index strategy chosen during MySQL implementation
 - `persons(birth_date)`
 - `registrations(event_id, status)`
 - `registrations(event_id, last_name)`
@@ -296,7 +296,7 @@ SUPER_ADMIN administrative overbooking is a separate explicit action/flag and mu
 
 Resolved in the MySQL 8.1.0 baseline migration:
 
-- exact enum identifiers are defined in `packages/database/prisma/schema.prisma` and persisted as MySQL enum values;
+- exact enum identifiers are defined by `backend/migrations/001_mysql_8_1_baseline.sql` and persisted as MySQL enum values;
 - the baseline Person name index is a B-tree on `(last_name, first_name, middle_name)`; no optional database extension is required;
 - business timestamp columns use UTC `datetime(3)` values;
 - one ACTIVE Registration per `(event_id, person_id)` is enforced by the reviewed generated-column unique index `registrations_event_id_person_id_active_key` because MySQL 8.1 has no partial unique indexes.
