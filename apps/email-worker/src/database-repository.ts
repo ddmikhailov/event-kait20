@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool } from '@event-registration/database';
 
 import type {
   ClaimedDelivery,
@@ -15,23 +15,27 @@ export class DatabaseEmailDeliveryRepository implements EmailDeliveryRepository 
     try {
       await client.query('BEGIN');
       const result = await client.query<ClaimedDelivery>(
-        `WITH candidate AS (
-           SELECT id FROM email_deliveries
+        `SELECT id, type, attempts FROM email_deliveries
            WHERE attempts < $1 AND (
              status = 'QUEUED' OR
-             (status = 'SENDING' AND updated_at < now() - interval '5 minutes')
+             (status = 'SENDING' AND updated_at < DATE_SUB(now(), INTERVAL 5 MINUTE))
            )
            ORDER BY queued_at, created_at
-           FOR UPDATE SKIP LOCKED LIMIT 1
-         )
-         UPDATE email_deliveries ed SET status = 'SENDING',
-           attempts = attempts + 1, updated_at = now()
-         FROM candidate WHERE ed.id = candidate.id
-         RETURNING ed.id, ed.type, ed.attempts`,
+           LIMIT 1 FOR UPDATE SKIP LOCKED`,
         [maxAttempts],
       );
+      const delivery = result.rows[0];
+      if (!delivery) {
+        await client.query('COMMIT');
+        return undefined;
+      }
+      await client.query(
+        `UPDATE email_deliveries SET status = 'SENDING',
+           attempts = attempts + 1, updated_at = now() WHERE id = $1`,
+        [delivery.id],
+      );
       await client.query('COMMIT');
-      return result.rows[0];
+      return { ...delivery, attempts: delivery.attempts + 1 };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;

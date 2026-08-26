@@ -11,7 +11,7 @@ import type {
   UpdateRegistrationRequest,
 } from '@event-registration/contracts';
 import { Inject, Injectable } from '@nestjs/common';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool, PoolClient } from '@event-registration/database';
 
 import { ApiError } from '../common/api-error.js';
 import { DATABASE_POOL } from '../common/tokens.js';
@@ -72,12 +72,12 @@ export class ParticipantsService {
       `SELECT p.*, count(*) OVER()::text AS total
        FROM persons p
        WHERE p.merged_into_id IS NULL AND (
-         $1 = '' OR concat_ws(' ', p.last_name, p.first_name, p.middle_name) ILIKE $2 ESCAPE '\\'
-         OR coalesce(p.email, '') ILIKE $2 ESCAPE '\\'
-         OR coalesce(p.phone, '') ILIKE $2 ESCAPE '\\'
-         OR coalesce(p.study_group, '') ILIKE $2 ESCAPE '\\'
+         $1 = '' OR concat_ws(' ', p.last_name, p.first_name, p.middle_name) ILIKE $2
+         OR coalesce(p.email, '') ILIKE $2
+         OR coalesce(p.phone, '') ILIKE $2
+         OR coalesce(p.study_group, '') ILIKE $2
        )
-       ORDER BY p.last_name, p.first_name, p.middle_name NULLS FIRST, p.id
+       ORDER BY p.last_name, p.first_name, p.middle_name, p.id
        LIMIT $3 OFFSET $4`,
       [query, search, pageSize, (page - 1) * pageSize],
     );
@@ -186,10 +186,10 @@ export class ParticipantsService {
     const result = await this.pool.query<RegistrationRow & { total: string }>(
       `SELECT r.*, count(*) OVER()::text AS total FROM registrations r
        WHERE r.event_id = $1 AND ($2::registration_status IS NULL OR r.status = $2)
-         AND ($3 = '' OR concat_ws(' ', r.last_name, r.first_name, r.middle_name) ILIKE $4 ESCAPE '\\'
-           OR coalesce(r.email, '') ILIKE $4 ESCAPE '\\'
-           OR coalesce(r.phone, '') ILIKE $4 ESCAPE '\\'
-           OR coalesce(r.study_group, '') ILIKE $4 ESCAPE '\\')
+         AND ($3 = '' OR concat_ws(' ', r.last_name, r.first_name, r.middle_name) ILIKE $4
+           OR coalesce(r.email, '') ILIKE $4
+           OR coalesce(r.phone, '') ILIKE $4
+           OR coalesce(r.study_group, '') ILIKE $4)
        ORDER BY r.registered_at DESC, r.id LIMIT $5 OFFSET $6`,
       [
         eventId,
@@ -271,11 +271,11 @@ export class ParticipantsService {
     const result = await this.pool.query<RegistrationRow & { total: string }>(
       `SELECT r.*, count(*) OVER()::text AS total FROM registrations r
        WHERE r.event_id = $1 AND r.status = 'ACTIVE'
-         AND ($2 = '' OR concat_ws(' ', r.last_name, r.first_name, r.middle_name) ILIKE $3 ESCAPE '\\'
-           OR coalesce(r.email, '') ILIKE $3 ESCAPE '\\'
-           OR coalesce(r.phone, '') ILIKE $3 ESCAPE '\\'
-           OR coalesce(r.study_group, '') ILIKE $3 ESCAPE '\\')
-       ORDER BY r.last_name, r.first_name, r.middle_name NULLS FIRST, r.id
+         AND ($2 = '' OR concat_ws(' ', r.last_name, r.first_name, r.middle_name) ILIKE $3
+           OR coalesce(r.email, '') ILIKE $3
+           OR coalesce(r.phone, '') ILIKE $3
+           OR coalesce(r.study_group, '') ILIKE $3)
+       ORDER BY r.last_name, r.first_name, r.middle_name, r.id
        LIMIT $4 OFFSET $5`,
       [eventId, query, searchPattern(query), pageSize, (page - 1) * pageSize],
     );

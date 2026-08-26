@@ -1,15 +1,15 @@
-import { startDisposablePostgres } from './run-integration-tests.js';
+import { startDisposableMysql } from './disposable-mysql.js';
 
-const postgres = await startDisposablePostgres();
+const mysql = await startDisposableMysql();
 process.stdout.write(
-  `Acceptance PostgreSQL 18 ready: ${postgres.connectionString}\n`,
+  `Acceptance MySQL 8.1.0 ready: ${mysql.connectionString}\n`,
 );
 
 let stopping = false;
 const stop = async (): Promise<void> => {
   if (stopping) return;
   stopping = true;
-  await postgres.stop();
+  await mysql.stop();
   process.exitCode = 0;
 };
 

@@ -18,7 +18,7 @@ const trustedOriginsSchema = z
 export const apiEnvironmentSchema = z.object({
   NODE_ENV: nodeEnvironmentSchema.default('development'),
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
-  DATABASE_URL: z.url().startsWith('postgresql://'),
+  DATABASE_URL: z.url().startsWith('mysql://'),
   DATABASE_CONNECT_TIMEOUT_MS: z.coerce
     .number()
     .int()
@@ -52,7 +52,7 @@ export const apiEnvironmentSchema = z.object({
 
 export const workerEnvironmentSchema = z.object({
   NODE_ENV: nodeEnvironmentSchema.default('development'),
-  DATABASE_URL: z.url().startsWith('postgresql://'),
+  DATABASE_URL: z.url().startsWith('mysql://'),
   EMAIL_QUEUE_URL: z.url(),
   EMAIL_PROVIDER_API_KEY: z.string().min(1),
   AUTH_LINK_SECRET: z.string().min(32),

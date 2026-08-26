@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { Pool } from 'pg';
+import { Pool } from '@event-registration/database';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { DatabaseEmailDeliveryRepository } from '../src/database-repository.js';
@@ -26,7 +26,7 @@ beforeAll(async () => {
 
 afterAll(async () => pool.end());
 
-describe.sequential('email delivery repository on PostgreSQL 18', () => {
+describe.sequential('email delivery repository on MySQL 8.1.0', () => {
   it('claims, retries, and completes a delivery with bounded attempts', async () => {
     const first = await repository.claimNext(2);
     expect(first).toMatchObject({ attempts: 1, type: 'REGISTRATION_TICKET' });

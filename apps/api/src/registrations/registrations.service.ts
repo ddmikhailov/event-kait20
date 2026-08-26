@@ -10,7 +10,7 @@ import type {
   ScannerOnsiteRegistrationRequest,
 } from '@event-registration/contracts';
 import { Inject, Injectable } from '@nestjs/common';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool, PoolClient } from '@event-registration/database';
 
 import { ApiError } from '../common/api-error.js';
 import type { ApiConfig } from '../common/config.module.js';
@@ -120,11 +120,12 @@ export class RegistrationsService {
 
     const participant = this.participant(values);
     const client = await this.pool.connect();
+    let personLocks: string[] = [];
     try {
       await client.query('BEGIN');
       const event = await this.lockEvent(client, slug);
       this.assertRegistrationOpen(event);
-      await this.lockPersonKeys(client, participant);
+      personLocks = await this.lockPersonKeys(client, participant);
       const fields = await this.formFields(client, event.id);
       this.validateAnswers(fields, values);
 
@@ -185,6 +186,7 @@ export class RegistrationsService {
       await client.query('ROLLBACK');
       throw error;
     } finally {
+      await this.releasePersonKeys(client, personLocks);
       client.release();
     }
   }
@@ -208,6 +210,7 @@ export class RegistrationsService {
       email: values.email ?? null,
     });
     const client = await this.pool.connect();
+    let personLocks: string[] = [];
     try {
       await client.query('BEGIN');
       const event = await this.lockEventById(client, eventId);
@@ -215,7 +218,7 @@ export class RegistrationsService {
       if (actor.role === 'SCANNER') {
         await this.assertScannerAccess(client, eventId, actor.id);
       }
-      await this.lockPersonKeys(client, participant);
+      personLocks = await this.lockPersonKeys(client, participant);
       const fields = await this.formFields(client, event.id);
       this.validateAnswers(fields, values);
       const person = await this.findOrCreatePerson(client, participant);
@@ -296,6 +299,7 @@ export class RegistrationsService {
       await client.query('ROLLBACK');
       throw error;
     } finally {
+      await this.releasePersonKeys(client, personLocks);
       client.release();
     }
   }
@@ -393,7 +397,7 @@ export class RegistrationsService {
   private async lockPersonKeys(
     client: PoolClient,
     participant: ReturnType<RegistrationsService['participant']>,
-  ): Promise<void> {
+  ): Promise<string[]> {
     const name = [
       participant.lastName.toLocaleLowerCase('ru'),
       participant.firstName.toLocaleLowerCase('ru'),
@@ -404,11 +408,27 @@ export class RegistrationsService {
       `${name}|phone:${participant.phone}`,
       `${name}|birth:${participant.birthDate}`,
     ].sort();
+    const acquired: string[] = [];
     for (const key of keys) {
-      await client.query(
-        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      const result = await client.query<{ acquired: number }>(
+        'SELECT GET_LOCK(SHA2($1, 256), 5) AS acquired',
         [key],
       );
+      if (Number(result.rows[0]?.acquired) !== 1) {
+        await this.releasePersonKeys(client, acquired);
+        throw new ApiError(409, 'CONFLICT', 'Registration is busy; retry');
+      }
+      acquired.push(key);
+    }
+    return acquired;
+  }
+
+  private async releasePersonKeys(
+    client: PoolClient,
+    keys: string[],
+  ): Promise<void> {
+    for (const key of [...keys].reverse()) {
+      await client.query('SELECT RELEASE_LOCK(SHA2($1, 256))', [key]);
     }
   }
 
@@ -635,10 +655,10 @@ export class RegistrationsService {
           (id, registration_id, field_id, field_label_snapshot,
            field_type_snapshot, answer, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb, now(), now())
-         ON CONFLICT (registration_id, field_id) DO UPDATE SET
-           field_label_snapshot = EXCLUDED.field_label_snapshot,
-           field_type_snapshot = EXCLUDED.field_type_snapshot,
-           answer = EXCLUDED.answer, updated_at = now()`,
+         ON DUPLICATE KEY UPDATE
+           field_label_snapshot = VALUES(field_label_snapshot),
+           field_type_snapshot = VALUES(field_type_snapshot),
+           answer = VALUES(answer), updated_at = now()`,
         [
           randomUUID(),
           registrationId,

@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { emailSchema, passwordSchema } from '@event-registration/contracts';
-import { Pool } from 'pg';
+import { Pool } from '@event-registration/database';
 
 import { hashPassword } from '../src/auth/password.service.js';
 
@@ -18,8 +18,13 @@ export const bootstrapSuperAdmin = async (
   const client = await pool.connect();
 
   try {
+    const lock = await client.query<{ acquired: number }>(
+      "SELECT GET_LOCK('event-registration-super-admin-bootstrap', 10) AS acquired",
+    );
+    if (Number(lock.rows[0]?.acquired) !== 1) {
+      throw new Error('Could not acquire SUPER_ADMIN bootstrap lock');
+    }
     await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock($1)', [1_804_202_026]);
     const existing = await client.query(
       `SELECT id FROM staff_users WHERE system_role = 'SUPER_ADMIN' LIMIT 1`,
     );
@@ -43,6 +48,9 @@ export const bootstrapSuperAdmin = async (
     await client.query('ROLLBACK');
     throw error;
   } finally {
+    await client.query(
+      "SELECT RELEASE_LOCK('event-registration-super-admin-bootstrap')",
+    );
     client.release();
   }
 };

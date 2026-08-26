@@ -14,12 +14,11 @@
   },
   "dependencies": {
     "@event-registration/config": "workspace:*",
+    "@event-registration/database": "workspace:*",
     "@event-registration/utils": "workspace:*",
-    "pg": "8.23.0",
     "qrcode": "1.5.4"
   },
   "devDependencies": {
-    "@types/pg": "8.23.1",
     "@types/qrcode": "1.5.6",
     "tsx": "4.23.12"
   }

@@ -12,7 +12,7 @@ import type {
   UpdateFormFieldRequest,
 } from '@event-registration/contracts';
 import { Inject, Injectable } from '@nestjs/common';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool, PoolClient } from '@event-registration/database';
 
 import { ApiError } from '../common/api-error.js';
 import { DATABASE_POOL } from '../common/tokens.js';
@@ -78,7 +78,7 @@ export class EventsService {
     const [events, count] = await Promise.all([
       this.pool.query<EventRow>(
         `SELECT * FROM events ORDER BY start_at DESC
-         OFFSET $1 LIMIT $2`,
+         LIMIT $2 OFFSET $1`,
         [(page - 1) * pageSize, pageSize],
       ),
       this.pool.query<{ count: string }>(
@@ -116,13 +116,13 @@ export class EventsService {
 
     try {
       await client.query('BEGIN');
-      const result = await client.query<EventRow>(
+      await client.query(
         `INSERT INTO events
           (id, title, slug, description, cover_object_key, start_at, end_at,
            timezone, location, registration_deadline, capacity, status,
            created_by, offline_data_version, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                 $13, 1, now(), now()) RETURNING *`,
+                 $13, 1, now(), now())`,
         [
           id,
           values.title,
@@ -139,11 +139,12 @@ export class EventsService {
           actorId,
         ],
       );
+      const created = await this.eventRow(client, id);
       await this.audit(client, actorId, 'EVENT_CREATED', 'Event', id, {
         fields: Object.keys(values),
       });
       await client.query('COMMIT');
-      return mapEvent(result.rows[0]!);
+      return mapEvent(created);
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -206,13 +207,13 @@ export class EventsService {
         }
       }
 
-      const result = await client.query<EventRow>(
+      await client.query(
         `UPDATE events SET
           title = $2, slug = $3, description = $4, cover_object_key = $5,
           start_at = $6, end_at = $7, timezone = $8, location = $9,
           registration_deadline = $10, capacity = $11, status = $12,
           offline_data_version = offline_data_version + 1, updated_at = now()
-         WHERE id = $1 RETURNING *`,
+         WHERE id = $1`,
         [
           eventId,
           values.title ?? existing.title,
@@ -232,11 +233,12 @@ export class EventsService {
           nextStatus,
         ],
       );
+      const updated = await this.eventRow(client, eventId);
       await this.audit(client, actorId, 'EVENT_UPDATED', 'Event', eventId, {
         fields: Object.keys(values),
       });
       await client.query('COMMIT');
-      return mapEvent(result.rows[0]!);
+      return mapEvent(updated);
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -257,15 +259,16 @@ export class EventsService {
         await client.query('COMMIT');
         return mapEvent(existing);
       }
-      const result = await client.query<EventRow>(
+      await client.query(
         `UPDATE events SET status = 'ARCHIVED', archived_at = now(),
            offline_data_version = offline_data_version + 1, updated_at = now()
-         WHERE id = $1 RETURNING *`,
+         WHERE id = $1`,
         [eventId],
       );
+      const archived = await this.eventRow(client, eventId);
       await this.audit(client, actorId, 'EVENT_ARCHIVED', 'Event', eventId);
       await client.query('COMMIT');
-      return mapEvent(result.rows[0]!);
+      return mapEvent(archived);
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -353,11 +356,11 @@ export class EventsService {
         );
       }
       const id = randomUUID();
-      const result = await client.query<FormFieldRow>(
+      await client.query(
         `INSERT INTO event_form_fields
           (id, event_id, type, label, required, sort_order, options, active,
            created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, true, now(), now()) RETURNING *`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true, now(), now())`,
         [
           id,
           eventId,
@@ -368,6 +371,7 @@ export class EventsService {
           values.options ? JSON.stringify(values.options) : null,
         ],
       );
+      const created = await this.formFieldRow(client, eventId, id);
       await client.query(
         'UPDATE events SET offline_data_version = offline_data_version + 1 WHERE id = $1',
         [eventId],
@@ -383,7 +387,7 @@ export class EventsService {
         },
       );
       await client.query('COMMIT');
-      return mapFormField(result.rows[0]!);
+      return mapFormField(created);
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -422,10 +426,10 @@ export class EventsService {
         values.options === undefined ? existing.options : values.options;
       validateOptions(type, options);
 
-      const result = await client.query<FormFieldRow>(
+      await client.query(
         `UPDATE event_form_fields SET type = $3, label = $4, required = $5,
            sort_order = $6, options = $7, updated_at = now()
-         WHERE id = $1 AND event_id = $2 RETURNING *`,
+         WHERE id = $1 AND event_id = $2`,
         [
           fieldId,
           eventId,
@@ -436,6 +440,7 @@ export class EventsService {
           options ? JSON.stringify(options) : null,
         ],
       );
+      const updated = await this.formFieldRow(client, eventId, fieldId);
       await client.query(
         'UPDATE events SET offline_data_version = offline_data_version + 1 WHERE id = $1',
         [eventId],
@@ -449,7 +454,7 @@ export class EventsService {
         { fields: Object.keys(values) },
       );
       await client.query('COMMIT');
-      return mapFormField(result.rows[0]!);
+      return mapFormField(updated);
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -474,13 +479,14 @@ export class EventsService {
           'Archived Event is immutable',
         );
       }
-      const result = await client.query<FormFieldRow>(
+      const result = await client.query(
         `UPDATE event_form_fields SET active = false, updated_at = now()
-         WHERE id = $1 AND event_id = $2 RETURNING *`,
+         WHERE id = $1 AND event_id = $2`,
         [fieldId, eventId],
       );
-      const field = result.rows[0];
-      if (!field) throw new ApiError(404, 'NOT_FOUND', 'Form field not found');
+      if (result.rowCount === 0)
+        throw new ApiError(404, 'NOT_FOUND', 'Form field not found');
+      const field = await this.formFieldRow(client, eventId, fieldId);
       await client.query(
         'UPDATE events SET offline_data_version = offline_data_version + 1 WHERE id = $1',
         [eventId],
@@ -514,6 +520,20 @@ export class EventsService {
     const event = result.rows[0];
     if (!event) throw new ApiError(404, 'EVENT_NOT_FOUND', 'Event not found');
     return event;
+  }
+
+  private async formFieldRow(
+    client: Pick<Pool, 'query'> | Pick<PoolClient, 'query'>,
+    eventId: string,
+    fieldId: string,
+  ): Promise<FormFieldRow> {
+    const result = await client.query<FormFieldRow>(
+      'SELECT * FROM event_form_fields WHERE id = $1 AND event_id = $2',
+      [fieldId, eventId],
+    );
+    const field = result.rows[0];
+    if (!field) throw new ApiError(404, 'NOT_FOUND', 'Form field not found');
+    return field;
   }
 
   private async assertSlugAvailable(

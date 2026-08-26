@@ -1,6 +1,6 @@
 import type { HealthResponse } from '@event-registration/contracts';
 import { Controller, Get, Inject } from '@nestjs/common';
-import type { Pool } from 'pg';
+import type { Pool } from '@event-registration/database';
 
 import { ApiError } from './common/api-error.js';
 import { DATABASE_POOL } from './common/tokens.js';

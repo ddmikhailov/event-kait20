@@ -1,5 +1,5 @@
 import { authLinkToken } from '@event-registration/utils';
-import type { Pool } from 'pg';
+import type { Pool } from '@event-registration/database';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DatabaseEmailMessageFactory } from './message-factory.js';

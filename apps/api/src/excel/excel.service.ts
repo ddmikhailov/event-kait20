@@ -9,7 +9,7 @@ import type {
 } from '@event-registration/contracts';
 import { Inject, Injectable } from '@nestjs/common';
 import ExcelJS from 'exceljs';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool, PoolClient } from '@event-registration/database';
 
 import { ApiError } from '../common/api-error.js';
 import { DATABASE_POOL } from '../common/tokens.js';
@@ -722,7 +722,7 @@ export class ExcelService {
     const result = await client.query<JobRow>(
       `SELECT j.event_id, j.status, j.expires_at, j.committed_at, f.file_data
        FROM import_jobs j LEFT JOIN import_job_files f ON f.import_job_id = j.id
-       WHERE j.id = $1 AND j.event_id = $2 FOR UPDATE OF j`,
+       WHERE j.id = $1 AND j.event_id = $2 FOR UPDATE`,
       [importJobId, eventId],
     );
     if (!result.rows[0])

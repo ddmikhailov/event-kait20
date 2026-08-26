@@ -3,10 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
     "acceptance:db": "tsx scripts/start-acceptance-db.ts",
-    "build": "prisma generate",
-    "lint": "eslint prisma.config.ts scripts tests",
+    "build": "prisma generate && tsc -p tsconfig.build.json",
+    "lint": "eslint prisma.config.ts scripts src tests",
     "test": "pnpm run test:integration",
     "test:integration": "tsx scripts/run-integration-tests.ts",
     "test:schema": "prisma validate",
@@ -14,12 +20,10 @@
   },
   "dependencies": {
     "@prisma/client": "7.9.1",
-    "pg": "8.23.0"
+    "mysql2": "3.24.2"
   },
   "devDependencies": {
-    "@types/pg": "8.23.1",
     "dotenv": "17.4.2",
-    "embedded-postgres": "18.4.0-beta.17",
     "prisma": "7.9.1",
     "tsx": "4.23.12"
   }

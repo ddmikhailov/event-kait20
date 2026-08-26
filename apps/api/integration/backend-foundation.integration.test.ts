@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import ExcelJS from 'exceljs';
-import { Pool } from 'pg';
+import { Pool } from '@event-registration/database';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { bootstrapSuperAdmin } from '../scripts/bootstrap-super-admin.js';
@@ -154,7 +154,7 @@ const createEvent = async (
       status: 'REGISTRATION_OPEN',
     },
   });
-  expect(response.status).toBe(201);
+  expect(response.status, await response.clone().text()).toBe(201);
   return (await response.json()) as {
     id: string;
     status: string;
@@ -258,8 +258,8 @@ describe.sequential('backend foundation', () => {
   it('enforces session expiry, revocation, and logout', async () => {
     const expired = await login();
     await pool.query(
-      `UPDATE sessions SET expires_at = now() - interval '1 second'
-       WHERE token_hash = (SELECT token_hash FROM sessions ORDER BY created_at DESC LIMIT 1)`,
+      `UPDATE sessions SET expires_at = UTC_TIMESTAMP(3) - INTERVAL 1 SECOND
+       ORDER BY created_at DESC LIMIT 1`,
     );
     expect(
       (await api('/auth/session', { cookie: expired.cookie })).status,
@@ -268,7 +268,7 @@ describe.sequential('backend foundation', () => {
     const revoked = await login();
     await pool.query(
       `UPDATE sessions SET revoked_at = now()
-       WHERE token_hash = (SELECT token_hash FROM sessions ORDER BY created_at DESC LIMIT 1)`,
+       ORDER BY created_at DESC LIMIT 1`,
     );
     expect(
       (await api('/auth/session', { cookie: revoked.cookie })).status,
@@ -410,14 +410,18 @@ describe.sequential('backend foundation', () => {
       method: 'POST',
       body: { email: adminEmail },
     });
+    await pool.query(
+      `UPDATE password_reset_tokens
+       SET expires_at = UTC_TIMESTAMP(3) - INTERVAL 1 SECOND
+       ORDER BY created_at DESC LIMIT 1`,
+    );
     const expired = await pool.query<{
       expires_at: Date;
       id: string;
       token_hash: string;
     }>(
-      `UPDATE password_reset_tokens SET expires_at = now() - interval '1 second'
-       WHERE id = (SELECT id FROM password_reset_tokens ORDER BY created_at DESC LIMIT 1)
-       RETURNING id, expires_at, token_hash`,
+      `SELECT id, expires_at, token_hash
+       FROM password_reset_tokens ORDER BY created_at DESC LIMIT 1`,
     );
     const expiredRow = expired.rows[0]!;
     const expiredToken = app
@@ -511,7 +515,10 @@ describe.sequential('backend foundation', () => {
       csrf: session.csrf,
       body: { email: scannerEmail },
     });
-    expect(invitationResponse.status).toBe(201);
+    expect(
+      invitationResponse.status,
+      await invitationResponse.clone().text(),
+    ).toBe(201);
     const invitation = (await invitationResponse.json()) as { id: string };
     const record = await pool.query<{
       expires_at: Date;
@@ -1099,8 +1106,8 @@ describe.sequential('backend foundation', () => {
       count: string;
       review_count: string;
     }>(
-      `SELECT count(*)::text AS count,
-              count(*) FILTER (WHERE dedup_review_required)::text AS review_count
+      `SELECT count(*) AS count,
+              SUM(dedup_review_required) AS review_count
        FROM persons WHERE last_name = 'Иванов1000001'`,
     );
     expect(people.rows[0]).toMatchObject({
@@ -1113,7 +1120,7 @@ describe.sequential('backend foundation', () => {
     const admin = await login();
     const event = await createEvent(admin, 'closed-deadline', 2);
     await pool.query(
-      `UPDATE events SET registration_deadline = now() - interval '1 minute'
+      `UPDATE events SET registration_deadline = UTC_TIMESTAMP(3) - INTERVAL 1 MINUTE
        WHERE id = $1`,
       [event.id],
     );
@@ -1316,11 +1323,11 @@ describe.sequential('backend foundation', () => {
       override_audit_count: string;
     }>(
       `SELECT
-        (SELECT count(*)::text FROM registrations
+        (SELECT count(*) FROM registrations
          WHERE event_id = $1 AND status = 'ACTIVE') AS active_count,
-        (SELECT count(*)::text FROM audit_log
+        (SELECT count(*) FROM audit_log
          WHERE action = 'ONSITE_REGISTRATION'
-           AND metadata @> '{"capacityOverride": true}'::jsonb) AS override_audit_count`,
+           AND JSON_CONTAINS(metadata, '{"capacityOverride": true}')) AS override_audit_count`,
       [event.id],
     );
     expect(state.rows[0]).toMatchObject({
@@ -1577,7 +1584,7 @@ describe.sequential('backend foundation', () => {
     );
     const concurrentStatuses = await Promise.all(
       concurrentResponses.map(async (response) => {
-        expect(response.status).toBe(201);
+        expect(response.status, await response.clone().text()).toBe(201);
         return ((await response.json()) as { results: { status: string }[] })
           .results[0]!.status;
       }),
@@ -1651,16 +1658,18 @@ describe.sequential('backend foundation', () => {
     });
     const storedPreview = await pool.query<{
       file_count: string;
-      result_summary: string;
+      result_summary: unknown;
     }>(
-      `SELECT (SELECT count(*)::text FROM import_job_files
+      `SELECT (SELECT count(*) FROM import_job_files
                WHERE import_job_id = j.id) AS file_count,
-              j.result_summary::text
+              j.result_summary
        FROM import_jobs j WHERE j.id = $1`,
       [previewBody.importJobId],
     );
     expect(storedPreview.rows[0]?.file_count).toBe('1');
-    expect(storedPreview.rows[0]?.result_summary).not.toContain('Сидоров');
+    expect(JSON.stringify(storedPreview.rows[0]?.result_summary)).not.toContain(
+      'Сидоров',
+    );
 
     const commit = await api(
       `/admin/events/${event.id}/import/${previewBody.importJobId}/commit`,
@@ -1716,7 +1725,7 @@ describe.sequential('backend foundation', () => {
     const exported = await api(`/admin/events/${event.id}/export.xlsx`, {
       cookie: admin.cookie,
     });
-    expect(exported.status).toBe(200);
+    expect(exported.status, await exported.clone().text()).toBe(200);
     expect(exported.headers.get('cache-control')).toBe('private, no-store');
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await exported.arrayBuffer());
@@ -1738,11 +1747,11 @@ describe.sequential('backend foundation', () => {
       ],
     ];
     const preview = await previewExcel(event.id, admin, rows);
+    expect(preview.status, await preview.clone().text()).toBe(201);
     const body = (await preview.json()) as {
       importJobId: string;
       mapping: Record<string, unknown>;
     };
-    expect(preview.status).toBe(201);
 
     const onsite = await api(`/admin/events/${event.id}/registrations/onsite`, {
       method: 'POST',
@@ -1802,7 +1811,7 @@ describe.sequential('backend foundation', () => {
         'new-smirnov@example.test',
       ],
     ]);
-    expect(preview.status).toBe(201);
+    expect(preview.status, await preview.clone().text()).toBe(201);
     const body = (await preview.json()) as {
       importJobId: string;
       mapping: Record<string, unknown>;
@@ -1880,8 +1889,8 @@ describe.sequential('backend foundation', () => {
     await pool.query(
       `UPDATE registrations SET source = 'EXCEL_IMPORT',
          first_attended_at = CASE id
-           WHEN $1 THEN '2027-06-10T10:01:00.000Z'::timestamptz
-           WHEN $2 THEN '2027-06-10T10:16:00.000Z'::timestamptz
+           WHEN $1 THEN '2027-06-10 10:01:00.000'
+           WHEN $2 THEN '2027-06-10 10:16:00.000'
            ELSE first_attended_at END
        WHERE id = ANY($3::uuid[])`,
       [

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { Pool } from 'pg';
+import { Pool } from '../../src/index.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -61,8 +61,8 @@ const insertEvent = async (createdById: string): Promise<string> => {
       id, title, slug, start_at, end_at, location, registration_deadline,
       capacity, status, created_by, created_at, updated_at
     ) VALUES (
-      $1, 'Тестовое мероприятие', $2, now() + interval '1 day',
-      now() + interval '2 days', 'КАИТ №20', now() + interval '12 hours',
+      $1, 'Тестовое мероприятие', $2, now() + interval 1 day,
+      now() + interval 2 day, 'КАИТ №20', now() + interval 12 hour,
       100, 'REGISTRATION_OPEN', $3, now(), now()
     )`,
     [id, `event-${id}`, createdById],
@@ -119,7 +119,8 @@ const insertFormField = async (eventId: string): Promise<string> => {
 
 const expectConstraintViolation = async (
   operation: Promise<unknown>,
-  code: '23001' | '23503' | '23505' | '23514',
+  code:
+    'ER_CHECK_CONSTRAINT_VIOLATED' | 'ER_DUP_ENTRY' | 'ER_ROW_IS_REFERENCED_2',
 ): Promise<void> => {
   await expect(operation).rejects.toMatchObject({ code });
 };
@@ -132,8 +133,8 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('PostgreSQL domain migration', () => {
-  it('applies all approved MVP tables to an empty PostgreSQL database', async () => {
+describe('MySQL 8.1 domain migration', () => {
+  it('applies all approved MVP tables to an empty MySQL database', async () => {
     const expectedTables = [
       'attendance_events',
       'audit_log',
@@ -151,14 +152,14 @@ describe('PostgreSQL domain migration', () => {
       'staff_invitations',
       'staff_users',
     ];
-    const result = await pool.query<{ table_name: string }>(
+    const result = await pool.query<{ TABLE_NAME: string }>(
       `SELECT table_name
        FROM information_schema.tables
-       WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+       WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
        ORDER BY table_name`,
     );
 
-    expect(result.rows.map(({ table_name }) => table_name)).toEqual([
+    expect(result.rows.map(({ TABLE_NAME }) => TABLE_NAME)).toEqual([
       '_prisma_migrations',
       ...expectedTables,
     ]);
@@ -174,7 +175,7 @@ describe('PostgreSQL domain migration', () => {
     await insertRegistration(secondEventId, personId);
 
     const result = await pool.query<{ count: string }>(
-      `SELECT count(*) FROM registrations
+      `SELECT count(*) AS count FROM registrations
        WHERE person_id = $1 AND status = 'ACTIVE'`,
       [personId],
     );
@@ -190,7 +191,7 @@ describe('PostgreSQL domain migration', () => {
 
     await expectConstraintViolation(
       insertRegistration(eventId, personId),
-      '23505',
+      'ER_DUP_ENTRY',
     );
 
     await pool.query(
@@ -227,7 +228,7 @@ describe('PostgreSQL domain migration', () => {
     });
 
     const result = await pool.query<{ count: string }>(
-      `SELECT count(*) FROM persons
+      `SELECT count(*) AS count FROM persons
        WHERE id = ANY($1::uuid[]) AND email_normalized = $2 AND phone_normalized = $3`,
       [[firstPersonId, secondPersonId], sharedEmail, sharedPhone],
     );
@@ -272,7 +273,7 @@ describe('PostgreSQL domain migration', () => {
       );
 
     await insertAttendance();
-    await expectConstraintViolation(insertAttendance(), '23505');
+    await expectConstraintViolation(insertAttendance(), 'ER_DUP_ENTRY');
   });
 
   it('enforces one RegistrationAnswer per registration and field', async () => {
@@ -291,7 +292,7 @@ describe('PostgreSQL domain migration', () => {
       );
 
     await insertAnswer();
-    await expectConstraintViolation(insertAnswer(), '23505');
+    await expectConstraintViolation(insertAnswer(), 'ER_DUP_ENTRY');
   });
 
   it('restricts destructive deletion of historical Person and form-field records', async () => {
@@ -311,11 +312,11 @@ describe('PostgreSQL domain migration', () => {
 
     await expectConstraintViolation(
       pool.query('DELETE FROM persons WHERE id = $1', [personId]),
-      '23001',
+      'ER_ROW_IS_REFERENCED_2',
     );
     await expectConstraintViolation(
       pool.query('DELETE FROM event_form_fields WHERE id = $1', [fieldId]),
-      '23001',
+      'ER_ROW_IS_REFERENCED_2',
     );
   });
 
@@ -331,7 +332,7 @@ describe('PostgreSQL domain migration', () => {
       );
 
     await insertAccess();
-    await expectConstraintViolation(insertAccess(), '23505');
+    await expectConstraintViolation(insertAccess(), 'ER_DUP_ENTRY');
   });
 
   it('enforces email delivery idempotency_key uniqueness', async () => {
@@ -346,27 +347,27 @@ describe('PostgreSQL domain migration', () => {
       );
 
     await insertDelivery();
-    await expectConstraintViolation(insertDelivery(), '23505');
+    await expectConstraintViolation(insertDelivery(), 'ER_DUP_ENTRY');
   });
 
   it('stores only token hashes in auth support tables', async () => {
     const result = await pool.query<{
-      column_name: string;
-      table_name: string;
+      COLUMN_NAME: string;
+      TABLE_NAME: string;
     }>(
       `SELECT table_name, column_name
        FROM information_schema.columns
-       WHERE table_schema = 'public'
+       WHERE table_schema = DATABASE()
          AND table_name = ANY($1::text[])
        ORDER BY table_name, column_name`,
       [['staff_invitations', 'sessions', 'password_reset_tokens']],
     );
     const columnsByTable = new Map<string, string[]>();
 
-    for (const { column_name, table_name } of result.rows) {
-      const columns = columnsByTable.get(table_name) ?? [];
-      columns.push(column_name);
-      columnsByTable.set(table_name, columns);
+    for (const { COLUMN_NAME, TABLE_NAME } of result.rows) {
+      const columns = columnsByTable.get(TABLE_NAME) ?? [];
+      columns.push(COLUMN_NAME);
+      columnsByTable.set(TABLE_NAME, columns);
     }
 
     for (const tableName of [
@@ -381,7 +382,7 @@ describe('PostgreSQL domain migration', () => {
     }
   });
 
-  it('creates the required indexes, including the PostgreSQL partial unique index', async () => {
+  it('creates required indexes and the generated ACTIVE-registration key', async () => {
     const expectedIndexes = [
       'attendance_events_client_event_id_key',
       'attendance_events_event_id_estimated_scanned_at_idx',
@@ -404,23 +405,25 @@ describe('PostgreSQL domain migration', () => {
       'registrations_event_id_study_group_idx',
       'registrations_person_id_idx',
     ];
-    const result = await pool.query<{
-      indexdef: string;
-      indexname: string;
-    }>(
-      `SELECT indexname, indexdef
-       FROM pg_indexes
-       WHERE schemaname = 'public' AND indexname = ANY($1::text[])`,
+    const result = await pool.query<{ indexname: string }>(
+      `SELECT DISTINCT index_name AS indexname
+       FROM information_schema.statistics
+       WHERE table_schema = DATABASE() AND index_name = ANY($1::text[])`,
       [expectedIndexes],
     );
-    const definitions = new Map(
-      result.rows.map(({ indexdef, indexname }) => [indexname, indexdef]),
+    expect(result.rows.map(({ indexname }) => indexname).sort()).toEqual(
+      expectedIndexes.sort(),
     );
-
-    expect([...definitions.keys()].sort()).toEqual(expectedIndexes.sort());
-    expect(
-      definitions.get('registrations_event_id_person_id_active_key'),
-    ).toMatch(/UNIQUE.*\(event_id, person_id\).*WHERE.*status.*ACTIVE/i);
+    const generated = await pool.query<{
+      EXTRA: string;
+      GENERATION_EXPRESSION: string;
+    }>(
+      `SELECT extra, generation_expression FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = 'registrations'
+         AND column_name = 'active_registration'`,
+    );
+    expect(generated.rows[0]?.EXTRA).toContain('VIRTUAL GENERATED');
+    expect(generated.rows[0]?.GENERATION_EXPRESSION).toMatch(/status.*ACTIVE/i);
   });
 
   it('enforces positive Event capacity and documented timestamp/timezone defaults', async () => {
@@ -436,28 +439,30 @@ describe('PostgreSQL domain migration', () => {
           'DRAFT', $3, now(), now())`,
         [id, `event-${id}`, adminId],
       ),
-      '23514',
+      'ER_CHECK_CONSTRAINT_VIOLATED',
     );
 
     const metadata = await pool.query<{
-      column_default: string | null;
-      data_type: string;
-      datetime_precision: number | null;
+      COLUMN_DEFAULT: string | null;
+      DATA_TYPE: string;
+      DATETIME_PRECISION: number | null;
     }>(
       `SELECT data_type, datetime_precision, column_default
        FROM information_schema.columns
-       WHERE table_schema = 'public' AND table_name = 'events' AND column_name = 'start_at'`,
+       WHERE table_schema = DATABASE() AND table_name = 'events' AND column_name = 'start_at'`,
     );
-    const timezoneDefault = await pool.query<{ column_default: string | null }>(
+    const timezoneDefault = await pool.query<{
+      COLUMN_DEFAULT: string | null;
+    }>(
       `SELECT column_default
        FROM information_schema.columns
-       WHERE table_schema = 'public' AND table_name = 'events' AND column_name = 'timezone'`,
+       WHERE table_schema = DATABASE() AND table_name = 'events' AND column_name = 'timezone'`,
     );
 
     expect(metadata.rows[0]).toMatchObject({
-      data_type: 'timestamp with time zone',
-      datetime_precision: 3,
+      DATA_TYPE: 'datetime',
+      DATETIME_PRECISION: 3,
     });
-    expect(timezoneDefault.rows[0]?.column_default).toContain('Europe/Moscow');
+    expect(timezoneDefault.rows[0]?.COLUMN_DEFAULT).toContain('Europe/Moscow');
   });
 });

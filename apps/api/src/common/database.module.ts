@@ -4,7 +4,7 @@ import {
   Module,
   type OnApplicationShutdown,
 } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool } from '@event-registration/database';
 
 import type { ApiConfig } from './config.module.js';
 import { APP_CONFIG, DATABASE_POOL } from './tokens.js';

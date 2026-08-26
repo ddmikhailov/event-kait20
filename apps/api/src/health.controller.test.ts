@@ -1,5 +1,5 @@
 import { healthResponseSchema } from '@event-registration/contracts';
-import type { Pool } from 'pg';
+import type { Pool } from '@event-registration/database';
 import { describe, expect, it } from 'vitest';
 
 import { ApiError } from './common/api-error.js';
@@ -27,7 +27,7 @@ describe('HealthController', () => {
     });
   });
 
-  it('reports readiness only when PostgreSQL responds', async () => {
+  it('reports readiness only when MySQL responds', async () => {
     const database = { query: async () => ({}) } as unknown as Pool;
 
     await expect(
@@ -35,7 +35,7 @@ describe('HealthController', () => {
     ).resolves.toEqual({ service: 'api', status: 'ok' });
   });
 
-  it('returns a stable unavailable error when PostgreSQL is down', async () => {
+  it('returns a stable unavailable error when MySQL is down', async () => {
     const database = {
       query: async () => {
         throw new Error('database unavailable');

@@ -7,7 +7,7 @@ import type {
   StaffListResponse,
 } from '@event-registration/contracts';
 import { Inject, Injectable } from '@nestjs/common';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool, PoolClient } from '@event-registration/database';
 
 import { AuthLinkService } from '../auth/auth-link.service.js';
 import { ApiError } from '../common/api-error.js';
@@ -69,7 +69,7 @@ export class StaffService {
       const existingInvitation = await client.query<InvitationRow>(
         `SELECT id, expires_at FROM staff_invitations
          WHERE email_normalized = $1
-           AND event_id IS NOT DISTINCT FROM $2
+           AND event_id <=> $2
            AND accepted_at IS NULL AND expires_at > now()
          ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
         [request.email, request.eventId ?? null],
@@ -249,10 +249,9 @@ export class StaffService {
       }
 
       await client.query(
-        `INSERT INTO event_access
+        `INSERT IGNORE INTO event_access
           (id, event_id, user_id, role, created_by, created_at)
-         VALUES ($1, $2, $3, 'SCANNER', $4, now())
-         ON CONFLICT (event_id, user_id) DO NOTHING`,
+         VALUES ($1, $2, $3, 'SCANNER', $4, now())`,
         [randomUUID(), eventId, userId, actorId],
       );
       await this.audit(

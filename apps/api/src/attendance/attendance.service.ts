@@ -8,7 +8,7 @@ import type {
 } from '@event-registration/contracts';
 import { registrationQrPayloadHash } from '@event-registration/utils';
 import { Inject, Injectable } from '@nestjs/common';
-import type { Pool } from 'pg';
+import type { Pool } from '@event-registration/database';
 
 import { ApiError } from '../common/api-error.js';
 import { DATABASE_POOL } from '../common/tokens.js';
@@ -159,7 +159,7 @@ export class AttendanceService {
                 AS first_attended_at
          FROM attendance_events ae
          JOIN registrations r ON r.id = ae.registration_id
-         WHERE ae.client_event_id = $1 FOR UPDATE OF ae`,
+         WHERE ae.client_event_id = $1`,
         [item.clientEventId, event.id],
       );
       if (existing.rows[0]) {
@@ -240,7 +240,7 @@ export class AttendanceService {
       };
     } catch (error) {
       await client.query('ROLLBACK');
-      if (postgresCode(error) === '23505') {
+      if (databaseCode(error) === 'ER_DUP_ENTRY') {
         const existing = await this.pool.query<{
           first_attended_at: Date | null;
         }>(
@@ -320,7 +320,7 @@ const syncResult = (
   status: SyncResult['status'],
 ): SyncResult => ({ clientEventId, status, firstAttendedAt: null });
 
-const postgresCode = (error: unknown): string | undefined =>
+const databaseCode = (error: unknown): string | undefined =>
   typeof error === 'object' && error !== null && 'code' in error
     ? String(error.code)
     : undefined;

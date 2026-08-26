@@ -5,7 +5,7 @@ import { parseApiEnvironment, parseWorkerEnvironment } from './index';
 describe('parseApiEnvironment', () => {
   it('parses non-secret placeholder values without exposing them', () => {
     const result = parseApiEnvironment({
-      DATABASE_URL: 'postgresql://user:password@localhost:5432/app',
+      DATABASE_URL: 'mysql://user:password@localhost:3306/app',
       SESSION_SECRET: 's'.repeat(32),
       AUTH_LINK_SECRET: 'a'.repeat(32),
       AUTH_LINK_BASE_URL: 'http://localhost:5173/auth',
@@ -25,7 +25,7 @@ describe('parseApiEnvironment', () => {
   it('rejects trusted origins with paths', () => {
     expect(() =>
       parseApiEnvironment({
-        DATABASE_URL: 'postgresql://user:password@localhost:5432/app',
+        DATABASE_URL: 'mysql://user:password@localhost:3306/app',
         SESSION_SECRET: 's'.repeat(32),
         AUTH_LINK_SECRET: 'a'.repeat(32),
         AUTH_LINK_BASE_URL: 'http://localhost:5173/auth',
@@ -42,7 +42,7 @@ describe('parseApiEnvironment', () => {
 describe('parseWorkerEnvironment', () => {
   it('applies bounded delivery defaults', () => {
     const result = parseWorkerEnvironment({
-      DATABASE_URL: 'postgresql://user:password@localhost:5432/app',
+      DATABASE_URL: 'mysql://user:password@localhost:3306/app',
       EMAIL_QUEUE_URL: 'https://queue.example.test/deliveries',
       EMAIL_PROVIDER_API_KEY: 'provider-placeholder',
       AUTH_LINK_SECRET: 'a'.repeat(32),

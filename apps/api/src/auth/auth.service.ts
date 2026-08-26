@@ -13,7 +13,7 @@ import type {
   SessionResponse,
 } from '@event-registration/contracts';
 import { Inject, Injectable } from '@nestjs/common';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool, PoolClient } from '@event-registration/database';
 
 import { ApiError } from '../common/api-error.js';
 import type { ApiConfig } from '../common/config.module.js';

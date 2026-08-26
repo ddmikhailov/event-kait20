@@ -3,7 +3,7 @@ import {
   registrationQrPayload,
   registrationTicketUrl,
 } from '@event-registration/utils';
-import type { Pool } from 'pg';
+import type { Pool } from '@event-registration/database';
 import QRCode from 'qrcode';
 
 import type {

@@ -6,7 +6,7 @@ import type {
   SendTicketsResponse,
 } from '@event-registration/contracts';
 import { Inject, Injectable } from '@nestjs/common';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool, PoolClient } from '@event-registration/database';
 
 import { ApiError } from '../common/api-error.js';
 import { DATABASE_POOL } from '../common/tokens.js';
@@ -29,17 +29,16 @@ export class ReportingService {
         attended: string;
         registered: string;
       }>(
-        `SELECT count(*)::text AS registered,
-                count(*) FILTER (WHERE first_attended_at IS NOT NULL)::text AS attended
+        `SELECT count(*) AS registered,
+                SUM(first_attended_at IS NOT NULL) AS attended
          FROM registrations WHERE event_id = $1 AND status = 'ACTIVE'`,
         [eventId],
       ),
       this.pool.query<{ bucket_start: Date; count: string }>(
-        `SELECT date_bin(
-                  INTERVAL '15 minutes', first_attended_at,
-                  TIMESTAMPTZ '1970-01-01 00:00:00+00'
+        `SELECT FROM_UNIXTIME(
+                  FLOOR(UNIX_TIMESTAMP(first_attended_at) / 900) * 900
                 ) AS bucket_start,
-                count(*)::text AS count
+                count(*) AS count
          FROM registrations
          WHERE event_id = $1 AND status = 'ACTIVE'
            AND first_attended_at IS NOT NULL
@@ -97,12 +96,11 @@ export class ReportingService {
       let queuedRows = 0;
       for (const recipient of deliverable) {
         const delivery = await client.query(
-          `INSERT INTO email_deliveries
+          `INSERT IGNORE INTO email_deliveries
             (id, idempotency_key, type, recipient_email, event_id,
              registration_id, status, attempts, queued_at, created_at, updated_at)
            VALUES ($1, $2, 'REGISTRATION_TICKET', $3, $4, $5,
-                   'QUEUED', 0, now(), now(), now())
-           ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`,
+                   'QUEUED', 0, now(), now(), now())`,
           [
             randomUUID(),
             `registration-ticket:bulk:${values.requestId}:${recipient.id}`,
