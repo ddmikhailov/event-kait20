@@ -21,7 +21,8 @@ EVENT REGISTRATION 1.0 — APACHE HTTP + PYTHON SOURCE BACKEND
 Apache :80 нельзя открывать пользователям или интернету. Firewall/ACL разрешает
 его только с адресов доверенного внешнего reverse proxy. Внешний proxy обязан
 сохранять исходные Host и Origin, передавать ответы Set-Cookie без изменения и
-не допускать HTTP-доступа пользователя. Apache принудительно передаёт backend
+не допускать HTTP-доступа пользователя. Proxy удаляет spoofed forwarding
+headers и устанавливает корректный client IP. Apache принудительно передаёт backend
 заголовок X-Forwarded-Proto: https. Публичные URL в конфигурации всегда HTTPS.
 
 Требования:

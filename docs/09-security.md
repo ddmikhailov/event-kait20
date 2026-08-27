@@ -10,7 +10,9 @@ System processes PII including ФИО, email, phone, birth date, study group and
 
 ## 2. Hosting
 
-Production business data and primary infrastructure are placed in Yandex Cloud in the Russian deployment selected for the project. Legal/organizational compliance is separately verified by the college before launch.
+Production business data and application runtime are placed on the
+organisation-managed Russian infrastructure selected for the release. The
+college separately verifies legal and organizational compliance before launch.
 
 ## 3. Consent
 
@@ -60,7 +62,9 @@ Release implementation:
 
 ## 6. Cookie/CSRF/CORS model
 
-Preferred deployment uses application subdomains under one parent domain (e.g. web/scanner/api). Configure exact CORS allowlist, `credentials` only for trusted origins and never wildcard with credentials.
+Release deployment uses separate Web and Scanner HTTPS origins. Each origin
+proxies same-origin `/api` to the same loopback backend. Configure the exact two
+origins, `credentials` only for them and never wildcard with credentials.
 
 Mutating cookie-authenticated requests require explicit Origin/Referer validation and CSRF protection appropriate to chosen same-site topology. Exact implementation is frozen during auth scaffold and covered by integration tests.
 
@@ -107,7 +111,10 @@ download, resolve or sync for the Event.
 
 ## 10. Secrets
 
-Yandex Lockbox/environment secret injection for DB, session, QR, SMTP and external API credentials.
+The organisation's protected configuration mechanism provides DB, session, QR,
+SMTP and external credentials. The application receives only a path through
+`EVENT_REGISTRATION_ENV_FILE`; the protected file remains outside Git and
+Apache DocumentRoot.
 
 Rules:
 - never commit `.env` secrets;
@@ -188,7 +195,7 @@ Before first live Event, explicitly review/test:
 - authorization matrix;
 - PII leakage in logs/errors;
 - XLSX malicious inputs/formula injection;
-- Object Storage ACL;
+- temporary XLSX storage access and cleanup;
 - backup/restore access;
 - secret rotation;
 - dependency/security scan;

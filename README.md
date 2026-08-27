@@ -3,7 +3,7 @@
 Готовая система регистрации и контроля посещаемости мероприятий КАИТ №20.
 
 Статус: **Release 1.0**  
-Дата релиза: **26 августа 2026**  
+Актуализация документации: **27 августа 2026**  
 Production-совместимость: **Python 3.12, Node.js 24, MySQL 8.1.0**
 
 ## Возможности
@@ -52,10 +52,13 @@ Python-тесты используют реальную одноразовую M
 
 ## Поставка системному администратору
 
-Команда `pnpm release:sysadmin` собирает готовые Web/Scanner static artifacts
-для Apache, Python 3.12 wheel backend, SQL template для предоставленной MySQL
-8.1.0 и конфигурационные примеры. В архив не входят MySQL binaries, systemd,
-Docker, deployment scripts и secrets. Пошаговая инструкция:
+Команда `pnpm release:sysadmin` собирает готовые Web/Scanner static artifacts,
+скомпилированный Python 3.12 wheel backend, SQL template для предоставленной
+MySQL 8.1.0 и конфигурационные примеры. Утверждённая production-схема:
+внешний HTTPS reverse proxy → внутренний Apache HTTP :80 → same-origin `/api` →
+FastAPI `127.0.0.1:3000`. В архив не входят MySQL binaries, systemd, Docker,
+deployment scripts и secrets. Если организации необходим Python source backend,
+используется отдельная команда `pnpm release:sysadmin-source`. Инструкция:
 `docs/15-deployment.md`.
 
 Перед включением реальных участников организация обязана предоставить домены,
@@ -77,7 +80,8 @@ MySQL 8.1.0 оставлена точной целью по требованию
 - `docs/13-infrastructure.md` — production-топология;
 - `docs/14-testing.md` — проверки;
 - `docs/15-deployment.md` — перенос на сервер и релиз;
+- `docs/17-frontend-backend-integration.md` — взаимодействие frontend/backend;
 - `docs/19-mvp-release-status.md` — фактический состав релиза;
-- `docs/20-release-improvement-plan.md` — план оставшихся release-gates;
+- `docs/20-release-improvement-plan.md` — внешние release-gates и cutover;
 - `docs/runbooks/release-decision.md` — итоговый отчёт готовности к выпуску;
 - `docs/adr/` — принятые архитектурные решения.

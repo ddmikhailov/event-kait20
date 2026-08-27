@@ -1,58 +1,122 @@
-# 13. Production infrastructure
+# 13. Production Infrastructure
 
-Статус: **Release 1.0 organisation-managed hosting contract**
+Статус: **Release 1.0 organisation-managed hosting contract**  
+Дата актуализации: **27 августа 2026**
 
 ## Целевая схема
 
 ```text
 Internet
-  └── Apache :443 (TLS)
-      ├── compiled Web static files
-      ├── compiled Scanner PWA static files
-      └── /api proxy → Python 3.12 API → organisation-managed MySQL 8.1.0
-                                      └── email worker → SMTP
+  -> organisation HTTPS reverse proxy :443
+  -> Apache HTTP :80 (private/trusted network only)
+       |-- compiled Web static files
+       |-- compiled Scanner PWA static files
+       `-- /api/ -> Python 3.12 FastAPI 127.0.0.1:3000
+                       |-- MySQL 8.1.0
+                       `-- email worker -> SMTP STARTTLS
 ```
 
-Организация самостоятельно предоставляет Apache, TLS, Python 3.12, способ
-управления процессами, MySQL и резервное копирование. Пакет приложения не
-содержит MySQL binaries, Docker, systemd units и deployment/install scripts.
-Публичны только HTTPS endpoints Apache; API слушает loopback, MySQL доступен
-только доверенным application/migration hosts.
+Внешний reverse proxy завершает TLS. Apache не завершает пользовательский TLS и
+не имеет прямого публичного доступа. Firewall/ACL разрешает Apache :80 только с
+адресов доверенного proxy. FastAPI слушает loopback.
 
-## Пакет приложения
+Proxy сохраняет public `Host` и `Origin`, передаёт Cookie/Set-Cookie без
+изменения и не разрешает внешний HTTP. Apache выставляет backend
+`X-Forwarded-Proto: https`. Все browser-facing origins и links в конфигурации
+остаются HTTPS.
 
-Команда `pnpm release:sysadmin` создаёт проверяемый каталог и `.tar.gz` в
-`.runtime/`. В него входят готовые static artifacts Web/Scanner, CPython 3.12
-bytecode-only wheel без backend `.py` files,
-точные runtime dependencies, конфигурационные примеры, Apache-пример, SQL
-шаблон чистой базы, отдельные migrations и SHA-256 manifest. Секреты и реальные
-credentials в пакет не входят.
+Trusted proxy chain удаляет пользовательские spoofed forwarding headers и сам
+устанавливает корректный client IP. FastAPI не должен доверять forwarded headers
+от любого публичного источника; единственный непосредственный peer API —
+loopback Apache.
 
-Apache завершает TLS и проксирует same-origin `/api/` на loopback API. Это
-сохраняет cookie, CSRF и exact-origin protections без wildcard CORS. TLS private
-keys и итоговая Apache configuration остаются в зоне ответственности
-организации.
+## Application package
 
-Допустим также утверждённый организацией внешний HTTPS reverse proxy перед
-Apache. Для этого варианта `pnpm release:sysadmin-source` создаёт отдельный
-архив с production frontend и Python sources. Внешний proxy завершает TLS и
-сохраняет `Host`, `Origin` и `Set-Cookie`; Apache слушает внутренний HTTP :80,
-принудительно передаёт API `X-Forwarded-Proto: https` и не имеет прямого
-публичного доступа. Все browser-facing URL и origins остаются HTTPS.
+Основной воспроизводимый комплект:
+
+```text
+pnpm release:sysadmin
+```
+
+Он содержит:
+
+- compiled Web and Scanner static artifacts с API base `/api`;
+- CPython 3.12 bytecode-only wheel без backend `.py`;
+- exact runtime requirements;
+- защищённый env template без реальных secrets;
+- Apache internal HTTP example;
+- SQL new-database template и отдельные migrations;
+- `MANIFEST.json` с source SHA и SHA-256 файлов.
+
+Если правила организации требуют backend sources:
+
+```text
+pnpm release:sysadmin-source
+```
+
+Этот вариант заменяет wheel на устанавливаемый Python source package. Сетевая,
+конфигурационная и security topology у двух комплектов одинакова.
+
+В поставку не входят MySQL binaries, Docker, systemd units, Nginx, process
+manager definitions, deployment/install scripts, TLS keys, passwords и secrets.
+
+## Runtime ownership
+
+Организация предоставляет и сопровождает:
+
+- внешний HTTPS reverse proxy, DNS и certificates;
+- Apache и закрытый доступ к его HTTP :80;
+- CPython ровно 3.12 и выбранный process manager;
+- MySQL ровно 8.1.0;
+- SMTP STARTTLS credential и sender;
+- protected configuration storage;
+- backup/restore, monitoring, alert delivery и rollback procedure.
+
+Приложение не устанавливает и не обновляет это runtime software.
 
 ## MySQL policy
 
-- production target: ровно MySQL 8.1.0;
-- staging и integration tests: ровно MySQL 8.1.0;
-- migrations обязаны сохранять совместимость с MySQL 8.1.0;
-- application package не устанавливает и не обновляет MySQL;
-- runtime user имеет только DML-права, DDL выполняет отдельный migration user;
-- root credential не находится в конфигурации приложения.
+- production и staging target: ровно MySQL 8.1.0;
+- integration tests: ровно MySQL 8.1.0;
+- migrations совместимы с MySQL 8.1.0;
+- application user `event_app` получает только DML-права;
+- schema operations выполняются отдельным controlled account;
+- MySQL не публикуется пользователям/в Интернет;
+- для отдельного DB host разрешается только адрес backend-сервера;
+- root credential не используется приложением.
 
-## Эксплуатационные обязанности организации
+Версия 8.1.0 завершила lifecycle, но зафиксирована владельцем для существующего
+сервера. Компенсирующие controls: сетевой allowlist, минимальные права,
+monitoring, encrypted backup и проверяемое восстановление.
 
-Организация выбирает process manager и отвечает за restart, least privilege,
-защищённое хранение env/secrets, журналирование без PII, MySQL backups,
-off-host recovery copy, monitoring `/health/live` и `/health/ready`, SMTP и
-обновление TLS certificates. Внутренние reference-материалы старого native
-варианта не являются частью поставляемого sysadmin package.
+## Protected configuration
+
+Application configuration хранится, например, в:
+
+```text
+/etc/event-registration/backend.env
+```
+
+Process manager передаёт только путь:
+
+```text
+EVENT_REGISTRATION_ENV_FILE=/etc/event-registration/backend.env
+```
+
+Файл находится вне Git и Apache DocumentRoot, не передаётся в release archive и
+доступен только runtime identity backend. `DATABASE_URL` может указывать на
+локальный или отдельный MySQL host; MySQL grant должен соответствовать реальному
+source IP/hostname backend-сервера.
+
+## Health and operations
+
+- `/health/live` подтверждает работу процесса;
+- `/health/ready` дополнительно проверяет MySQL;
+- снаружи endpoints доступны как `/api/health/live` и `/api/health/ready`;
+- мониторинг email queue, disk, MySQL, TLS, backup age и process restart реализует
+  организация выбранными средствами;
+- application logs не содержат auth bodies, cookies, raw tokens или unnecessary
+  PII.
+
+Исторические native Nginx/systemd материалы ADR-011 не являются текущей
+production topology и не входят в sysadmin package.

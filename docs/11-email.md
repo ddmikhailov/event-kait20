@@ -43,6 +43,7 @@ Registration ID; повтор одного запроса не создаёт д
 
 Обязательны SMTP_HOST, SMTP_FROM_EMAIL и при необходимости username/app
 password. Личный основной пароль почтового ящика запрещён. SMTP secret хранится
-в Lockbox или защищённом deployment env. Demo без SMTP оставляет intents QUEUED.
+в защищённом конфигурационном механизме организации. Demo без SMTP оставляет
+intents QUEUED.
 
 Произвольные массовые объявления относятся к версии 2.0.

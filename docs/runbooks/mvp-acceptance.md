@@ -43,15 +43,15 @@ Release-load профиль использует ту же одноразову�
 4. После deployment API, Web и Scanner выполнить:
 
 ```text
-SMOKE_API_BASE_URL=https://<api> \
 SMOKE_WEB_BASE_URL=https://<web> \
 SMOKE_SCANNER_BASE_URL=https://<scanner> \
 pnpm smoke:mvp
 ```
 
-Smoke проверяет liveness/readiness MySQL, закрытые production API docs, точный
-CORS для Web, отклонение mutation с постороннего Origin, security headers/CSP
-после Apache, обе application shells и production PWA manifest. Он не
+Smoke проверяет оба same-origin `/api` proxy, liveness/readiness MySQL, закрытые
+production API docs, точный CORS для Web, отклонение mutation с постороннего
+Origin, security headers/CSP после внешнего HTTPS proxy и Apache, обе application
+shells и production PWA manifest. Он не
 авторизуется, не передаёт credentials и не создаёт business data.
 
 Python integration tests автоматически запускают test-only MySQL 8.1.0 на

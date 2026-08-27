@@ -1,16 +1,6 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import { basename, dirname, isAbsolute, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const deployRoot = resolve(repositoryRoot, 'deploy');
 const placeholderPattern =
   /(?:example\.(?:com|org|ru)|replace|change-?me|todo|<[^>]+>)/i;
 
@@ -18,18 +8,26 @@ export class DeploymentConfigError extends Error {}
 
 const requiredKeys = [
   'NODE_ENV',
+  'API_HOST',
+  'API_PORT',
   'DATABASE_URL',
+  'DATABASE_CONNECT_TIMEOUT_MS',
+  'MIGRATIONS_DIR',
   'CORS_ORIGINS',
   'SESSION_SECRET',
+  'SESSION_TTL_SECONDS',
   'AUTH_LINK_SECRET',
   'AUTH_LINK_BASE_URL',
+  'INVITATION_TTL_SECONDS',
+  'PASSWORD_RESET_TTL_SECONDS',
+  'AUTH_RATE_LIMIT_MAX',
+  'AUTH_RATE_LIMIT_WINDOW_SECONDS',
   'QR_SIGNING_SECRET',
   'PUBLIC_WEB_BASE_URL',
-  'PUBLIC_API_BASE_URL',
   'CONSENT_URL',
   'CONSENT_VERSION',
-  'TLS_CERTIFICATE',
-  'TLS_CERTIFICATE_KEY',
+  'EMAIL_MAX_ATTEMPTS',
+  'EMAIL_POLL_INTERVAL_MS',
   'SMTP_HOST',
   'SMTP_PORT',
   'SMTP_USERNAME',
@@ -83,7 +81,13 @@ const secureUrl = (value, key, { originOnly = false } = {}) => {
   return url;
 };
 
-const exactOrigin = (url) => url.origin;
+const positiveInteger = (values, key, maximum = Number.MAX_SAFE_INTEGER) => {
+  const value = Number(values[key]);
+  assert(
+    Number.isInteger(value) && value > 0 && value <= maximum,
+    `${key} must be a positive integer`,
+  );
+};
 
 const validateFileMode = (path) => {
   if (process.platform === 'win32') return;
@@ -99,10 +103,10 @@ export const validateDeploymentConfig = (
   values,
   { checkFiles = false, envPath, migration = false } = {},
 ) => {
-  for (const key of requiredKeys) {
-    assert(values[key], `${key} is required`);
-  }
+  for (const key of requiredKeys) assert(values[key], `${key} is required`);
   assert(values.NODE_ENV === 'production', 'NODE_ENV must be production');
+  assert(values.API_HOST === '127.0.0.1', 'API_HOST must be 127.0.0.1');
+  assert(values.API_PORT === '3000', 'API_PORT must be 3000');
   for (const [key, value] of Object.entries(values)) {
     if (key === 'SMTP_FROM_NAME') continue;
     assert(
@@ -130,20 +134,27 @@ export const validateDeploymentConfig = (
     database.password,
     'DATABASE_URL must contain the application password',
   );
-  assert(
-    ['127.0.0.1', 'localhost'].includes(database.hostname),
-    'Native single-server MySQL must use loopback',
-  );
+  assert(database.hostname, 'DATABASE_URL must contain the MySQL host');
   assert(!database.port || database.port === '3306', 'MySQL port must be 3306');
   assert(
     database.pathname === '/event_registration',
     'DATABASE_URL must select event_registration',
   );
 
+  const migrations = values.MIGRATIONS_DIR;
+  assert(
+    isAbsolute(migrations) || /^\/[A-Za-z0-9._/-]+$/.test(migrations),
+    'MIGRATIONS_DIR must be an absolute path',
+  );
+  if (checkFiles) {
+    assert(existsSync(migrations), 'MIGRATIONS_DIR does not exist');
+    assert(
+      statSync(migrations).isDirectory(),
+      'MIGRATIONS_DIR is not a directory',
+    );
+  }
+
   const web = secureUrl(values.PUBLIC_WEB_BASE_URL, 'PUBLIC_WEB_BASE_URL', {
-    originOnly: true,
-  });
-  const api = secureUrl(values.PUBLIC_API_BASE_URL, 'PUBLIC_API_BASE_URL', {
     originOnly: true,
   });
   const origins = values.CORS_ORIGINS.split(',').map((item) => item.trim());
@@ -156,7 +167,7 @@ export const validateDeploymentConfig = (
     secureUrl(origin, `CORS_ORIGINS[${index}]`, { originOnly: true }),
   );
   assert(
-    new Set(parsedOrigins.map(exactOrigin)).size === 2,
+    new Set(parsedOrigins.map((origin) => origin.origin)).size === 2,
     'Web and Scanner origins must be distinct',
   );
   assert(
@@ -165,10 +176,6 @@ export const validateDeploymentConfig = (
   );
   const scanner = parsedOrigins.find((origin) => origin.origin !== web.origin);
   assert(scanner, 'Scanner origin is missing');
-  assert(
-    new Set([web.hostname, scanner.hostname, api.hostname]).size === 3,
-    'Web, Scanner and API must use distinct domains',
-  );
 
   const auth = secureUrl(values.AUTH_LINK_BASE_URL, 'AUTH_LINK_BASE_URL');
   assert(
@@ -197,115 +204,33 @@ export const validateDeploymentConfig = (
     'Cryptographic secrets must be distinct',
   );
 
-  const smtpPort = Number(values.SMTP_PORT);
-  assert(
-    Number.isInteger(smtpPort) && smtpPort > 0 && smtpPort <= 65535,
-    'SMTP_PORT is invalid',
-  );
+  for (const key of [
+    'DATABASE_CONNECT_TIMEOUT_MS',
+    'SESSION_TTL_SECONDS',
+    'INVITATION_TTL_SECONDS',
+    'PASSWORD_RESET_TTL_SECONDS',
+    'AUTH_RATE_LIMIT_MAX',
+    'AUTH_RATE_LIMIT_WINDOW_SECONDS',
+    'EMAIL_MAX_ATTEMPTS',
+    'EMAIL_POLL_INTERVAL_MS',
+  ]) {
+    positiveInteger(values, key);
+  }
+  positiveInteger(values, 'SMTP_PORT', 65_535);
   assert(values.SMTP_STARTTLS === 'true', 'SMTP_STARTTLS must be true');
   assert(
     /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(values.SMTP_FROM_EMAIL),
     'SMTP_FROM_EMAIL is invalid',
   );
-
-  for (const key of ['TLS_CERTIFICATE', 'TLS_CERTIFICATE_KEY']) {
-    assert(isAbsolute(values[key]), `${key} must be an absolute path`);
-    if (checkFiles) assert(existsSync(values[key]), `${key} does not exist`);
-  }
   if (envPath && existsSync(envPath)) validateFileMode(envPath);
 
   return {
     webDomain: web.hostname,
     scannerDomain: scanner.hostname,
-    apiDomain: api.hostname,
-    publicApiBaseUrl: api.origin,
-    certificate: values.TLS_CERTIFICATE,
-    certificateKey: values.TLS_CERTIFICATE_KEY,
+    apiPath: '/api',
+    databaseHost: database.hostname,
+    migrationDirectory: migrations,
   };
-};
-
-const writeProtected = (path, source, mode = 0o644) => {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, source, { encoding: 'utf8', mode });
-  if (process.platform !== 'win32') chmodSync(path, mode);
-};
-
-const replaceAll = (source, replacements, label) => {
-  let result = source;
-  for (const [placeholder, value] of Object.entries(replacements)) {
-    result = result.replaceAll(placeholder, value);
-  }
-  assert(
-    !/__[A-Z0-9_]+__/.test(result),
-    `${label} has unresolved placeholders`,
-  );
-  return result;
-};
-
-export const renderDeployment = ({
-  values,
-  outputDirectory,
-  checkFiles = false,
-  envPath,
-}) => {
-  const summary = validateDeploymentConfig(values, { checkFiles, envPath });
-  const nginxOutput = resolve(outputDirectory, 'nginx');
-  const replacements = {
-    __WEB_DOMAIN__: summary.webDomain,
-    __SCANNER_DOMAIN__: summary.scannerDomain,
-    __API_DOMAIN__: summary.apiDomain,
-    __WEB_CERTIFICATE__: summary.certificate,
-    __WEB_CERTIFICATE_KEY__: summary.certificateKey,
-    __SCANNER_CERTIFICATE__: summary.certificate,
-    __SCANNER_CERTIFICATE_KEY__: summary.certificateKey,
-    __API_CERTIFICATE__: summary.certificate,
-    __API_CERTIFICATE_KEY__: summary.certificateKey,
-  };
-  const templates = [
-    ['nginx/event-registration.conf.template', 'nginx/event-registration.conf'],
-    [
-      'nginx/event-registration-web-security.conf',
-      'nginx/event-registration-web-security.conf',
-    ],
-    [
-      'nginx/event-registration-scanner-security.conf',
-      'nginx/event-registration-scanner-security.conf',
-    ],
-  ];
-  for (const [input, output] of templates) {
-    const source = readFileSync(resolve(deployRoot, input), 'utf8');
-    writeProtected(
-      resolve(outputDirectory, output),
-      replaceAll(source, replacements, basename(input)),
-    );
-  }
-  for (const directory of ['systemd', 'mysql']) {
-    const files =
-      directory === 'systemd'
-        ? [
-            'event-registration-api.service',
-            'event-registration-email-worker.service',
-            'event-registration-mysql.service',
-            'event-registration-backup.service',
-            'event-registration-backup.timer',
-            'event-registration-monitor.service',
-            'event-registration-monitor.timer',
-          ]
-        : ['event-registration.cnf'];
-    for (const file of files) {
-      const input = resolve(deployRoot, directory, file);
-      if (!existsSync(input)) continue;
-      writeProtected(
-        resolve(outputDirectory, directory, file),
-        readFileSync(input, 'utf8'),
-      );
-    }
-  }
-  writeProtected(
-    resolve(outputDirectory, 'deployment-manifest.json'),
-    `${JSON.stringify({ ...summary, nginxOutput }, null, 2)}\n`,
-  );
-  return summary;
 };
 
 const argument = (name, fallback) => {
@@ -315,40 +240,22 @@ const argument = (name, fallback) => {
 
 const main = () => {
   const action = process.argv[2];
-  assert(['check', 'render'].includes(action), 'Use check or render');
-  const envPath = resolve(argument('--env', 'deploy/native.env'));
+  assert(action === 'check', 'Use check');
+  const envPath = resolve(
+    argument('--env', 'release/sysadmin/backend.env.example'),
+  );
   assert(existsSync(envPath), `Environment file not found: ${envPath}`);
   const values = parseEnvironment(readFileSync(envPath, 'utf8'));
-  const checkFiles = process.argv.includes('--check-files');
-  const migration = process.argv.includes('--migration');
-  if (action === 'check') {
-    const summary = validateDeploymentConfig(values, {
-      checkFiles,
-      envPath,
-      migration,
-    });
-    if (process.argv.includes('--json')) console.log(JSON.stringify(summary));
-    else console.log('Production deployment configuration is valid.');
-    return;
-  }
-  const outputDirectory = resolve(
-    argument('--output', '.runtime/deploy-rendered'),
-  );
-  const summary = renderDeployment({
-    values,
-    outputDirectory,
-    checkFiles,
+  const summary = validateDeploymentConfig(values, {
+    checkFiles: process.argv.includes('--check-files'),
     envPath,
+    migration: process.argv.includes('--migration'),
   });
-  console.log(
-    `Rendered deployment for ${summary.webDomain} in ${outputDirectory}`,
-  );
+  if (process.argv.includes('--json')) console.log(JSON.stringify(summary));
+  else console.log('Production backend configuration is valid.');
 };
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
   try {
     main();
   } catch (error) {

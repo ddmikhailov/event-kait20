@@ -41,15 +41,14 @@ test('accepts the required production API security headers', () => {
 });
 
 test('validates Web and Scanner CSP and camera policy', () => {
-  const apiOrigin = 'https://api.kait20.ru';
   const csp =
-    `default-src 'self'; connect-src 'self' ${apiOrigin}; ` +
+    "default-src 'self'; connect-src 'self'; " +
     "object-src 'none'; frame-ancestors 'none'";
   const web = new Response(null, {
     headers: productionHeaders({ 'content-security-policy': csp }),
   });
   assert.doesNotThrow(() =>
-    verifySecurityHeaders(web, { contentSecurityPolicy: true, apiOrigin }),
+    verifySecurityHeaders(web, { contentSecurityPolicy: true }),
   );
   const scanner = new Response(null, {
     headers: productionHeaders({
@@ -61,7 +60,6 @@ test('validates Web and Scanner CSP and camera policy', () => {
     verifySecurityHeaders(scanner, {
       contentSecurityPolicy: true,
       scanner: true,
-      apiOrigin,
     }),
   );
 });
@@ -80,18 +78,16 @@ test('rejects missing headers and an incomplete CSP', () => {
     () =>
       verifySecurityHeaders(response, {
         contentSecurityPolicy: true,
-        apiOrigin: 'https://api.kait20.ru',
       }),
     /object-src/,
   );
 });
 
 test('runs the complete non-mutating production security smoke', async () => {
-  const apiOrigin = 'https://api.kait20.ru';
   const webOrigin = 'https://events.kait20.ru';
   const scannerOrigin = 'https://scanner.kait20.ru';
   const csp =
-    `default-src 'self'; connect-src 'self' ${apiOrigin}; ` +
+    "default-src 'self'; connect-src 'self'; " +
     "object-src 'none'; frame-ancestors 'none'";
   const json = (body, status = 200, headers = {}) =>
     new Response(JSON.stringify(body), {
@@ -100,7 +96,8 @@ test('runs the complete non-mutating production security smoke', async () => {
     });
   const fetchImpl = async (url, options) => {
     const requestUrl = new URL(url);
-    if (requestUrl.origin === apiOrigin) {
+    const isApi = requestUrl.pathname.startsWith('/api/');
+    if (isApi) {
       const headers = productionHeaders();
       const origin = options.headers.origin;
       if (origin === webOrigin) {
@@ -110,10 +107,10 @@ test('runs the complete non-mutating production security smoke', async () => {
       if (options.method === 'POST') {
         return json({ error: { code: 'ORIGIN_REJECTED' } }, 403, headers);
       }
-      if (requestUrl.pathname === '/health/live') {
+      if (requestUrl.pathname === '/api/health/live') {
         return json({ status: 'ok' }, 200, headers);
       }
-      if (requestUrl.pathname === '/health/ready') {
+      if (requestUrl.pathname === '/api/health/ready') {
         return json({ status: 'ready' }, 200, headers);
       }
       return json({ error: { code: 'NOT_FOUND' } }, 404, headers);
@@ -139,11 +136,11 @@ test('runs the complete non-mutating production security smoke', async () => {
 
   const result = await runMvpSmoke({
     environment: {
-      SMOKE_API_BASE_URL: apiOrigin,
       SMOKE_WEB_BASE_URL: webOrigin,
       SMOKE_SCANNER_BASE_URL: scannerOrigin,
     },
     fetchImpl,
   });
-  assert.equal(result.checks, 12);
+  assert.equal(result.checks, 13);
+  assert.equal(result.api, `${webOrigin}/api`);
 });

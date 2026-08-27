@@ -1,6 +1,6 @@
 # Backup and restore runbook
 
-Статус: **Release 1.0 native operational runbook**
+Статус: **Release 1.0 organisation-managed operational contract**
 
 ## Граница безопасности
 
@@ -13,24 +13,20 @@ MySQL ровно 8.1.0 остаётся source of truth. Backup содержит
 ответственных. Потеря backup, отсутствие off-host копии или неуспешная учебная
 проверка восстановления являются production blocker.
 
-## Установка и ежедневная проверка
+## Организация backup
 
-1. Создать read-only `event_backup@127.0.0.1`.
-2. Установить `/etc/event-registration/mysql-backup.cnf` из примера с владельцем
-   `event-backup:event-backup` и mode `0400`.
-3. Установить `/etc/event-registration/backup.env` с владельцем
-   `root:event-backup` и mode `0640`. Указать public `AGE_RECIPIENT` и retention.
-4. Запустить `event-registration-backup.service` вручную.
-5. Проверить новый `.sql.gz.age`, его `.sha256` и журнал без секретов/PII.
-6. Скопировать оба файла в утверждённое off-host хранилище.
-7. Только после этого включить `event-registration-backup.timer`.
+1. Создать отдельного read-only MySQL backup user только с необходимого host.
+2. Хранить его credential в защищённом механизме организации.
+3. Ежедневно создавать consistent dump средствами, совместимыми с MySQL 8.1.0.
+4. Шифровать backup до помещения в постоянное/off-host хранилище.
+5. Сохранять SHA-256, время, source database и aggregate result без PII.
+6. Проверять свежесть backup и доставлять alert ответственному.
+7. Регулярно восстанавливать копию в отдельную пустую database.
 
-Скрипт `deploy/bin/backup-mysql.sh` проверяет точную версию клиента 8.1.0,
-владельца и права credentials, шифрует поток `mysqldump | gzip` напрямую через
-age и удаляет только файлы собственного строгого шаблона старше retention.
-`BACKUP_DIRECTORY` по умолчанию остаётся `/var/backups/event-registration`; иной
-абсолютный каталог разрешён только для изолированного recovery drill и проходит
-те же проверки владельца и запрет symlink.
+Reference scripts `deploy/bin/backup-mysql.sh` и `verify-backup.sh` используются
+только инженерным CI recovery drill и не входят в sysadmin package. Организация
+может реализовать эквивалентные controls собственными approved средствами; проект
+не устанавливает timers/services и не навязывает конкретный process manager.
 
 CI выполняет `scripts/ci-backup-restore.sh`: поднимает одноразовую MySQL 8.1.0,
 применяет migrations, создаёт временную age identity, делает зашифрованный
@@ -44,19 +40,15 @@ production-копии на изолированном сервере.
 
 На изолированном сервере MySQL 8.1.0 создать пустую database с именем
 `event_registration_restore_<идентификатор>`. Подготовить отдельные MySQL
-credentials и age identity. Выполнить:
+credentials и decrypt identity. Утверждённая процедура организации должна:
 
-```text
-deploy/bin/verify-backup.sh \
-  --file /protected/event-registration-YYYYMMDDTHHMMSSZ.sql.gz.age \
-  --database event_registration_restore_drill \
-  --defaults-file /protected/restore-client.cnf \
-  --identity /protected/age-identity.txt
-```
-
-Команда сначала проверяет SHA-256, точную версию клиента и пустоту целевой DB,
-затем расшифровывает поток прямо в MySQL. Она проверяет migration registry и
-основные таблицы, но намеренно сохраняет восстановленную DB для ручной приёмки.
+1. проверить SHA-256 и точную версию restore client/server;
+2. подтвердить, что target database пустая и не является production;
+3. расшифровать backup без создания незашифрованной постоянной копии;
+4. восстановить данные в target database;
+5. проверить `schema_migrations` и основные таблицы;
+6. сохранить database для ручной application-приёмки до формального завершения
+   drill.
 
 После этого запустить API в закрытой recovery-среде и проверить readiness,
 авторизацию, регистрацию, ticket lookup и scanner sync на разрешённых данных.
@@ -76,14 +68,11 @@ off-host копия. Записываются commit SHA, список migration
 
 ## Monitoring и проверка alert
 
-`event-registration-monitor.timer` каждые пять минут запускает
-`deploy/bin/check-operations.sh` от `event-backup`. Проверяются systemd units,
-HTTPS readiness, срок TLS не менее семи дней, свободное место, возраст и SHA-256
-последнего backup, точная MySQL 8.1.0, FAILED deliveries и возраст QUEUED email.
-Пороговые значения находятся в защищённом `backup.env`.
+Monitoring организации регулярно проверяет process manager, внешний HTTPS
+readiness, срок TLS, свободное место, возраст и SHA-256 последнего backup, точную
+MySQL 8.1.0, FAILED deliveries и возраст QUEUED email. Пороговые значения и
+получатели alert находятся в защищённой operational configuration.
 
-Если у организации уже есть HTTPS webhook мониторинга, его URL задаётся через
-`OPERATIONS_ALERT_WEBHOOK_URL`; наружу уходят только стабильные имена упавших
-checks, без hostname, PII и секретов. Без webhook ошибка остаётся в journald и
-делает service failed, но перед production обязательно настроить фактический
-канал и зафиксировать тестовую доставку alert в release evidence.
+Во внешний monitoring channel уходят только стабильные имена failed checks без
+PII, credentials и connection strings. Перед production обязательно выполнить
+тестовую доставку alert и сохранить ссылку на evidence.

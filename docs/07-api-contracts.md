@@ -66,8 +66,8 @@ Errors include: `VALIDATION_ERROR`, `REGISTRATION_CLOSED`, `CAPACITY_FULL`, `EVE
 Public web implementation freeze: `/events/:slug` renders the Event and typed
 dynamic form from these contracts; it does not persist draft PII in browser
 storage. The client submits the consent version received with the rendered
-Event and branches on stable error codes. `VITE_API_BASE_URL` optionally selects
-the API origin at build time; an empty value uses the web application's origin.
+Event and branches on stable error codes. Production builds freeze
+`VITE_API_BASE_URL=/api`; Apache proxies that same-origin prefix to FastAPI.
 
 ## 3. Ticket
 

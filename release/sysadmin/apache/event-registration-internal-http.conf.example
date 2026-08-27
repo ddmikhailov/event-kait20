@@ -1,7 +1,9 @@
-# Required modules: proxy, proxy_http, headers, rewrite, ssl.
-# TLS certificate directives are intentionally owned by the organisation.
+# Apache receives HTTP only from the organisation's trusted HTTPS reverse proxy.
+# Required modules: proxy, proxy_http, headers, rewrite.
+# Firewall/ACL MUST deny direct client access to this Apache :80 endpoint.
+# The external proxy MUST preserve the original Host and Origin headers.
 
-<VirtualHost *:443>
+<VirtualHost *:80>
     ServerName events.example.org
     DocumentRoot /var/www/event-registration/web
 
@@ -22,13 +24,13 @@
 
     Header always set X-Content-Type-Options "nosniff"
     Header always set X-Frame-Options "DENY"
-    Header always set Referrer-Policy "same-origin"
+    Header always set Referrer-Policy "no-referrer"
     Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
     Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
     Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
 </VirtualHost>
 
-<VirtualHost *:443>
+<VirtualHost *:80>
     ServerName scanner.example.org
     DocumentRoot /var/www/event-registration/scanner
 
@@ -49,7 +51,7 @@
 
     Header always set X-Content-Type-Options "nosniff"
     Header always set X-Frame-Options "DENY"
-    Header always set Referrer-Policy "same-origin"
+    Header always set Referrer-Policy "no-referrer"
     Header always set Permissions-Policy "camera=(self), microphone=(), geolocation=()"
     Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
     Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"

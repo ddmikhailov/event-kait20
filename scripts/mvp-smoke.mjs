@@ -29,7 +29,7 @@ const includesHeaderValue = (response, name, expected) => {
 
 export const verifySecurityHeaders = (
   response,
-  { contentSecurityPolicy = false, scanner = false, apiOrigin } = {},
+  { contentSecurityPolicy = false, scanner = false } = {},
 ) => {
   includesHeaderValue(
     response,
@@ -51,7 +51,7 @@ export const verifySecurityHeaders = (
     "default-src 'self'",
     "object-src 'none'",
     "frame-ancestors 'none'",
-    `connect-src 'self' ${apiOrigin}`,
+    "connect-src 'self'",
   ]) {
     if (!policy.includes(directive)) {
       throw new Error(`Content-Security-Policy is missing ${directive}`);
@@ -66,7 +66,8 @@ const fetchResponse = async (
   { accept = 'application/json', ...options } = {},
 ) => {
   const { headers = {}, ...requestOptions } = options;
-  return fetchImpl(new URL(path, baseUrl), {
+  const relativePath = path.startsWith('/') ? path.slice(1) : path;
+  return fetchImpl(new URL(relativePath, baseUrl), {
     ...requestOptions,
     headers: { accept, ...headers },
     redirect: 'error',
@@ -86,32 +87,38 @@ export const runMvpSmoke = async ({
   environment = process.env,
   fetchImpl = fetch,
 } = {}) => {
-  const api = requiredBaseUrl('SMOKE_API_BASE_URL', environment);
   const web = requiredBaseUrl('SMOKE_WEB_BASE_URL', environment);
   const scanner = requiredBaseUrl('SMOKE_SCANNER_BASE_URL', environment);
-  if (new Set([api.origin, web.origin, scanner.origin]).size !== 3) {
-    throw new Error('API, Web and Scanner must use distinct origins');
+  if (web.origin === scanner.origin) {
+    throw new Error('Web and Scanner must use distinct origins');
   }
+  const webApi = new URL('/api/', web);
+  const scannerApi = new URL('/api/', scanner);
 
-  for (const [path, expectedBody] of [
-    ['/health/live', 'ok'],
-    ['/health/ready', 'ready'],
+  for (const [label, api] of [
+    ['Web', webApi],
+    ['Scanner', scannerApi],
   ]) {
-    const response = await fetchResponse(fetchImpl, api, path);
-    expectStatus(response, path, 200);
-    verifySecurityHeaders(response);
-    const body = await response.json();
-    if (body?.status !== expectedBody) {
-      throw new Error(`${path} returned an unexpected response`);
+    for (const [path, expectedBody] of [
+      ['/health/live', 'ok'],
+      ['/health/ready', 'ready'],
+    ]) {
+      const response = await fetchResponse(fetchImpl, api, path);
+      expectStatus(response, `${label} /api${path}`, 200);
+      verifySecurityHeaders(response);
+      const body = await response.json();
+      if (body?.status !== expectedBody) {
+        throw new Error(`${label} /api${path} returned an unexpected response`);
+      }
     }
   }
 
   for (const path of ['/docs', '/redoc', '/openapi.json']) {
-    const response = await fetchResponse(fetchImpl, api, path);
-    expectStatus(response, path, 404);
+    const response = await fetchResponse(fetchImpl, webApi, path);
+    expectStatus(response, `/api${path}`, 404);
   }
 
-  const trustedCors = await fetchResponse(fetchImpl, api, '/health/live', {
+  const trustedCors = await fetchResponse(fetchImpl, webApi, '/health/live', {
     headers: { origin: web.origin },
   });
   expectStatus(trustedCors, '/health/live with trusted Origin', 200);
@@ -120,7 +127,7 @@ export const runMvpSmoke = async ({
   }
   includesHeaderValue(trustedCors, 'access-control-allow-credentials', 'true');
 
-  const untrustedCors = await fetchResponse(fetchImpl, api, '/health/live', {
+  const untrustedCors = await fetchResponse(fetchImpl, webApi, '/health/live', {
     headers: { origin: 'https://untrusted.invalid' },
   });
   expectStatus(untrustedCors, '/health/live with untrusted Origin', 200);
@@ -128,14 +135,19 @@ export const runMvpSmoke = async ({
     throw new Error('Untrusted Origin received a CORS allow header');
   }
 
-  const rejectedMutation = await fetchResponse(fetchImpl, api, '/auth/login', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      origin: 'https://untrusted.invalid',
+  const rejectedMutation = await fetchResponse(
+    fetchImpl,
+    webApi,
+    '/auth/login',
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://untrusted.invalid',
+      },
+      body: '{}',
     },
-    body: '{}',
-  });
+  );
   expectStatus(rejectedMutation, '/auth/login with untrusted Origin', 403);
   const rejection = await rejectedMutation.json();
   if (rejection?.error?.code !== 'ORIGIN_REJECTED') {
@@ -151,7 +163,6 @@ export const runMvpSmoke = async ({
   expectStatus(webResponse, 'Web /', 200);
   verifySecurityHeaders(webResponse, {
     contentSecurityPolicy: true,
-    apiOrigin: api.origin,
   });
   const webShell = await webResponse.text();
   if (
@@ -169,7 +180,6 @@ export const runMvpSmoke = async ({
   verifySecurityHeaders(scannerResponse, {
     contentSecurityPolicy: true,
     scanner: true,
-    apiOrigin: api.origin,
   });
   const scannerShell = await scannerResponse.text();
   if (
@@ -196,10 +206,10 @@ export const runMvpSmoke = async ({
   }
 
   return {
-    api: api.origin,
+    api: webApi.href.replace(/\/$/, ''),
     web: web.origin,
     scanner: scanner.origin,
-    checks: 12,
+    checks: 13,
   };
 };
 

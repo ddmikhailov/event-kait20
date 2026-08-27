@@ -33,7 +33,10 @@
 - Application compatibility target: MySQL 8.1.0 exactly.
 - Staging and integration tests must use MySQL 8.1.0 and reject a different server version.
 - MySQL-specific migrations must remain compatible with MySQL 8.1.0.
-- MySQL 8.1 is an expired Innovation release. The owner explicitly accepted this lifecycle risk; a supported production hosting option and an upgrade plan remain release gates.
+- MySQL 8.1 is an expired Innovation release. The owner explicitly fixed this
+  exact version for the organisation server. Production therefore requires
+  documented risk acceptance, network isolation, least-privilege accounts and
+  proven backup/restore; changing the major/minor target is outside Release 1.0.
 
 ## 3. `persons`
 

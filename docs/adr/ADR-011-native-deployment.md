@@ -18,10 +18,13 @@
 - CI использует checksum-pinned официальный пакет MySQL 8.1.0 без container;
 - Docker/Compose files удаляются, чтобы не поддерживать второй deployment path.
 
-## Последствия
+## Исторические последствия
 
 Docker больше не является runtime, local-demo или CI prerequisite. Обновления
 требуют пересобрать static artifacts и Python environment из одного commit.
 Операционная команда отвечает за systemd, Nginx, TLS, native MySQL backup и
 проверку точной версии. Риск завершившегося lifecycle MySQL 8.1.0 сохраняется и
 компенсируется изоляцией, минимальными правами и recovery controls.
+
+Эти Nginx/systemd decisions больше не являются инструкцией Release 1.0 и не
+входят в package системного администратора. Текущий contract определён ADR-012.

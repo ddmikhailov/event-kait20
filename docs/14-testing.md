@@ -176,9 +176,10 @@ A feature is not complete until:
 CI executes the full repository validation suite and dependency vulnerability
 audits. Integration tests extract the checksum-pinned official MySQL 8.1.0
 server package and start a disposable native instance; Docker is not required.
-After every staging rollout, unauthenticated smoke checks must pass against
-`/health/live` and `/health/ready`; the same smoke proves closed API docs,
-Origin/CORS enforcement and the Apache security-header baseline without creating
-business data. A production promotion additionally requires a MySQL 8.1.0
+After every staging rollout, unauthenticated smoke checks must pass against both
+public same-origin `/api/health/live` and `/api/health/ready` proxies; the same
+smoke proves closed API docs, Origin/CORS enforcement and the external HTTPS plus
+Apache security-header baseline without creating business data. A production
+promotion additionally requires a MySQL 8.1.0
 migration rehearsal, a current recovery point and the applicable browser/device
 E2E checks from this document.

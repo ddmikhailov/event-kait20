@@ -54,9 +54,10 @@ Python 3.12 + FastAPI backend.
 
 ```text
 Public/Admin Web ─┐
-Scanner PWA ──────┼── HTTPS ──> FastAPI ─────> MySQL 8.1.0
-                  │                              ▲
-                  └── Scanner: IndexedDB/Dexie  └── Email Worker ──> SMTP
+Scanner PWA ──────┼── HTTPS proxy ──> Apache HTTP ──> /api ──> FastAPI
+                  │          │                         │          │
+                  │          └── static files          │          └──> MySQL 8.1.0
+                  └── Scanner: IndexedDB/Dexie         └── Email Worker ──> SMTP
 ```
 
 ## 4. Технологический стек
@@ -75,15 +76,19 @@ Scanner PWA ──────┼── HTTPS ──> FastAPI ─────> M
 - SQLAlchemy 2 + PyMySQL;
 - Dexie/IndexedDB;
 - GitHub Actions;
-- готовые static artifacts обслуживаются Apache, а Python 3.12 backend запускается
-  выбранным организацией process manager; целевая площадка — Yandex Cloud/сервер
-  организации.
+- готовые static artifacts обслуживаются Apache по внутреннему HTTP, внешний
+  reverse proxy организации завершает HTTPS, а Python 3.12 backend запускается
+  выбранным организацией process manager.
 
 Версии Node-пакетов фиксируются lockfile, Python-зависимости — точными версиями в `backend/pyproject.toml`. Shared Zod schemas в `packages/contracts` обслуживают Web/Scanner, а эквивалентная server-side проверка публичной границы выполняется Pydantic-моделями.
 
 ## 5. Backend доступ к БД
 
 Frontend и Scanner не получают прямой доступ к MySQL. Вся работа идёт через API и server-side authorization.
+
+Оба frontend собираются с `VITE_API_BASE_URL=/api`. Apache снимает внешний
+префикс `/api/` и передаёт запрос на loopback FastAPI. Отдельный публичный
+API-домен версии 1.0 не требуется.
 
 ## 6. Staging и Production
 

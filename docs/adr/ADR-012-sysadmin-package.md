@@ -16,19 +16,22 @@ deployment scripts в поставке запрещены. Пароль перв
 - Web и Scanner поставляются скомпилированными static artifacts для Apache;
 - backend поставляется как CPython 3.12 bytecode-only wheel без application
   `.py` sources и с exact dependency list;
-- Apache проксирует same-origin `/api/` на loopback FastAPI;
+- внешний reverse proxy организации завершает HTTPS и передаёт трафик на
+  закрытый Apache HTTP :80; Apache проксирует same-origin `/api/` на loopback
+  FastAPI;
 - SQL package создаёт схему на уже предоставленном MySQL ровно 8.1.0;
 - CLI bootstrap создаёт только одноразовую invitation с hashed token, а пароль
   SUPER_ADMIN задаётся через HTTPS browser activation;
 - release archive содержит checksum manifest и не содержит runtime software,
   process-manager definitions, deployment scripts или secrets.
-- дополнительный source-backend archive допускается для организационного
-  контура, где внешний reverse proxy завершает HTTPS, а недоступный публично
-  Apache принимает только доверенный внутренний HTTP и проксирует loopback API.
+- compiled wheel является основным backend artifact; дополнительный
+  source-backend archive допускается по прямому требованию организации;
+- оба варианта используют `EVENT_REGISTRATION_ENV_FILE` и одинаковую proxy/
+  security topology.
 
 ## Последствия
 
-Организация отвечает за Apache/TLS, Python 3.12, MySQL 8.1.0, process manager,
-SMTP, backups и monitoring. Приложение сохраняет прежние security boundaries и
-не открывает публичный bootstrap endpoint. ADR-011 больше не определяет формат
-поставки, но остаётся историческим описанием предыдущего решения.
+Организация отвечает за внешний HTTPS proxy, закрытый Apache HTTP, Python 3.12,
+MySQL 8.1.0, process manager, SMTP, backups и monitoring. Приложение сохраняет
+security boundaries и не открывает публичный bootstrap endpoint. ADR-001 и
+ADR-011 больше не определяют production topology Release 1.0.

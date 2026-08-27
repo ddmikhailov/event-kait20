@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -7,25 +7,32 @@ import test from 'node:test';
 import {
   DeploymentConfigError,
   parseEnvironment,
-  renderDeployment,
   validateDeploymentConfig,
 } from './deploy-config.mjs';
 
 const valid = () => ({
   NODE_ENV: 'production',
+  API_HOST: '127.0.0.1',
+  API_PORT: '3000',
   DATABASE_URL:
-    'mysql://event_app:SafeDatabasePassword@127.0.0.1:3306/event_registration',
+    'mysql://event_app:SafeDatabasePassword@mysql.internal:3306/event_registration',
+  DATABASE_CONNECT_TIMEOUT_MS: '5000',
+  MIGRATIONS_DIR: '/opt/event-registration/database/migrations',
   CORS_ORIGINS: 'https://events.kait20.ru,https://scanner.kait20.ru',
   SESSION_SECRET: 'session-secret-that-is-longer-than-32-bytes',
+  SESSION_TTL_SECONDS: '28800',
   AUTH_LINK_SECRET: 'auth-link-secret-that-is-longer-than-32-bytes',
   AUTH_LINK_BASE_URL: 'https://events.kait20.ru/auth',
+  INVITATION_TTL_SECONDS: '86400',
+  PASSWORD_RESET_TTL_SECONDS: '3600',
+  AUTH_RATE_LIMIT_MAX: '10',
+  AUTH_RATE_LIMIT_WINDOW_SECONDS: '60',
   QR_SIGNING_SECRET: 'qr-signing-secret-that-is-longer-than-32-bytes',
   PUBLIC_WEB_BASE_URL: 'https://events.kait20.ru',
-  PUBLIC_API_BASE_URL: 'https://api.kait20.ru',
   CONSENT_URL: 'https://kait20.ru/privacy',
   CONSENT_VERSION: '2026-08-26',
-  TLS_CERTIFICATE: '/etc/letsencrypt/live/events.kait20.ru/fullchain.pem',
-  TLS_CERTIFICATE_KEY: '/etc/letsencrypt/live/events.kait20.ru/privkey.pem',
+  EMAIL_MAX_ATTEMPTS: '5',
+  EMAIL_POLL_INTERVAL_MS: '1000',
   SMTP_HOST: 'smtp.kait20.ru',
   SMTP_PORT: '587',
   SMTP_USERNAME: 'event-mailer',
@@ -46,21 +53,20 @@ test('parses quoted values and rejects duplicate keys', () => {
   );
 });
 
-test('accepts a secure native production configuration', () => {
+test('accepts the organisation-managed production topology', () => {
   assert.deepEqual(validateDeploymentConfig(valid()), {
     webDomain: 'events.kait20.ru',
     scannerDomain: 'scanner.kait20.ru',
-    apiDomain: 'api.kait20.ru',
-    publicApiBaseUrl: 'https://api.kait20.ru',
-    certificate: '/etc/letsencrypt/live/events.kait20.ru/fullchain.pem',
-    certificateKey: '/etc/letsencrypt/live/events.kait20.ru/privkey.pem',
+    apiPath: '/api',
+    databaseHost: 'mysql.internal',
+    migrationDirectory: '/opt/event-registration/database/migrations',
   });
 });
 
 test('requires distinct application and migration database accounts', () => {
   const migration = valid();
   migration.DATABASE_URL =
-    'mysql://event_migrate:SafeDatabasePassword@127.0.0.1:3306/event_registration';
+    'mysql://event_migrate:SafeDatabasePassword@mysql.internal:3306/event_registration';
   assert.doesNotThrow(() =>
     validateDeploymentConfig(migration, { migration: true }),
   );
@@ -78,7 +84,7 @@ test('rejects placeholders, HTTP, wildcard CORS and a root DB account', () => {
     (config) => (config.CORS_ORIGINS = 'https://events.kait20.ru,*'),
     (config) =>
       (config.DATABASE_URL =
-        'mysql://root:SafeDatabasePassword@127.0.0.1:3306/event_registration'),
+        'mysql://root:SafeDatabasePassword@mysql.internal:3306/event_registration'),
   ]) {
     const config = valid();
     mutate(config);
@@ -98,51 +104,15 @@ test('rejects reused or short cryptographic secrets', () => {
   assert.throws(() => validateDeploymentConfig(short), /32 bytes/);
 });
 
-test('renders complete Nginx templates without persisting application secrets', () => {
-  const output = mkdtempSync(join(tmpdir(), 'event-deploy-render-'));
+test('check-files requires the migration directory to exist', () => {
   const config = valid();
-  renderDeployment({ values: config, outputDirectory: output });
-  const nginx = readFileSync(
-    join(output, 'nginx', 'event-registration.conf'),
-    'utf8',
-  );
-  const webSecurity = readFileSync(
-    join(output, 'nginx', 'event-registration-web-security.conf'),
-    'utf8',
-  );
-  const manifest = readFileSync(
-    join(output, 'deployment-manifest.json'),
-    'utf8',
-  );
-  const monitorService = readFileSync(
-    join(output, 'systemd', 'event-registration-monitor.service'),
-    'utf8',
-  );
-  const monitorTimer = readFileSync(
-    join(output, 'systemd', 'event-registration-monitor.timer'),
-    'utf8',
-  );
-  assert.match(nginx, /server_name events\.kait20\.ru/);
-  assert.match(nginx, /server_name scanner\.kait20\.ru/);
-  assert.match(nginx, /server_name api\.kait20\.ru/);
-  assert.match(webSecurity, /connect-src 'self' https:\/\/api\.kait20\.ru/);
-  assert.match(monitorService, /check-operations\.sh/);
-  assert.match(monitorTimer, /OnUnitActiveSec=5m/);
-  assert.doesNotMatch(`${nginx}${webSecurity}${manifest}`, /__[A-Z0-9_]+__/);
-  assert.doesNotMatch(manifest, new RegExp(config.SESSION_SECRET));
-});
-
-test('check-files requires the TLS files to exist', () => {
-  const config = valid();
-  const directory = mkdtempSync(join(tmpdir(), 'event-deploy-cert-'));
-  config.TLS_CERTIFICATE = join(directory, 'fullchain.pem');
-  config.TLS_CERTIFICATE_KEY = join(directory, 'privkey.pem');
+  const directory = mkdtempSync(join(tmpdir(), 'event-deploy-config-'));
+  config.MIGRATIONS_DIR = join(directory, 'migrations');
   assert.throws(
     () => validateDeploymentConfig(config, { checkFiles: true }),
     /does not exist/,
   );
-  writeFileSync(config.TLS_CERTIFICATE, 'test certificate');
-  writeFileSync(config.TLS_CERTIFICATE_KEY, 'test key');
+  mkdirSync(config.MIGRATIONS_DIR);
   assert.doesNotThrow(() =>
     validateDeploymentConfig(config, { checkFiles: true }),
   );

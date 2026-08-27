@@ -70,7 +70,8 @@ test('reports READY only when automated and external gates pass', () => {
       summary: {
         webDomain: 'events.kait20.ru',
         scannerDomain: 'scanner.kait20.ru',
-        apiDomain: 'api.kait20.ru',
+        apiPath: '/api',
+        databaseHost: 'mysql.internal',
       },
     },
     artifacts: [{ path: 'apps/web/dist/index.html', present: true }],
@@ -100,7 +101,8 @@ test('report contains references but never deployment secrets', () => {
       summary: {
         webDomain: 'events.kait20.ru',
         scannerDomain: 'scanner.kait20.ru',
-        apiDomain: 'api.kait20.ru',
+        apiPath: '/api',
+        databaseHost: 'mysql.internal',
       },
     },
     artifacts: [],

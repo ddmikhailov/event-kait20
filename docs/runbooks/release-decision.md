@@ -37,13 +37,14 @@
 ```text
 pnpm release:readiness -- \
   --evidence deploy/release-evidence.json \
-  --env /etc/event-registration/event-registration.env \
+  --env /etc/event-registration/backend.env \
   --output .runtime/release-readiness.json
 ```
 
-Команда дополнительно проверяет production env и TLS-файлы, чистоту Git,
-совпадение SHA, версию приложения, наличие Web/Scanner artifacts и формирует
-SHA-256 для каждой SQL migration. `READY` и exit code 0 возможны только при всех
+Команда дополнительно проверяет production backend env, существование каталога
+migrations, чистоту Git, совпадение SHA, версию приложения, наличие Web/Scanner
+artifacts и формирует SHA-256 для каждой SQL migration. TLS проверяется внешним
+proxy/monitoring gate организации. `READY` и exit code 0 возможны только при всех
 автоматических и внешних gates. При `BLOCKED` отчёт всё равно создаётся и точно
 показывает незавершённые пункты.
 

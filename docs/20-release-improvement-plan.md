@@ -1,7 +1,7 @@
 # 20. План доведения MVP до первого публичного выпуска
 
-Статус: **выполняется**  
-База плана: Release 1.0, commit `02ca066`
+Статус: **локальная инженерная часть завершена; остаются внешние gates**  
+База плана: **актуальный immutable Release 1.0 commit**
 
 ## Принципы
 
@@ -26,7 +26,7 @@
 
 - liveness/readiness доступны только на ожидаемом API;
 - `/docs`, `/redoc`, `/openapi.json` закрыты;
-- Web/Scanner/API используют три разных HTTPS origin;
+- Web и Scanner используют два разных HTTPS origin, каждый с same-origin `/api`;
 - trusted Web Origin получает точный CORS allow header;
 - посторонний Origin не получает CORS-доступ, а mutation отклоняется;
 - HSTS, nosniff, frame, referrer, permissions policy и CSP проверяются после
@@ -122,7 +122,7 @@ rollback rehearsal ожидают сервер и реквизиты орган�
 
 Требует от организации:
 
-- Linux-сервер, три домена, DNS и TLS;
+- сервер организации, два публичных домена, DNS и внешний HTTPS proxy;
 - consent URL/version, утверждённые ответственным за ПД;
 - SMTP app credential и тестовый список получателей;
 - production secrets и off-host backup destination;
@@ -143,8 +143,10 @@ smoke, browser/device E2E, email delivery и restore rehearsal.
 7. Открыть трафик и усиленно наблюдать первые 60 минут.
 8. При нарушении gate остановить writes/traffic и выполнить утверждённый rollback.
 
-## Порядок следующих изменений
+## Следующее действие
 
-Следующий локальный блок — monitoring/backup/restore helpers Этапа 5. Staging и
-production не начинаются до получения внешних реквизитов; это предотвращает
-повторные дорогие прогоны и экономит инженерные лимиты.
+Новых локальных feature-блоков перед staging не требуется. Следующий шаг —
+развернуть один immutable artifact на сервере организации, заполнить внешние
+реквизиты, выполнить smoke/device/SMTP/restore/alert/rollback gates и только
+после этого открыть production traffic. Это исключает повторные пересборки и
+экономит инженерные лимиты.

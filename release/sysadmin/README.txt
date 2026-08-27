@@ -1,67 +1,91 @@
-EVENT REGISTRATION 1.0 — PACKAGE FOR THE ORGANISATION ADMINISTRATOR
+EVENT REGISTRATION 1.0 — COMPILED PACKAGE FOR THE ORGANISATION
 
-Contents:
-frontend/web       compiled public and administration site for Apache
-frontend/scanner   compiled scanner PWA for Apache
-backend/*.whl      compiled CPython 3.12 bytecode-only backend package
-backend/requirements.txt  exact runtime dependency versions
-config/backend.env.example database and application configuration template
-apache/            example Apache virtual hosts (not an installation script)
-database/          new-database SQL template and source migrations
-MANIFEST.json      source revision and SHA-256 hashes
+Состав:
+- frontend/web: готовый Web/Admin frontend для Apache;
+- frontend/scanner: готовый Scanner PWA;
+- backend/*.whl: CPython 3.12 bytecode-only backend без исходных `.py`;
+- backend/requirements.txt: точные runtime-зависимости;
+- config/backend.env.example: шаблон конфигурации приложения и MySQL;
+- apache/: внутренние Apache HTTP virtual hosts;
+- database/: SQL создания схемы MySQL 8.1.0 и отдельные migrations;
+- MANIFEST.json: Git revision и SHA-256 каждого файла.
 
-Not included:
-MySQL binaries, Docker files, systemd units, installation/deployment scripts,
-TLS private keys, passwords, application secrets, source code and node_modules.
+Сетевая схема:
 
-Server prerequisites:
-- an organisation-managed MySQL server exactly version 8.1.0;
-- CPython exactly 3.12 with pip;
-- Apache HTTP Server with proxy/proxy_http/headers/rewrite/ssl modules;
-- TLS certificates and an organisation-selected process manager for the API
-  and email worker.
+  Internet -> внешний reverse proxy HTTPS :443 -> Apache HTTP :80
+           -> /api/ -> FastAPI 127.0.0.1:3000 -> MySQL 8.1.0
 
-Database:
-1. Execute database/00_create_database.sql as a database administrator.
-2. Execute database/01_schema.sql in the new database.
-3. Optionally adapt database/02_users_and_grants.example.sql to create separate
-   runtime and migration accounts. Never keep completed credentials here.
+Apache :80 доступен только доверенному внешнему proxy. Proxy сохраняет Host и
+Origin, передаёт Cookie/Set-Cookie без изменения и запрещает публичный HTTP.
+Он удаляет spoofed forwarding headers клиента и устанавливает корректный client
+IP. Публичные URL в backend.env всегда используют HTTPS.
+
+Не входят: MySQL binaries, Docker, systemd units, deployment/install scripts,
+TLS keys, passwords, application secrets, Python sources и node_modules.
+
+Требования:
+- CPython ровно 3.12;
+- предоставленная организацией MySQL ровно 8.1.0;
+- Apache с proxy, proxy_http, headers и rewrite;
+- внешний HTTPS reverse proxy и сертификаты;
+- выбранный организацией process manager;
+- SMTP STARTTLS для production email.
 
 Backend:
-Create a CPython 3.12 virtual environment, then install the exact dependencies
-and compiled wheel using commands equivalent to:
 
-  python3.12 -m pip install -r backend/requirements.txt
-  python3.12 -m pip install --no-deps backend/*.whl
+  cd /opt/event-registration
+  python3.12 -m venv .venv
+  .venv/bin/python -m pip install -r backend/requirements.txt
+  .venv/bin/python -m pip install --no-deps backend/*.whl
 
-The application wheel contains CPython 3.12 bytecode and package metadata, not
-the backend `.py` source files. It is not a standalone native executable and
-therefore requires the stated CPython runtime and dependencies.
+Значения config/backend.env.example перенести в защищённый файл, например
+`/etc/event-registration/backend.env`. Шаблон нельзя использовать без замены
+всех placeholder и нельзя размещать в DocumentRoot/Git. Три cryptographic
+secrets должны быть разными. DATABASE_URL может указывать на отдельный сервер
+MySQL; его runtime user должен быть разрешён именно с адреса backend-сервера.
 
-Transfer config/backend.env.example values to the organisation's protected
-configuration mechanism. DATABASE_URL is the MySQL connection string. All
-three cryptographic secrets must be different and generated securely. Start
-`event-api` and `event-email-worker` under the organisation's process manager.
-The API must listen only on 127.0.0.1:3000.
+Запуск API:
 
-Apache:
-Copy frontend/web and frontend/scanner to the DocumentRoot locations selected
-by the organisation. Adapt apache/event-registration.conf.example with real
-domains and TLS certificate directives. The compiled clients call `/api`, so
-Apache must proxy that path to http://127.0.0.1:3000/ as shown in the example.
+  EVENT_REGISTRATION_ENV_FILE=/etc/event-registration/backend.env \
+    /opt/event-registration/.venv/bin/event-api
 
-First administrator:
-After the database schema, backend, HTTPS and Apache are working, run under the
-same protected backend configuration:
+Запуск worker:
 
-  event-bootstrap-admin --email admin@example.org
+  EVENT_REGISTRATION_ENV_FILE=/etc/event-registration/backend.env \
+    /opt/event-registration/.venv/bin/event-email-worker
 
-The command does not ask for or store a password. It prints one temporary,
-single-use HTTPS link. The intended administrator opens it and sets the first
-password in the browser. The command refuses to create another link while a
-valid one exists or after a SUPER_ADMIN has been activated.
+Backend нельзя запускать как `python event_api/main.py`. После установки wheel
+используются только entry points `event-api`, `event-email-worker` и
+`event-bootstrap-admin`.
 
-Acceptance:
-Check /api/health/live and /api/health/ready through Apache, sign in as the
-first administrator, create a test event, and verify Scanner camera access on
-a real HTTPS device. Keep MANIFEST.json for integrity verification.
+Database:
+1. Для новой пустой базы выполнить database/00_create_database.sql.
+2. Выполнить database/01_schema.sql.
+3. Адаптировать database/02_users_and_grants.example.sql под реальные IP/hosts.
+4. Не сохранять заполненные credentials в каталоге приложения.
+
+Frontend:
+- frontend/web разместить в DocumentRoot основного домена;
+- frontend/scanner разместить в DocumentRoot Scanner;
+- оба frontend уже обращаются к same-origin `/api`;
+- адаптировать apache/event-registration-internal-http.conf.example;
+- полностью заменять старые assets, не смешивая сборки.
+
+Первый SUPER_ADMIN:
+
+  EVENT_REGISTRATION_ENV_FILE=/etc/event-registration/backend.env \
+    /opt/event-registration/.venv/bin/event-bootstrap-admin \
+    --email admin@example.org
+
+Команда выдаёт одноразовую внешнюю HTTPS-ссылку. Пароль задаёт администратор в
+браузере; raw token и пароль в базе не сохраняются.
+
+Проверка:
+
+  curl http://127.0.0.1:3000/health/live
+  curl http://127.0.0.1:3000/health/ready
+  curl https://events.example.org/api/health/live
+  curl https://scanner.example.org/api/health/live
+
+После этого проверяются вход, Event, регистрация, email и Scanner на реальном
+HTTPS-устройстве. MANIFEST.json сохраняется как evidence поставки.

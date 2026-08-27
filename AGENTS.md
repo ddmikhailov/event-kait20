@@ -28,7 +28,7 @@ MVP facts that must not be silently changed:
 - QR is unique per Registration/Event and contains no plaintext PII.
 - Scanner is an installable PWA. Do not introduce App Store/Google Play release work.
 - MySQL 8.1.0 is the source of truth; spreadsheets are import/export only.
-- Infrastructure target is Yandex Cloud.
+- Production is deployed on organisation-managed Russian infrastructure.
 - Scanner offline mode is required for prepared registrations/attendance.
 - Brand-new onsite Registration is online-only in MVP.
 - SCANNER cannot overbook capacity; SUPER_ADMIN may explicitly override and must be audited.
@@ -46,8 +46,8 @@ Current stack:
 - MySQL 8.1.0
 - shared Zod contracts
 - Dexie/IndexedDB in scanner
-- organisation-managed process runtime plus Apache static/proxy hosting;
-  Yandex Cloud remains the target platform
+- organisation-managed process runtime plus Apache HTTP static/proxy hosting
+  behind the organisation's external HTTPS reverse proxy
 
 Do not introduce Next.js, GraphQL, microservices, Kubernetes, Supabase/Firebase or a second primary database without an explicit ADR/owner decision.
 

@@ -1,6 +1,6 @@
 # 19. Release 1.0 status
 
-Дата: **26 августа 2026**  
+Дата актуализации: **27 августа 2026**  
 Статус: **application release 1.0**
 
 ## Состав релиза
@@ -13,8 +13,11 @@
 - безопасный XLSX preview/commit/export;
 - статистика, audit log и ticket batches;
 - SMTP worker с durable intents, one-time auth links, retries и stale-lease recovery;
-- sysadmin package с Apache static/proxy example, Python wheel, SQL template,
-  health/readiness и runbook без MySQL binaries/systemd/deployment scripts.
+- sysadmin package с compiled frontend, Python wheel, Apache internal HTTP
+  example, SQL template, health/readiness и runbook без MySQL binaries,
+  systemd/deployment scripts;
+- явная загрузка protected configuration через `EVENT_REGISTRATION_ENV_FILE`;
+- same-origin `/api` за внешним HTTPS proxy организации.
 
 ## Релизные свойства
 
@@ -33,12 +36,12 @@
 Код не может безопасно придумать production-секреты и внешние реквизиты. До
 открытия реальных регистраций должны быть заполнены:
 
-1. три домена, DNS и TLS reverse proxy;
+1. два публичных домена (Web/Scanner), DNS и HTTPS reverse proxy;
 2. юридически утверждённые consent URL и version;
 3. SMTP host, отдельный app password и подтверждённый sender;
 4. уникальные DB/session/auth-link/QR secrets;
 5. backup schedule, проверка восстановления, monitoring и ответственные;
-6. решение владельца инфраструктуры о принятии риска MySQL 8.1.0.
+6. документированное принятие риска MySQL 8.1.0.
 
 Это deployment inputs, а не незавершённые функции приложения.
 

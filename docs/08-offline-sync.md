@@ -162,5 +162,5 @@ refresh. Confirmed and idempotently processed items are removed; rejected items
 remain locally visible with their machine-readable result. Logout clears all
 offline business tables while retaining only the anonymous device identifier.
 
-`VITE_API_BASE_URL` optionally selects the trusted API origin at build time; an
-empty value uses the Scanner application's own origin. It is not a secret.
+Production freezes `VITE_API_BASE_URL=/api`; Scanner uses its own same-origin
+Apache proxy. The value is not a secret.

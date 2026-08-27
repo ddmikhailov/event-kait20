@@ -177,7 +177,9 @@ const main = () => {
   const evidencePath = resolve(
     argument('--evidence', 'deploy/release-evidence.json'),
   );
-  const envPath = resolve(argument('--env', 'deploy/native.env'));
+  const envPath = resolve(
+    argument('--env', '/etc/event-registration/backend.env'),
+  );
   const outputPath = resolve(
     argument('--output', '.runtime/release-readiness.json'),
   );
@@ -200,7 +202,8 @@ const main = () => {
       summary: {
         webDomain: summary.webDomain,
         scannerDomain: summary.scannerDomain,
-        apiDomain: summary.apiDomain,
+        apiPath: summary.apiPath,
+        databaseHost: summary.databaseHost,
       },
     };
   } catch (error) {
