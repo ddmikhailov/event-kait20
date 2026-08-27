@@ -22,6 +22,9 @@ deployment scripts в поставке запрещены. Пароль перв
   SUPER_ADMIN задаётся через HTTPS browser activation;
 - release archive содержит checksum manifest и не содержит runtime software,
   process-manager definitions, deployment scripts или secrets.
+- дополнительный source-backend archive допускается для организационного
+  контура, где внешний reverse proxy завершает HTTPS, а недоступный публично
+  Apache принимает только доверенный внутренний HTTP и проксирует loopback API.
 
 ## Последствия
 

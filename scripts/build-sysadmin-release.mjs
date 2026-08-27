@@ -5,8 +5,15 @@ import { spawnSync } from 'node:child_process';
 
 const root = resolve(import.meta.dirname, '..');
 const runtime = join(root, '.runtime');
-const output = join(runtime, 'sysadmin-release');
-const archive = join(runtime, 'event-registration-1.0.0-sysadmin.tar.gz');
+const sourceBackend = process.argv.includes('--source-backend');
+const packageDirectory = sourceBackend
+  ? 'sysadmin-source-release'
+  : 'sysadmin-release';
+const archiveName = sourceBackend
+  ? 'event-registration-1.0.0-apache-http-source-backend.tar.gz'
+  : 'event-registration-1.0.0-sysadmin.tar.gz';
+const output = join(runtime, packageDirectory);
+const archive = join(runtime, archiveName);
 const wheelSource = join(runtime, 'wheel-source');
 const tar = process.platform === 'win32' ? 'tar.exe' : 'tar';
 
@@ -42,28 +49,51 @@ runPnpm(['--filter', '@event-registration/web', 'build'], {
 runPnpm(['--filter', '@event-registration/scanner', 'build'], {
   env: buildEnv,
 });
-run(process.execPath, [
-  'scripts/python.mjs',
-  '-m',
-  'pip',
-  'wheel',
-  '--no-deps',
-  '--no-build-isolation',
-  join(root, 'backend'),
-  '--wheel-dir',
-  wheelSource,
-]);
-const sourceWheels = (await readdir(wheelSource)).filter((name) =>
-  name.endsWith('.whl'),
-);
-if (sourceWheels.length !== 1)
-  throw new Error('expected exactly one backend wheel');
-run(process.execPath, [
-  'scripts/python.mjs',
-  'scripts/compile-backend-wheel.py',
-  join(wheelSource, sourceWheels[0]),
-  join(output, 'backend'),
-]);
+if (sourceBackend) {
+  await cp(join(root, 'backend/src'), join(output, 'backend/src'), {
+    recursive: true,
+    filter: (path) => {
+      const normalized = path.replaceAll('\\', '/');
+      return (
+        !normalized.includes('__pycache__') &&
+        !normalized.toLowerCase().endsWith('.pyc') &&
+        !normalized.endsWith('/event_api/demo_seed.py')
+      );
+    },
+  });
+  await cp(
+    join(root, 'backend/pyproject.toml'),
+    join(output, 'backend/pyproject.toml'),
+  );
+  await cp(
+    join(root, 'backend/migrations'),
+    join(output, 'backend/migrations'),
+    { recursive: true },
+  );
+} else {
+  run(process.execPath, [
+    'scripts/python.mjs',
+    '-m',
+    'pip',
+    'wheel',
+    '--no-deps',
+    '--no-build-isolation',
+    join(root, 'backend'),
+    '--wheel-dir',
+    wheelSource,
+  ]);
+  const sourceWheels = (await readdir(wheelSource)).filter((name) =>
+    name.endsWith('.whl'),
+  );
+  if (sourceWheels.length !== 1)
+    throw new Error('expected exactly one backend wheel');
+  run(process.execPath, [
+    'scripts/python.mjs',
+    'scripts/compile-backend-wheel.py',
+    join(wheelSource, sourceWheels[0]),
+    join(output, 'backend'),
+  ]);
+}
 await rm(wheelSource, { recursive: true, force: true });
 
 await cp(join(root, 'apps/web/dist'), join(output, 'frontend/web'), {
@@ -72,16 +102,17 @@ await cp(join(root, 'apps/web/dist'), join(output, 'frontend/web'), {
 await cp(join(root, 'apps/scanner/dist'), join(output, 'frontend/scanner'), {
   recursive: true,
 });
-await cp(join(root, 'release/sysadmin/README.txt'), join(output, 'README.txt'));
+const template = sourceBackend ? 'release/sysadmin-source' : 'release/sysadmin';
+await cp(join(root, template, 'README.txt'), join(output, 'README.txt'));
 await cp(
   join(root, 'release/sysadmin/backend-requirements.txt'),
   join(output, 'backend/requirements.txt'),
 );
 await cp(
-  join(root, 'release/sysadmin/backend.env.example'),
+  join(root, template, 'backend.env.example'),
   join(output, 'config/backend.env.example'),
 );
-await cp(join(root, 'release/sysadmin/apache'), join(output, 'apache'), {
+await cp(join(root, template, 'apache'), join(output, 'apache'), {
   recursive: true,
 });
 await cp(join(root, 'release/sysadmin/database'), join(output, 'database'), {
@@ -150,6 +181,6 @@ await writeFile(
   `${JSON.stringify(manifest, null, 2)}\n`,
 );
 
-run(tar, ['-czf', archive, '-C', runtime, 'sysadmin-release']);
+run(tar, ['-czf', archive, '-C', runtime, packageDirectory]);
 console.log(`Release directory: ${output}`);
 console.log(`Release archive: ${archive}`);

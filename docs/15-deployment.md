@@ -70,3 +70,20 @@ event-bootstrap-admin --email admin@example.org
 тестового события, регистрация участника, email queue и Scanner на реальном
 HTTPS устройстве. Затем организация включает собственные backup, monitoring и
 process restart controls.
+
+## 7. Вариант с исходным Python backend и внешним HTTPS proxy
+
+Команда `pnpm release:sysadmin-source` создаёт отдельный пакет
+`event-registration-1.0.0-apache-http-source-backend.tar.gz`. Он содержит
+production static frontend, `backend/src`, runtime requirements, SQL и Apache
+:80 example. Source package устанавливается командой `pip install --no-deps
+./backend`, после чего API/worker запускаются созданными entry points. Закрытый
+конфигурационный файл задаётся явно через `EVENT_REGISTRATION_ENV_FILE`, поэтому
+запуск не зависит от рабочего каталога и не требует прямого выполнения
+`event_api/main.py`.
+
+В этом варианте только внешний доверенный reverse proxy доступен пользователю
+по HTTPS. Apache :80 доступен исключительно proxy по внутренней сети/ACL,
+сохраняет public `Host` и получает неизменённый `Origin`. Apache сам выставляет
+`X-Forwarded-Proto: https` при передаче на loopback API. Публичный HTTP,
+подмена forwarded headers и использование HTTP URL в production env запрещены.

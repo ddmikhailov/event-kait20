@@ -33,6 +33,13 @@ Apache завершает TLS и проксирует same-origin `/api/` на l
 keys и итоговая Apache configuration остаются в зоне ответственности
 организации.
 
+Допустим также утверждённый организацией внешний HTTPS reverse proxy перед
+Apache. Для этого варианта `pnpm release:sysadmin-source` создаёт отдельный
+архив с production frontend и Python sources. Внешний proxy завершает TLS и
+сохраняет `Host`, `Origin` и `Set-Cookie`; Apache слушает внутренний HTTP :80,
+принудительно передаёт API `X-Forwarded-Proto: https` и не имеет прямого
+публичного доступа. Все browser-facing URL и origins остаются HTTPS.
+
 ## MySQL policy
 
 - production target: ровно MySQL 8.1.0;
