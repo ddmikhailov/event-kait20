@@ -3,7 +3,7 @@ EVENT REGISTRATION 1.0 — PACKAGE FOR THE ORGANISATION ADMINISTRATOR
 Contents:
 frontend/web       compiled public and administration site for Apache
 frontend/scanner   compiled scanner PWA for Apache
-backend/*.whl      installable Python 3.12 backend package
+backend/*.whl      compiled CPython 3.12 bytecode-only backend package
 backend/requirements.txt  exact runtime dependency versions
 config/backend.env.example database and application configuration template
 apache/            example Apache virtual hosts (not an installation script)
@@ -16,7 +16,7 @@ TLS private keys, passwords, application secrets, source code and node_modules.
 
 Server prerequisites:
 - an organisation-managed MySQL server exactly version 8.1.0;
-- Python exactly 3.12 with pip;
+- CPython exactly 3.12 with pip;
 - Apache HTTP Server with proxy/proxy_http/headers/rewrite/ssl modules;
 - TLS certificates and an organisation-selected process manager for the API
   and email worker.
@@ -28,11 +28,15 @@ Database:
    runtime and migration accounts. Never keep completed credentials here.
 
 Backend:
-Create a Python 3.12 virtual environment, then install the exact dependencies
-and wheel using commands equivalent to:
+Create a CPython 3.12 virtual environment, then install the exact dependencies
+and compiled wheel using commands equivalent to:
 
   python3.12 -m pip install -r backend/requirements.txt
   python3.12 -m pip install --no-deps backend/*.whl
+
+The application wheel contains CPython 3.12 bytecode and package metadata, not
+the backend `.py` source files. It is not a standalone native executable and
+therefore requires the stated CPython runtime and dependencies.
 
 Transfer config/backend.env.example values to the organisation's protected
 configuration mechanism. DATABASE_URL is the MySQL connection string. All

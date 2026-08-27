@@ -7,6 +7,7 @@ const root = resolve(import.meta.dirname, '..');
 const runtime = join(root, '.runtime');
 const output = join(runtime, 'sysadmin-release');
 const archive = join(runtime, 'event-registration-1.0.0-sysadmin.tar.gz');
+const wheelSource = join(runtime, 'wheel-source');
 const tar = process.platform === 'win32' ? 'tar.exe' : 'tar';
 
 const run = (command, args, extra = {}) => {
@@ -29,8 +30,10 @@ if (relative(runtime, output).startsWith('..'))
   throw new Error('unsafe output path');
 await rm(output, { recursive: true, force: true });
 await rm(archive, { force: true });
+await rm(wheelSource, { recursive: true, force: true });
 await mkdir(join(output, 'backend'), { recursive: true });
 await mkdir(join(output, 'config'), { recursive: true });
+await mkdir(wheelSource, { recursive: true });
 
 const buildEnv = { ...process.env, VITE_API_BASE_URL: '/api' };
 runPnpm(['--filter', '@event-registration/web', 'build'], {
@@ -48,8 +51,20 @@ run(process.execPath, [
   '--no-build-isolation',
   join(root, 'backend'),
   '--wheel-dir',
+  wheelSource,
+]);
+const sourceWheels = (await readdir(wheelSource)).filter((name) =>
+  name.endsWith('.whl'),
+);
+if (sourceWheels.length !== 1)
+  throw new Error('expected exactly one backend wheel');
+run(process.execPath, [
+  'scripts/python.mjs',
+  'scripts/compile-backend-wheel.py',
+  join(wheelSource, sourceWheels[0]),
   join(output, 'backend'),
 ]);
+await rm(wheelSource, { recursive: true, force: true });
 
 await cp(join(root, 'apps/web/dist'), join(output, 'frontend/web'), {
   recursive: true,

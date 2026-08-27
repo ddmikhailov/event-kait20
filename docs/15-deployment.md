@@ -29,7 +29,7 @@ pnpm release:sysadmin
 
 ## 3. Backend и конфигурация
 
-На сервере нужен Python ровно 3.12. Изолированная среда устанавливает
+На сервере нужен CPython ровно 3.12. Изолированная среда устанавливает
 `backend/requirements.txt`, затем `backend/*.whl` с `--no-deps`. Значения из
 `config/backend.env.example` переносятся в защищённое хранилище организации.
 `DATABASE_URL` содержит адрес предоставленной MySQL database. Три
@@ -38,6 +38,10 @@ cryptographic secrets генерируются независимо и не по
 Организация запускает `event-api` и `event-email-worker` выбранным process
 manager. API слушает только `127.0.0.1:3000`. Проект не навязывает systemd и не
 поставляет сценарии запуска.
+
+Wheel содержит скомпилированный CPython 3.12 bytecode приложения без backend
+`.py` files. Это не самостоятельный native executable: CPython и перечисленные
+runtime dependencies предоставляет организация.
 
 ## 4. Frontend и Apache
 

@@ -14,8 +14,8 @@ deployment scripts в поставке запрещены. Пароль перв
 ## Решение
 
 - Web и Scanner поставляются скомпилированными static artifacts для Apache;
-- backend поставляется как platform-independent Python 3.12 wheel и exact
-  dependency list;
+- backend поставляется как CPython 3.12 bytecode-only wheel без application
+  `.py` sources и с exact dependency list;
 - Apache проксирует same-origin `/api/` на loopback FastAPI;
 - SQL package создаёт схему на уже предоставленном MySQL ровно 8.1.0;
 - CLI bootstrap создаёт только одноразовую invitation с hashed token, а пароль

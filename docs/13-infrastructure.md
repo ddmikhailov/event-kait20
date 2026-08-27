@@ -22,7 +22,8 @@ Internet
 ## Пакет приложения
 
 Команда `pnpm release:sysadmin` создаёт проверяемый каталог и `.tar.gz` в
-`.runtime/`. В него входят готовые static artifacts Web/Scanner, Python wheel,
+`.runtime/`. В него входят готовые static artifacts Web/Scanner, CPython 3.12
+bytecode-only wheel без backend `.py` files,
 точные runtime dependencies, конфигурационные примеры, Apache-пример, SQL
 шаблон чистой базы, отдельные migrations и SHA-256 manifest. Секреты и реальные
 credentials в пакет не входят.
