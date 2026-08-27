@@ -1,26 +1,21 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 
 from sqlalchemy import text
 
-from .config import get_settings
+from .config import Settings, get_settings
 from .database import Database
 
 
-def migration_dir() -> Path:
-    configured = os.getenv("MIGRATIONS_DIR")
-    return (
-        Path(configured)
-        if configured
-        else Path(__file__).resolve().parents[2] / "migrations"
-    )
+def migration_dir(config: Settings) -> Path:
+    return config.migrations_dir or Path(__file__).resolve().parents[2] / "migrations"
 
 
 def apply_migrations() -> None:
-    database = Database(get_settings())
+    config = get_settings()
+    database = Database(config)
     with database.transaction() as connection:
         connection.exec_driver_sql(
             "CREATE TABLE IF NOT EXISTS schema_migrations (name VARCHAR(255) PRIMARY KEY, checksum CHAR(64) NOT NULL, applied_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3))"
@@ -31,7 +26,7 @@ def apply_migrations() -> None:
                 text("SELECT name, checksum FROM schema_migrations")
             )
         }
-        for path in sorted(migration_dir().glob("*.sql")):
+        for path in sorted(migration_dir(config).glob("*.sql")):
             source = path.read_text(encoding="utf-8")
             checksum = hashlib.sha256(source.encode()).hexdigest()
             if path.name in applied:

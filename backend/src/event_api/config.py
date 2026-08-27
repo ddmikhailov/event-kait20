@@ -1,4 +1,6 @@
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import AnyHttpUrl, Field, MySQLDsn, field_validator, model_validator
@@ -15,6 +17,7 @@ class Settings(BaseSettings):
     api_host: str = "127.0.0.1"
     api_port: int = 3000
     database_connect_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
+    migrations_dir: Path | None = None
     cors_origins: Annotated[list[str], NoDecode]
     session_secret: str = Field(min_length=32)
     session_ttl_seconds: int = Field(default=28_800, ge=60, le=2_592_000)
@@ -86,4 +89,12 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]
+    configured = os.getenv("EVENT_REGISTRATION_ENV_FILE")
+    env_file: str | Path = ".env"
+    if configured:
+        env_file = Path(configured).expanduser().resolve()
+        if not env_file.is_file():
+            raise RuntimeError(
+                "EVENT_REGISTRATION_ENV_FILE does not point to a readable file"
+            )
+    return Settings(_env_file=env_file)  # type: ignore[call-arg]
