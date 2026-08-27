@@ -140,7 +140,24 @@ upgrade behavior remain browser/device E2E checks before production rollout.
 
 ## 8. Load/concurrency test
 
-Before first large Event, staging scenario around 1000 registrations and multiple parallel scanner clients. Focus on transaction races, sync batches and email queue behavior rather than synthetic extreme RPS.
+Before first large Event, run the release profile against disposable MySQL 8.1.0:
+
+```text
+pnpm test:load
+```
+
+The profile creates 1000 synthetic registration requests with a constrained
+capacity, repeats successful registrations, sends four concurrent attendance
+batches, retries an identical batch and drains the email queue with eight
+workers. It also injects controlled transient email failures and proves bounded
+retry. Aggregate timings and counts are written to
+`.runtime/release-load-report.json`; no participant payloads are recorded.
+
+This is a release/manual test and is intentionally excluded from the ordinary
+`pnpm test` gate. Local results detect races and regressions but are not a
+production capacity claim. Before the first large Event, repeat it on staging
+and record CPU, RAM and MySQL connection metrics there; approve latency and
+resource thresholds only after measuring the actual organization server.
 
 ## 9. Definition of Done
 

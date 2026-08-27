@@ -35,12 +35,14 @@ class Delivery:
     reset_expires: datetime | None
 
 
-def _claim(database: Database) -> Delivery | None:
-    with database.transaction() as connection:
+def _load_delivery(database: Database, delivery_id: str, attempts: int) -> Delivery:
+    with database.engine.connect().execution_options(
+        isolation_level="READ COMMITTED"
+    ) as connection:
         item = (
             connection.execute(
                 text(
-                    """SELECT d.id,d.type,d.recipient_email,d.attempts,
+                    """SELECT d.id,d.type,d.recipient_email,
                               e.title AS event_title,e.start_at AS event_start,
                               e.location AS event_location,r.public_id,
                               CONCAT_WS(' ',r.last_name,r.first_name,r.middle_name) AS participant_name,
@@ -51,38 +53,69 @@ def _claim(database: Database) -> Delivery | None:
                        LEFT JOIN registrations r ON r.id=d.registration_id
                        LEFT JOIN staff_invitations i ON i.id=d.staff_invitation_id
                        LEFT JOIN password_reset_tokens p ON p.id=d.password_reset_token_id
-                       WHERE d.status='QUEUED' OR
-                             (d.status='SENDING' AND d.updated_at < DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 10 MINUTE))
-                       ORDER BY d.queued_at LIMIT 1 FOR UPDATE SKIP LOCKED"""
-                )
+                       WHERE d.id=:id"""
+                ),
+                {"id": delivery_id},
             )
             .mappings()
-            .first()
+            .one()
         )
-        if not item:
-            return None
-        connection.execute(
-            text(
-                """UPDATE email_deliveries SET status='SENDING',attempts=attempts+1,
-                   last_error_code=NULL,updated_at=UTC_TIMESTAMP(3) WHERE id=:id"""
-            ),
-            {"id": item["id"]},
-        )
-        return Delivery(
-            id=item["id"],
-            type=item["type"],
-            recipient=item["recipient_email"],
-            attempts=int(item["attempts"]) + 1,
-            event_title=item["event_title"],
-            event_start=item["event_start"],
-            event_location=item["event_location"],
-            public_id=item["public_id"],
-            participant_name=item["participant_name"],
-            invitation_id=item["invitation_id"],
-            invitation_expires=item["invitation_expires"],
-            reset_id=item["reset_id"],
-            reset_expires=item["reset_expires"],
-        )
+    return Delivery(
+        id=item["id"],
+        type=item["type"],
+        recipient=item["recipient_email"],
+        attempts=attempts,
+        event_title=item["event_title"],
+        event_start=item["event_start"],
+        event_location=item["event_location"],
+        public_id=item["public_id"],
+        participant_name=item["participant_name"],
+        invitation_id=item["invitation_id"],
+        invitation_expires=item["invitation_expires"],
+        reset_id=item["reset_id"],
+        reset_expires=item["reset_expires"],
+    )
+
+
+def _claim(database: Database) -> Delivery | None:
+    for _ in range(3):
+        claimed_item: Any = None
+        with (
+            database.engine.connect().execution_options(
+                isolation_level="READ COMMITTED"
+            ) as connection,
+            connection.begin(),
+        ):
+            item = (
+                connection.execute(
+                    text(
+                        """SELECT id,attempts FROM email_deliveries
+                               WHERE status='QUEUED' OR
+                                 (status='SENDING' AND updated_at < DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 10 MINUTE))
+                               ORDER BY queued_at LIMIT 1 FOR UPDATE SKIP LOCKED"""
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if not item:
+                return None
+            claimed = connection.execute(
+                text(
+                    """UPDATE email_deliveries SET status='SENDING',attempts=attempts+1,
+                           last_error_code=NULL,updated_at=UTC_TIMESTAMP(3)
+                           WHERE id=:id AND (status='QUEUED' OR
+                             (status='SENDING' AND updated_at < DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 10 MINUTE)))"""
+                ),
+                {"id": item["id"]},
+            )
+            if claimed.rowcount == 1:
+                claimed_item = item
+        if claimed_item:
+            return _load_delivery(
+                database, claimed_item["id"], int(claimed_item["attempts"]) + 1
+            )
+    return None
 
 
 def _auth_url(

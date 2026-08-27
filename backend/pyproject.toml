@@ -41,6 +41,7 @@ packages = ["src/event_api"]
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
 testpaths = ["tests"]
+markers = ["load: release load and concurrency scenario"]
 
 [tool.ruff]
 target-version = "py312"

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import threading
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from email.message import EmailMessage
 from io import BytesIO
 from uuid import uuid4
 
@@ -548,3 +552,63 @@ def test_email_worker_sends_durable_intent_without_persisting_link(
             .one()
         )
     assert delivery == {"status": "SENT", "provider_message_id": "provider-test-id"}
+
+
+def test_parallel_email_workers_claim_each_delivery_once(client: TestClient) -> None:
+    database: Database = client.app.state.database
+    delivery_ids = [str(uuid4()) for _ in range(24)]
+    with database.transaction() as connection:
+        context = (
+            connection.execute(
+                text(
+                    """SELECT event_id,id AS registration_id,email AS email_snapshot
+                       FROM registrations ORDER BY created_at LIMIT 1"""
+                )
+            )
+            .mappings()
+            .one()
+        )
+        connection.execute(
+            text(
+                """INSERT INTO email_deliveries
+                   (id,idempotency_key,type,recipient_email,event_id,registration_id,
+                    status,attempts,queued_at,created_at,updated_at)
+                   VALUES (:id,:key,'REGISTRATION_TICKET',:recipient,:event,:registration,
+                           'QUEUED',0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            [
+                {
+                    "id": delivery_id,
+                    "key": f"parallel-claim:{delivery_id}",
+                    "recipient": context["email_snapshot"],
+                    "event": context["event_id"],
+                    "registration": context["registration_id"],
+                }
+                for delivery_id in delivery_ids
+            ],
+        )
+
+    config = client.app.state.settings.model_copy(
+        update={
+            "smtp_host": "smtp.example.test",
+            "smtp_from_email": "noreply@example.test",
+        }
+    )
+    sent: Counter[str] = Counter()
+    lock = threading.Lock()
+
+    def sender(message: EmailMessage, _config: Settings) -> str:
+        identifier = str(message["Message-ID"])
+        with lock:
+            sent[identifier] += 1
+        return identifier
+
+    def drain() -> None:
+        while process_once(database, config, sender):
+            pass
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda _: drain(), range(8)))
+
+    for delivery_id in delivery_ids:
+        assert sent[f"<{delivery_id}@event-registration>"] == 1

@@ -26,6 +26,7 @@ pnpm typecheck
 pnpm test
 pnpm build
 pnpm test:e2e
+pnpm test:load
 ```
 
 Browser E2E поднимает нативный локальный контур без Docker на MySQL 8.1.0 и
@@ -33,6 +34,11 @@ Browser E2E поднимает нативный локальный контур 
 online scan, offline persistence после reload, reconnect/sync, mobile overflow и
 critical/serious accessibility violations. Демо-реквизиты генерируются локально,
 не выводятся в CI и не сохраняются в Git.
+
+Release-load профиль использует ту же одноразовую MySQL 8.1.0 и синтетические
+данные. Он проверяет конкурентную capacity, idempotent registration/attendance,
+параллельный захват email queue и retry; агрегатный отчёт сохраняется только в
+игнорируемом `.runtime/release-load-report.json`.
 
 4. После deployment API, Web и Scanner выполнить:
 
