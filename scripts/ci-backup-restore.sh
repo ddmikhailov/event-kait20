@@ -94,6 +94,16 @@ mysql --defaults-extra-file="$runtime/client.cnf" --execute="
   CREATE DATABASE event_registration_restore_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
 export DATABASE_URL="mysql://root@127.0.0.1:$port/event_registration"
+export NODE_ENV=test
+export CORS_ORIGINS=http://localhost:5173
+export SESSION_SECRET AUTH_LINK_SECRET QR_SIGNING_SECRET
+SESSION_SECRET=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+AUTH_LINK_SECRET=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+QR_SIGNING_SECRET=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+export AUTH_LINK_BASE_URL=http://localhost:5173/auth
+export PUBLIC_WEB_BASE_URL=http://localhost:5173
+export CONSENT_URL=http://localhost:5173/consent
+export CONSENT_VERSION=recovery-drill
 python -m event_api.migrate
 mysql --defaults-extra-file="$runtime/client.cnf" event_registration --execute="
   INSERT INTO staff_users
