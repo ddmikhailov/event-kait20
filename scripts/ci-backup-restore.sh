@@ -38,6 +38,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+diagnose_error() {
+  local status=$?
+  printf '::error title=Encrypted recovery drill::failed at line %s (exit %s)\n' \
+    "${BASH_LINENO[0]}" "$status"
+  if [[ -f "$log" ]]; then
+    printf '%s\n' 'Last MySQL diagnostics:' >&2
+    tail -n 20 "$log" >&2
+  fi
+  exit "$status"
+}
+trap diagnose_error ERR
+
 port=$(python - <<'PY'
 import socket
 with socket.socket() as sock:
