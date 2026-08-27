@@ -12,13 +12,14 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 from sqlalchemy import text
 
+from event_api.bootstrap import create_activation_token
 from event_api.config import Settings
 from event_api.database import Database
 from event_api.demo_seed import main as seed_demo
 from event_api.email_worker import process_once
 from event_api.errors import ApiError
 from event_api.routers.excel import _parse
-from event_api.security import RateLimiter, auth_link_token, hash_password, token_hash
+from event_api.security import RateLimiter, auth_link_token, token_hash
 
 ORIGIN = {"Origin": "http://localhost:5173"}
 
@@ -39,19 +40,6 @@ def test_excel_rejects_formula_and_merged_cells() -> None:
         _parse(source.getvalue())
 
 
-def _seed_admin(client: TestClient) -> str:
-    database: Database = client.app.state.database
-    user_id = str(uuid4())
-    with database.transaction() as connection:
-        connection.execute(
-            text("""INSERT INTO staff_users
-            (id,email,email_normalized,password_hash,system_role,active,password_changed_at,created_at,updated_at)
-            VALUES (:id,'admin@example.com','admin@example.com',:password,'SUPER_ADMIN',TRUE,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""),
-            {"id": user_id, "password": hash_password("correct horse battery")},
-        )
-    return user_id
-
-
 def _login(client: TestClient) -> tuple[dict[str, str], str]:
     client.cookies.clear()
     response = client.post(
@@ -69,7 +57,33 @@ def test_health_and_security_foundation(client: TestClient) -> None:
     assert health.json() == {"status": "ready"}
     assert health.headers["x-content-type-options"] == "nosniff"
     assert health.headers["x-frame-options"] == "DENY"
-    _seed_admin(client)
+    database: Database = client.app.state.database
+    config: Settings = client.app.state.settings
+    raw_activation = create_activation_token("admin@example.com", database, config)
+    with database.connect() as connection:
+        invitation_hash = connection.execute(
+            text("SELECT token_hash FROM staff_invitations WHERE role='SUPER_ADMIN'")
+        ).scalar_one()
+    assert invitation_hash == token_hash(raw_activation)
+    assert raw_activation != invitation_hash
+    with database.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT COUNT(*) FROM staff_users WHERE system_role='SUPER_ADMIN'")
+            ).scalar_one()
+            == 0
+        )
+    with pytest.raises(SystemExit, match="activation link already exists"):
+        create_activation_token("other@example.com", database, config)
+    activated = client.post(
+        f"/auth/invitations/{raw_activation}/accept",
+        headers=ORIGIN,
+        json={"password": "correct horse battery"},
+    )
+    assert activated.status_code == 200, activated.text
+    assert activated.json() == {"status": "accepted", "role": "SUPER_ADMIN"}
+    with pytest.raises(SystemExit, match="already exists"):
+        create_activation_token("other@example.com", database, config)
     unknown = client.post(
         "/auth/login",
         headers=ORIGIN,
@@ -95,7 +109,6 @@ def test_health_and_security_foundation(client: TestClient) -> None:
         == 200
     )
     headers, raw_session = _login(client)
-    database: Database = client.app.state.database
     with database.connect() as connection:
         stored = connection.execute(
             text("SELECT token_hash FROM sessions WHERE token_hash=:hash"),

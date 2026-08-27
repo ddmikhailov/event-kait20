@@ -50,7 +50,10 @@ Staff only:
 
 Release implementation:
 
-- first `SUPER_ADMIN` is created only by the `bootstrap:super-admin` CLI using ephemeral environment input; the command refuses to overwrite any existing SUPER_ADMIN;
+- first `SUPER_ADMIN` is initiated only by the `event-bootstrap-admin` CLI; it
+  persists only a hash and prints a one-time activation link, while the intended
+  administrator sets the password on first browser entry; the command refuses a
+  second valid link and refuses permanently after activation;
 - opaque session tokens contain 256 random bits and only their SHA-256 hashes are persisted;
 - invitation/reset links contain a persisted record id and an HMAC-SHA-256 value bound to purpose and expiry; the database persists only the link hash and one-time record state, while the email worker can reconstruct the link from server-side HMAC configuration;
 - successful password reset revokes all existing sessions for the user.

@@ -52,5 +52,6 @@ export const errorEnvelopeSchema = z.object({
 
 export const acceptedResponseSchema = z.object({
   status: z.literal('accepted'),
+  role: z.enum(['SUPER_ADMIN', 'SCANNER']).optional(),
 });
 export type AcceptedResponse = z.infer<typeof acceptedResponseSchema>;

@@ -293,7 +293,6 @@ def accept_invitation(
             not invitation
             or invitation["accepted_at"]
             or invitation["expires_at"] <= now
-            or invitation["role"] != "SCANNER"
             or not verify_auth_link(
                 token,
                 "invitation",
@@ -302,6 +301,21 @@ def accept_invitation(
                 invitation["token_hash"],
                 config.auth_link_secret,
             )
+        ):
+            raise invalid_link()
+        is_scanner = (
+            invitation["role"] == "SCANNER" and invitation["invited_by"] is not None
+        )
+        is_first_admin = (
+            invitation["role"] == "SUPER_ADMIN"
+            and invitation["invited_by"] is None
+            and invitation["event_id"] is None
+        )
+        if not is_scanner and not is_first_admin:
+            raise invalid_link()
+        if is_first_admin and row(
+            connection,
+            "SELECT id FROM staff_users WHERE system_role='SUPER_ADMIN'",
         ):
             raise invalid_link()
         if row(
@@ -316,11 +330,16 @@ def accept_invitation(
             """INSERT INTO staff_users
                (id,email,email_normalized,password_hash,system_role,active,
                 password_changed_at,created_at,updated_at)
-               VALUES (:id,:email,:email,:hash,'SCANNER',true,
+               VALUES (:id,:email,:email,:hash,:role,true,
                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
-            {"id": user_id, "email": invitation["email_normalized"], "hash": password},
+            {
+                "id": user_id,
+                "email": invitation["email_normalized"],
+                "hash": password,
+                "role": invitation["role"],
+            },
         )
-        if invitation["event_id"]:
+        if is_scanner and invitation["event_id"]:
             execute(
                 connection,
                 """INSERT INTO event_access
@@ -338,4 +357,4 @@ def accept_invitation(
             "UPDATE staff_invitations SET accepted_at=UTC_TIMESTAMP(3) WHERE id=:id",
             {"id": record_id},
         )
-    return {"status": "accepted"}
+    return {"status": "accepted", "role": invitation["role"]}

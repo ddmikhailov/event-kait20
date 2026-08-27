@@ -91,6 +91,7 @@ const AuthLinkPage = ({
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [destination, setDestination] = useState('/admin');
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
@@ -105,9 +106,10 @@ const AuthLinkPage = ({
     setBusy(true);
     setError(undefined);
     try {
-      if (kind === 'invitation')
-        await publicApi.acceptInvitation(token, password);
-      else await publicApi.resetPassword(token, password);
+      if (kind === 'invitation') {
+        const result = await publicApi.acceptInvitation(token, password);
+        setDestination(result.role === 'SUPER_ADMIN' ? '/admin' : '/scanner');
+      } else await publicApi.resetPassword(token, password);
       setMessage('Пароль сохранён. Теперь можно войти в рабочий интерфейс.');
     } catch (caught) {
       setError(messageForError(caught));
@@ -125,10 +127,7 @@ const AuthLinkPage = ({
         {message ? (
           <>
             <Message kind="notice">{message}</Message>
-            <a
-              className="primary-link"
-              href={kind === 'invitation' ? '/scanner' : '/admin'}
-            >
+            <a className="primary-link" href={destination}>
               Перейти ко входу
             </a>
           </>

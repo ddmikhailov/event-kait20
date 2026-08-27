@@ -1,4 +1,5 @@
 import {
+  acceptedResponseSchema,
   publicEventResponseSchema,
   publicRegistrationResponseSchema,
   ticketResponseSchema,
@@ -6,6 +7,7 @@ import {
   type PublicRegistrationRequest,
   type PublicRegistrationResponse,
   type TicketResponse,
+  type AcceptedResponse,
 } from '@event-registration/contracts';
 import type { ZodType } from 'zod';
 import { z } from 'zod';
@@ -77,11 +79,11 @@ export class PublicApiClient {
   public acceptInvitation(
     token: string,
     password: string,
-  ): Promise<{ status: 'accepted' }> {
+  ): Promise<AcceptedResponse> {
     return this.request(
       `/auth/invitations/${encodeURIComponent(token)}/accept`,
       { method: 'POST', body: JSON.stringify({ password }) },
-      z.object({ status: z.literal('accepted') }),
+      acceptedResponseSchema,
     );
   }
 

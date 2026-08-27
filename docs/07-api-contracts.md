@@ -96,7 +96,8 @@ never displays that raw payload as text. The web document declares a
 - `GET /auth/session`
 - `POST /auth/password/forgot`
 - `POST /auth/password/reset`
-- `POST /auth/invitations/:token/accept` — set initial password and activate invitation.
+- `POST /auth/invitations/:token/accept` — set initial password and activate a
+  SCANNER invitation or the single CLI-created first-SUPER_ADMIN invitation.
 
 Email links open Web routes `/auth/password-reset/:token` and
 `/auth/invitation/:token`. The admin login links to `/auth/password-forgot`.
