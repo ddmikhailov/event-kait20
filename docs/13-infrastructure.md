@@ -1,76 +1,50 @@
 # 13. Production infrastructure
 
-Статус: **Release 1.0 native deployment contract**
+Статус: **Release 1.0 organisation-managed hosting contract**
 
 ## Целевая схема
 
-Первая production-установка рассчитана на один Linux-сервер организации или
-одну VM в Yandex Cloud и не требует Docker:
-
 ```text
 Internet
-  └── Nginx :443 (TLS)
-      ├── Web static files
-      ├── Scanner PWA static files
-      └── API proxy → 127.0.0.1:3000 (systemd, 2 workers)
-                         ├── MySQL 8.1.0 → 127.0.0.1:3306
-                         └── email-worker (отдельная systemd-служба) → SMTP
+  └── Apache :443 (TLS)
+      ├── compiled Web static files
+      ├── compiled Scanner PWA static files
+      └── /api proxy → Python 3.12 API → organisation-managed MySQL 8.1.0
+                                      └── email worker → SMTP
 ```
 
-Публичны только 80/443 и ограниченный административный SSH. API и MySQL не
-слушают внешний интерфейс. Nginx является единственной публичной точкой входа,
-завершает TLS, ограничивает XLSX body до 10 MB и передаёт proxy-заголовки только
-с loopback. Kubernetes, Redis и message broker для нагрузки MVP не требуются.
+Организация самостоятельно предоставляет Apache, TLS, Python 3.12, способ
+управления процессами, MySQL и резервное копирование. Пакет приложения не
+содержит MySQL binaries, Docker, systemd units и deployment/install scripts.
+Публичны только HTTPS endpoints Apache; API слушает loopback, MySQL доступен
+только доверенным application/migration hosts.
 
-## Runtime
+## Пакет приложения
 
-- API и email worker запускаются от непривилегированного пользователя
-  `event-registration`;
-- MySQL запускается от отдельного пользователя `mysql`;
-- systemd включает restart и filesystem/kernel hardening;
-- релизы неизменяемы и хранятся под `/opt/event-registration/releases/<SHA>`,
-  а `current` переключается атомарно;
-- Web/Scanner являются read-only static artifacts текущего релиза;
-- secrets находятся в root-owned env-файлах с mode `0640` или строже;
-- Nginx раздаёт CSP, HSTS, MIME, frame, referrer и cache policy;
-- demo seed и локальные credentials не переносятся на сервер.
+Команда `pnpm release:sysadmin` создаёт проверяемый каталог и `.tar.gz` в
+`.runtime/`. В него входят готовые static artifacts Web/Scanner, Python wheel,
+точные runtime dependencies, конфигурационные примеры, Apache-пример, SQL
+шаблон чистой базы, отдельные migrations и SHA-256 manifest. Секреты и реальные
+credentials в пакет не входят.
 
-Проверяемые шаблоны находятся в `deploy/systemd`, `deploy/nginx` и
-`deploy/mysql`.
+Apache завершает TLS и проксирует same-origin `/api/` на loopback API. Это
+сохраняет cookie, CSRF и exact-origin protections без wildcard CORS. TLS private
+keys и итоговая Apache configuration остаются в зоне ответственности
+организации.
 
 ## MySQL policy
 
 - production target: ровно MySQL 8.1.0;
 - staging и integration tests: ровно MySQL 8.1.0;
-- миграции обязаны сохранять совместимость с MySQL 8.1.0;
-- приложение не обновляет версию сервера автоматически;
-- официальный native binary проверяется командой `mysqld --version` до запуска;
-- из-за завершённого lifecycle сервер изолируется, регулярно резервируется и
-  не получает публичный сетевой endpoint.
+- migrations обязаны сохранять совместимость с MySQL 8.1.0;
+- application package не устанавливает и не обновляет MySQL;
+- runtime user имеет только DML-права, DDL выполняет отдельный migration user;
+- root credential не находится в конфигурации приложения.
 
-Runtime DB user ограничен одной application database и DML-операциями. DDL
-выполняет отдельный migration user только во время контролируемого deployment;
-root credential не находится в application environment.
+## Эксплуатационные обязанности организации
 
-## Надёжность и эксплуатация
-
-- liveness и readiness доступны на API;
-- MySQL data находится в `/var/lib/mysql-8.1`, не в каталоге приложения;
-- отдельный непривилегированный `event-backup` ежедневно создаёт потоковый
-  encrypted age backup без промежуточного plaintext SQL;
-- SHA-256 проверяет локальную целостность, а encrypted backup обязательно
-  выносится за пределы VM;
-- перед каждой миграцией создаётся и проверяется recovery point;
-- monitoring контролирует доступность systemd units, свободное место, ошибки
-  API/worker, очередь FAILED/QUEUED email и срок TLS-сертификатов;
-- встроенный monitoring timer не требует платного сервиса; опциональный HTTPS
-  webhook использует существующий канал организации и передаёт только названия
-  failed checks;
-- журналы обслуживаются journald/logrotate и не содержат секреты/PII.
-
-## Yandex Cloud
-
-Проект сохраняет российское размещение. Для переноса нужны folder ID, сеть,
-зона, VM size, домены, бюджет и IAM-схема организации. Платные ресурсы код
-приложения не создаёт. Terraform добавляется отдельным проверенным изменением
-после получения реальных организационных параметров.
+Организация выбирает process manager и отвечает за restart, least privilege,
+защищённое хранение env/secrets, журналирование без PII, MySQL backups,
+off-host recovery copy, monitoring `/health/live` и `/health/ready`, SMTP и
+обновление TLS certificates. Внутренние reference-материалы старого native
+варианта не являются частью поставляемого sysadmin package.

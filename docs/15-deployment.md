@@ -1,157 +1,68 @@
-# 15. Перенос на сервер и релиз без Docker
+# 15. Передача системному администратору
 
-Статус: **Release 1.0 native runbook**
+Статус: **Release 1.0 sysadmin artifact runbook**
 
-## 1. Границы и требования
+## 1. Собрать и проверить комплект
 
-Production работает на одном Linux x86_64 сервере с systemd. Нужны Python
-ровно 3.12, Node.js 24, Corepack/pnpm, Nginx, `rsync`, `age` и официальный
-MySQL ровно 8.1.0 в `/opt/mysql-8.1.0`. Публично открываются только 80/443 и
-ограниченный административный SSH. API и MySQL слушают loopback.
-
-До установки организация предоставляет три разных домена Web, Scanner и API,
-TLS-сертификат, юридически утверждённую HTTPS-ссылку согласия, SMTP-доступ и
-публичный age recipient для резервных копий. Секретный age identity хранится
-вне сервера приложения.
-
-Проверка версии обязательна:
+Из чистого проверенного commit выполнить полный validation suite, затем:
 
 ```text
-/opt/mysql-8.1.0/bin/mysqld --version
+pnpm release:sysadmin
 ```
 
-Вывод обязан содержать `Ver 8.1.0`. Скрипты намеренно отклоняют другую версию.
+Результат: `.runtime/event-registration-1.0.0-sysadmin.tar.gz`. Внутренний
+`MANIFEST.json` фиксирует source commit и SHA-256 каждого файла. Комплект не
+содержит MySQL binaries, исходники, Docker, systemd, deployment scripts,
+пароли, TLS keys и реальные secrets.
 
-## 2. Подготовить и проверить конфигурацию
+## 2. База данных
 
-Создать закрытый файл из `deploy/native.env.example`, заполнить значения и
-установить `root:event-registration`, mode `0640`. Три cryptographic secrets
-должны быть независимыми и содержать не менее 32 random bytes. Пароли с
-зарезервированными символами в `DATABASE_URL` URL-кодируются.
+Системный администратор предоставляет MySQL ровно 8.1.0 и выполняет:
 
-Runtime использует только `event_app`, migration — только `event_migrate`.
-Проверка не выводит секреты:
+1. `database/00_create_database.sql`;
+2. `database/01_schema.sql`;
+3. адаптированный `database/02_users_and_grants.example.sql` при необходимости.
+
+Итоговый файл с passwords нельзя сохранять в каталоге приложения. Для runtime
+и migrations используются разные MySQL users. Индивидуальные SQL migrations
+тоже включены для будущих контролируемых обновлений.
+
+## 3. Backend и конфигурация
+
+На сервере нужен Python ровно 3.12. Изолированная среда устанавливает
+`backend/requirements.txt`, затем `backend/*.whl` с `--no-deps`. Значения из
+`config/backend.env.example` переносятся в защищённое хранилище организации.
+`DATABASE_URL` содержит адрес предоставленной MySQL database. Три
+cryptographic secrets генерируются независимо и не попадают в файлы поставки.
+
+Организация запускает `event-api` и `event-email-worker` выбранным process
+manager. API слушает только `127.0.0.1:3000`. Проект не навязывает systemd и не
+поставляет сценарии запуска.
+
+## 4. Frontend и Apache
+
+Каталоги `frontend/web` и `frontend/scanner` уже скомпилированы с API base
+`/api`. Apache раздаёт их как два HTTPS virtual hosts и проксирует `/api/` на
+`http://127.0.0.1:3000/`. Пример находится в `apache/`, но TLS certificate
+директивы и реальные пути определяет организация.
+
+## 5. Первый администратор
+
+После запуска HTTPS, API и базы системный администратор выполняет в защищённом
+backend environment:
 
 ```text
-node scripts/deploy-config.mjs check \
-  --env /etc/event-registration/event-registration.env --check-files
-node scripts/deploy-config.mjs check \
-  --env /etc/event-registration/migration.env --check-files --migration
+event-bootstrap-admin --email admin@example.org
 ```
 
-Создать проверенные Nginx/systemd/MySQL-файлы:
+Пароль в консоль не вводится. Команда выводит временную одноразовую HTTPS-ссылку
+и сохраняет только её hash. Администратор открывает ссылку и задаёт пароль при
+первом входе. До этого SUPER_ADMIN account не существует. Повторная активная
+ссылка и создание второго первого администратора блокируются.
 
-```text
-node scripts/deploy-config.mjs render \
-  --env /etc/event-registration/event-registration.env \
-  --output /root/event-registration-rendered --check-files
-sudo deploy/bin/install-native.sh \
-  --rendered-dir /root/event-registration-rendered
-```
+## 6. Приёмка
 
-Installer создаёт непривилегированных пользователей, защищённые каталоги и
-устанавливает только шаблоны. Он не инициализирует MySQL, не запускает
-приложение и не копирует секреты. Сначала доступен безопасный `--dry-run`.
-
-## 3. Инициализировать MySQL
-
-Для нового пустого сервера:
-
-```text
-sudo -u mysql /opt/mysql-8.1.0/bin/mysqld \
-  --defaults-file=/etc/mysql/event-registration.cnf --initialize
-sudo systemctl enable --now event-registration-mysql
-```
-
-Временный root password берётся из закрытого error log и сразу меняется. Через
-интерактивный `mysql -uroot -p` создать database `event_registration` с
-`utf8mb4_unicode_ci` и три loopback-учётные записи:
-
-- `event_app@127.0.0.1`: `SELECT, INSERT, UPDATE, DELETE` на application DB;
-- `event_migrate@127.0.0.1`: DML плюс `CREATE, ALTER, INDEX, REFERENCES`;
-- `event_backup@127.0.0.1`: только права чтения, необходимые `mysqldump`.
-
-Root credential не попадает в env приложения. MySQL слушает только
-`127.0.0.1:3306`.
-
-## 4. Выпустить первый релиз или обновление
-
-Исходный checkout должен быть чистым и указывать на проверенный полный commit
-SHA. Скрипт создаёт неизменяемый каталог `/opt/event-registration/releases/SHA`,
-устанавливает зависимости, собирает backend и оба frontend из одного commit,
-применяет migration через transient systemd unit, атомарно переключает
-`/opt/event-registration/current` и проверяет readiness:
-
-```text
-sudo deploy/bin/deploy-release.sh \
-  --source /srv/event-registration-source \
-  --release <полный-40-символьный-commit-SHA> \
-  --env /etc/event-registration/event-registration.env \
-  --migration-env /etc/event-registration/migration.env
-```
-
-Сначала выполнить ту же команду с `--dry-run`. Migration env — защищённая копия
-runtime env, в которой изменён только `DATABASE_URL` на `event_migrate`; mode
-`0640` или строже. Скрипт не редактирует применённые SQL migrations. При ошибке
-после активации он возвращает предыдущую application-ссылку, но не откатывает
-схему данных.
-
-## 5. Создать первого администратора
-
-Bootstrap не имеет публичного endpoint и выполняется интерактивно:
-
-```text
-sudo systemd-run --pty --wait --collect \
-  --property=User=event-registration \
-  --property=WorkingDirectory=/opt/event-registration/current \
-  --property=EnvironmentFile=/etc/event-registration/event-registration.env \
-  /opt/event-registration/current/backend/.venv/bin/event-bootstrap-admin \
-  --email admin@example.org
-```
-
-Пароль не передаётся аргументом и не сохраняется. Повторный bootstrap при
-существующем SUPER_ADMIN отклоняется.
-
-## 6. Резервное копирование
-
-Установить `/etc/event-registration/mysql-backup.cnf` из
-`deploy/mysql/backup-client.cnf.example` владельцем `event-backup`, mode `0400`.
-Создать `/etc/event-registration/backup.env` из `deploy/backup.env.example`
-владельцем `root:event-backup`, mode `0640`. Включить timer только после ручного
-успешного запуска и проверки off-host копирования:
-
-```text
-sudo systemctl start event-registration-backup.service
-sudo systemctl enable --now event-registration-backup.timer
-sudo systemctl start event-registration-monitor.service
-sudo systemctl enable --now event-registration-monitor.timer
-systemctl list-timers event-registration-backup.timer
-systemctl list-timers event-registration-monitor.timer
-```
-
-На диске не создаётся открытый SQL: `mysqldump` сразу сжимается и шифруется age.
-SHA-256 sidecar проверяет целостность. Локальный retention не заменяет off-host
-копию. Полная процедура: `docs/runbooks/backup-restore.md`.
-
-До включения monitor timer заполнить operational thresholds, API URL и путь к
-публичному TLS certificate в защищённом `backup.env`. Если используется webhook
-организации, вызвать намеренно неуспешную проверку и подтвердить получение alert,
-не помещая URL webhook в release evidence или Git.
-
-## 7. Приёмка и откат приложения
-
-После релиза проверить HTTPS `/health/live` и `/health/ready`, отсутствие
-публичных docs/redoc/openapi, затем пройти `docs/runbooks/mvp-acceptance.md`.
-Нужно отдельно проверить invitation/reset, email worker, Scanner camera,
-offline/reconnect и восстановление резервной копии в изолированную БД.
-
-Для отката только application-кода:
-
-```text
-sudo deploy/bin/rollback-release.sh \
-  --release <полный-SHA-предыдущего-релиза>
-```
-
-Перед выполнением доступен `--dry-run`. Скрипт не выполняет reverse migration.
-Если новая migration несовместима с прошлым кодом, восстановление данных
-проводится только по backup runbook с отдельным решением ответственного.
+Проверяются `/api/health/live`, `/api/health/ready`, вход SUPER_ADMIN, создание
+тестового события, регистрация участника, email queue и Scanner на реальном
+HTTPS устройстве. Затем организация включает собственные backup, monitoring и
+process restart controls.

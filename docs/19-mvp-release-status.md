@@ -13,7 +13,8 @@
 - безопасный XLSX preview/commit/export;
 - статистика, audit log и ticket batches;
 - SMTP worker с durable intents, one-time auth links, retries и stale-lease recovery;
-- native systemd/Nginx production template, health/readiness и runbooks.
+- sysadmin package с Apache static/proxy example, Python wheel, SQL template,
+  health/readiness и runbook без MySQL binaries/systemd/deployment scripts.
 
 ## Релизные свойства
 

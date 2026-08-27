@@ -30,7 +30,7 @@
 - trusted Web Origin получает точный CORS allow header;
 - посторонний Origin не получает CORS-доступ, а mutation отклоняется;
 - HSTS, nosniff, frame, referrer, permissions policy и CSP проверяются после
-  прохождения через Nginx;
+  прохождения через Apache;
 - Web shell, Scanner shell и PWA manifest соответствуют релизу.
 
 Готовность: тесты smoke-валидатора включены в `pnpm test`, а staging-команда
@@ -107,7 +107,8 @@ delivery несколькими worker-процессами.
 завершены; восстановление production-копии, off-host upload, alert delivery и
 rollback rehearsal ожидают сервер и реквизиты организации**.
 
-- monitoring systemd units, readiness, места на диске, MySQL, email queue и TLS;
+- monitoring выбранного организацией process manager, readiness, места на диске,
+  MySQL, email queue и TLS;
 - ежедневный encrypted backup и автоматическая проверка свежести;
 - off-host копирование без хранения age identity на application-сервере;
 - restore drill в отдельную MySQL 8.1.0 с зафиксированными RPO/RTO;

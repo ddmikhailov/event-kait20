@@ -1,6 +1,6 @@
 # ADR-011 — Native deployment without Docker
 
-Статус: **Accepted**  
+Статус: **Superseded by ADR-012**  
 Дата: 2026-08-26
 
 ## Контекст

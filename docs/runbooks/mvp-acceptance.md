@@ -51,7 +51,7 @@ pnpm smoke:mvp
 
 Smoke проверяет liveness/readiness MySQL, закрытые production API docs, точный
 CORS для Web, отклонение mutation с постороннего Origin, security headers/CSP
-после Nginx, обе application shells и production PWA manifest. Он не
+после Apache, обе application shells и production PWA manifest. Он не
 авторизуется, не передаёт credentials и не создаёт business data.
 
 Python integration tests автоматически запускают test-only MySQL 8.1.0 на

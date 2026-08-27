@@ -46,7 +46,8 @@ Current stack:
 - MySQL 8.1.0
 - shared Zod contracts
 - Dexie/IndexedDB in scanner
-- native systemd + Nginx deployment; Yandex Cloud remains the target platform
+- organisation-managed process runtime plus Apache static/proxy hosting;
+  Yandex Cloud remains the target platform
 
 Do not introduce Next.js, GraphQL, microservices, Kubernetes, Supabase/Firebase or a second primary database without an explicit ADR/owner decision.
 

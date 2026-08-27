@@ -75,7 +75,9 @@ Scanner PWA ──────┼── HTTPS ──> FastAPI ─────> M
 - SQLAlchemy 2 + PyMySQL;
 - Dexie/IndexedDB;
 - GitHub Actions;
-- нативные systemd services и Nginx; целевая площадка — Yandex Cloud/сервер организации.
+- готовые static artifacts обслуживаются Apache, а Python 3.12 backend запускается
+  выбранным организацией process manager; целевая площадка — Yandex Cloud/сервер
+  организации.
 
 Версии Node-пакетов фиксируются lockfile, Python-зависимости — точными версиями в `backend/pyproject.toml`. Shared Zod schemas в `packages/contracts` обслуживают Web/Scanner, а эквивалентная server-side проверка публичной границы выполняется Pydantic-моделями.
 

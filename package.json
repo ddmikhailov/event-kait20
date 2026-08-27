@@ -26,6 +26,7 @@
     "deploy:check": "node scripts/deploy-config.mjs check",
     "deploy:render": "node scripts/deploy-config.mjs render",
     "release:readiness": "node scripts/release-readiness.mjs",
+    "release:sysadmin": "node scripts/build-sysadmin-release.mjs",
     "demo:doctor": "node scripts/native-demo.mjs doctor",
     "demo:up": "node scripts/native-demo.mjs up",
     "demo:down": "node scripts/native-demo.mjs down",
