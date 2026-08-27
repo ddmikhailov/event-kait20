@@ -288,6 +288,8 @@ export const renderDeployment = ({
             'event-registration-mysql.service',
             'event-registration-backup.service',
             'event-registration-backup.timer',
+            'event-registration-monitor.service',
+            'event-registration-monitor.timer',
           ]
         : ['event-registration.cnf'];
     for (const file of files) {

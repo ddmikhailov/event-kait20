@@ -63,6 +63,9 @@ root credential не находится в application environment.
 - перед каждой миграцией создаётся и проверяется recovery point;
 - monitoring контролирует доступность systemd units, свободное место, ошибки
   API/worker, очередь FAILED/QUEUED email и срок TLS-сертификатов;
+- встроенный monitoring timer не требует платного сервиса; опциональный HTTPS
+  webhook использует существующий канал организации и передаёт только названия
+  failed checks;
 - журналы обслуживаются journald/logrotate и не содержат секреты/PII.
 
 ## Yandex Cloud

@@ -57,6 +57,9 @@ CORS для Web, отклонение mutation с постороннего Origi
 Python integration tests автоматически запускают test-only MySQL 8.1.0 на
 loopback и удаляют одноразовую БД после прогона. В CI можно передать локальный
 `TEST_DATABASE_URL`; production credentials для этого не используются.
+Отдельный CI recovery drill тем же образом доказывает полный зашифрованный цикл
+backup/checksum/restore и публикует только агрегатный локальный отчёт. Перед
+production всё равно восстанавливается актуальная off-host копия организации.
 
 ## Staging user journeys
 

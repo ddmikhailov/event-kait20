@@ -39,7 +39,9 @@ for file in \
   systemd/event-registration-email-worker.service \
   systemd/event-registration-mysql.service \
   systemd/event-registration-backup.service \
-  systemd/event-registration-backup.timer; do
+  systemd/event-registration-backup.timer \
+  systemd/event-registration-monitor.service \
+  systemd/event-registration-monitor.timer; do
   [[ -f "$rendered_dir/$file" ]] || fail "rendered file is missing: $file"
 done
 grep -R -E '__[A-Z0-9_]+__|example\.(com|org|ru)|replace-with' "$rendered_dir" >/dev/null \

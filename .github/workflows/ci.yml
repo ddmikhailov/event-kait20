@@ -60,6 +60,9 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: Run encrypted backup and restore drill
+        shell: bash
+        run: scripts/ci-backup-restore.sh
       - name: Install browser for end-to-end tests
         run: pnpm exec playwright install --with-deps chromium
       - name: Run browser end-to-end tests

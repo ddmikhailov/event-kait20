@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 umask 077
-backup_dir=/var/backups/event-registration
+backup_dir=${BACKUP_DIRECTORY:-/var/backups/event-registration}
 database=event_registration
 defaults_file=${MYSQL_BACKUP_DEFAULTS_FILE:-}
 recipient=${AGE_RECIPIENT:-}
@@ -28,6 +28,7 @@ fail() {
 [[ "$recipient" == age1* || "$recipient" == ssh-* ]] || fail 'AGE_RECIPIENT must be an age or SSH public recipient'
 [[ "$retention_days" =~ ^[0-9]+$ ]] || fail 'RETENTION_DAYS must be numeric'
 ((retention_days >= 1 && retention_days <= 3650)) || fail 'RETENTION_DAYS must be between 1 and 3650'
+[[ "$backup_dir" = /* ]] || fail 'BACKUP_DIRECTORY must be an absolute path'
 [[ -d "$backup_dir" && ! -L "$backup_dir" ]] || fail 'Backup directory is missing or is a symlink'
 [[ "$(stat -c '%U' "$backup_dir")" == "$(id -un)" ]] || fail 'Backup directory must belong to the backup user'
 

@@ -114,10 +114,20 @@ test('renders complete Nginx templates without persisting application secrets', 
     join(output, 'deployment-manifest.json'),
     'utf8',
   );
+  const monitorService = readFileSync(
+    join(output, 'systemd', 'event-registration-monitor.service'),
+    'utf8',
+  );
+  const monitorTimer = readFileSync(
+    join(output, 'systemd', 'event-registration-monitor.timer'),
+    'utf8',
+  );
   assert.match(nginx, /server_name events\.kait20\.ru/);
   assert.match(nginx, /server_name scanner\.kait20\.ru/);
   assert.match(nginx, /server_name api\.kait20\.ru/);
   assert.match(webSecurity, /connect-src 'self' https:\/\/api\.kait20\.ru/);
+  assert.match(monitorService, /check-operations\.sh/);
+  assert.match(monitorTimer, /OnUnitActiveSec=5m/);
   assert.doesNotMatch(`${nginx}${webSecurity}${manifest}`, /__[A-Z0-9_]+__/);
   assert.doesNotMatch(manifest, new RegExp(config.SESSION_SECRET));
 });

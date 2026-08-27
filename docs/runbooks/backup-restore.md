@@ -28,6 +28,17 @@ MySQL ровно 8.1.0 остаётся source of truth. Backup содержит
 Скрипт `deploy/bin/backup-mysql.sh` проверяет точную версию клиента 8.1.0,
 владельца и права credentials, шифрует поток `mysqldump | gzip` напрямую через
 age и удаляет только файлы собственного строгого шаблона старше retention.
+`BACKUP_DIRECTORY` по умолчанию остаётся `/var/backups/event-registration`; иной
+абсолютный каталог разрешён только для изолированного recovery drill и проходит
+те же проверки владельца и запрет symlink.
+
+CI выполняет `scripts/ci-backup-restore.sh`: поднимает одноразовую MySQL 8.1.0,
+применяет migrations, создаёт временную age identity, делает зашифрованный
+backup, проверяет SHA-256 и восстанавливает его в отдельную database. Identity,
+credentials, обе database и backup удаляются после процесса. Агрегатный отчёт
+без данных и секретов записывается в `.runtime/recovery-drill.json`. Эта проверка
+доказывает работоспособность инструментов, но не заменяет restore drill реальной
+production-копии на изолированном сервере.
 
 ## Проверка восстановления
 
@@ -62,3 +73,17 @@ off-host копия. Записываются commit SHA, список migration
 новую изолированную DB, выполнить все проверки и только по явному решению
 ответственного изменить production connection secret. Старую DB не удалять до
 завершения расследования и подтверждения целостности.
+
+## Monitoring и проверка alert
+
+`event-registration-monitor.timer` каждые пять минут запускает
+`deploy/bin/check-operations.sh` от `event-backup`. Проверяются systemd units,
+HTTPS readiness, срок TLS не менее семи дней, свободное место, возраст и SHA-256
+последнего backup, точная MySQL 8.1.0, FAILED deliveries и возраст QUEUED email.
+Пороговые значения находятся в защищённом `backup.env`.
+
+Если у организации уже есть HTTPS webhook мониторинга, его URL задаётся через
+`OPERATIONS_ALERT_WEBHOOK_URL`; наружу уходят только стабильные имена упавших
+checks, без hostname, PII и секретов. Без webhook ошибка остаётся в journald и
+делает service failed, но перед production обязательно настроить фактический
+канал и зафиксировать тестовую доставку alert в release evidence.

@@ -103,7 +103,9 @@ delivery несколькими worker-процессами.
 
 ## Этап 5. Эксплуатационная готовность
 
-Приоритет: **критический**.
+Приоритет: **критический**. Статус: **backup/restore и monitoring automation
+завершены; восстановление production-копии, off-host upload, alert delivery и
+rollback rehearsal ожидают сервер и реквизиты организации**.
 
 - monitoring systemd units, readiness, места на диске, MySQL, email queue и TLS;
 - ежедневный encrypted backup и автоматическая проверка свежести;

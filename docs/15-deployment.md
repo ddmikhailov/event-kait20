@@ -123,12 +123,20 @@ sudo systemd-run --pty --wait --collect \
 ```text
 sudo systemctl start event-registration-backup.service
 sudo systemctl enable --now event-registration-backup.timer
+sudo systemctl start event-registration-monitor.service
+sudo systemctl enable --now event-registration-monitor.timer
 systemctl list-timers event-registration-backup.timer
+systemctl list-timers event-registration-monitor.timer
 ```
 
 На диске не создаётся открытый SQL: `mysqldump` сразу сжимается и шифруется age.
 SHA-256 sidecar проверяет целостность. Локальный retention не заменяет off-host
 копию. Полная процедура: `docs/runbooks/backup-restore.md`.
+
+До включения monitor timer заполнить operational thresholds, API URL и путь к
+публичному TLS certificate в защищённом `backup.env`. Если используется webhook
+организации, вызвать намеренно неуспешную проверку и подтвердить получение alert,
+не помещая URL webhook в release evidence или Git.
 
 ## 7. Приёмка и откат приложения
 
