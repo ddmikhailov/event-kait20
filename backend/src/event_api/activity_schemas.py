@@ -173,15 +173,7 @@ class ProfileConsentRequest(Contract):
 
 
 class StudentMembershipValues(Contract):
-    study_group: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
-    ]
-    department: (
-        Annotated[
-            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)
-        ]
-        | None
-    ) = None
+    study_group_id: UUID
     valid_from: date
     valid_to: date | None = None
 

@@ -194,8 +194,7 @@ export type ActivityOperationResponse = z.infer<
 
 export const studentMembershipValuesSchema = z
   .object({
-    studyGroup: z.string().trim().min(1).max(100),
-    department: z.string().trim().min(1).max(150).nullable().default(null),
+    studyGroupId: uuidSchema,
     validFrom: z.iso.date(),
     validTo: z.iso.date().nullable().default(null),
   })
@@ -204,10 +203,25 @@ export const studentMembershipValuesSchema = z
     (value) => value.validTo === null || value.validTo >= value.validFrom,
     'Membership end cannot be before start',
   );
-export const studentMembershipSchema = studentMembershipValuesSchema.extend({
-  id: uuidSchema,
-  personId: uuidSchema,
-});
+export const studentMembershipSchema = z
+  .object({
+    id: uuidSchema,
+    personId: uuidSchema,
+    organizationId: uuidSchema,
+    organization: z.string(),
+    departmentId: uuidSchema.nullable(),
+    department: z.string().nullable(),
+    studyGroupId: uuidSchema.nullable(),
+    studyGroup: z.string(),
+    course: z.number().int().min(1).max(4).nullable(),
+    validFrom: z.iso.date(),
+    validTo: z.iso.date().nullable(),
+  })
+  .strict()
+  .refine(
+    (value) => value.validTo === null || value.validTo >= value.validFrom,
+    'Membership end cannot be before start',
+  );
 export const studentMembershipListSchema = z
   .object({ items: z.array(studentMembershipSchema) })
   .strict();

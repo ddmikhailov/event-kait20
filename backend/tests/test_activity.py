@@ -28,9 +28,9 @@ def create_registration(database: Database, event_id: str, suffix: str = "one") 
     with database.transaction() as connection:
         connection.execute(
             text("""INSERT INTO persons
-            (id,last_name,first_name,email,email_normalized,phone,phone_normalized,person_type,
+            (id,tenant_id,last_name,first_name,email,email_normalized,phone,phone_normalized,person_type,
              organization,study_group,dedup_review_required,created_at,updated_at)
-            VALUES (:person,'Тестов',:first,:email,:email,'+79990000001','+79990000001',
+            VALUES (:person,'50000000-0000-4000-8000-000000000001','Тестов',:first,:email,:email,'+79990000001','+79990000001',
                     'KAIT_STUDENT','КАИТ №20','ИС-21',false,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""),
             {
                 "person": person_id,
@@ -89,6 +89,34 @@ def create_event(
     return response.json()["id"], slug
 
 
+def create_study_group(
+    client: TestClient,
+    headers: dict[str, str],
+    name: str,
+    department_name: str,
+    course: int,
+) -> str:
+    suffix = uuid4().hex[:8].upper()
+    department = client.post(
+        "/admin/structure/departments",
+        headers=headers,
+        json={"code": f"D_{suffix}", "name": department_name},
+    )
+    assert department.status_code == 201, department.text
+    group = client.post(
+        "/admin/structure/groups",
+        headers=headers,
+        json={
+            "departmentId": department.json()["id"],
+            "name": name,
+            "code": f"G_{suffix}",
+            "course": course,
+        },
+    )
+    assert group.status_code == 201, group.text
+    return group.json()["id"]
+
+
 def create_registration_for_person(
     database: Database,
     event_id: str,
@@ -101,9 +129,9 @@ def create_registration_for_person(
         if person_id is None:
             connection.execute(
                 text("""INSERT INTO persons
-                (id,last_name,first_name,email,email_normalized,person_type,organization,
+                (id,tenant_id,last_name,first_name,email,email_normalized,person_type,organization,
                  study_group,dedup_review_required,created_at,updated_at)
-                VALUES (:person,'Исторический',:first,:email,:email,'KAIT_STUDENT',
+                VALUES (:person,'50000000-0000-4000-8000-000000000001','Исторический',:first,:email,:email,'KAIT_STUDENT',
                         'КАИТ №20','TEST',false,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""),
                 {
                     "person": resolved_person_id,
@@ -563,8 +591,10 @@ def test_scanner_cannot_access_activity_administration(client: TestClient) -> No
     with database.transaction() as connection:
         connection.execute(
             text("""INSERT INTO staff_users
-            (id,email,email_normalized,password_hash,system_role,active,password_changed_at,created_at,updated_at)
-            VALUES (:id,:email,:email,:password,'SCANNER',true,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""),
+            (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,active,password_changed_at,created_at,updated_at)
+            VALUES (:id,'50000000-0000-4000-8000-000000000001',
+                    '51000000-0000-4000-8000-000000000001',:email,:email,:password,
+                    'SCANNER',true,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""),
             {
                 "id": scanner_id,
                 "email": email,
@@ -586,8 +616,10 @@ def test_scanner_cannot_access_activity_administration(client: TestClient) -> No
     with database.transaction() as connection:
         connection.execute(
             text("""INSERT INTO staff_users
-            (id,email,email_normalized,password_hash,system_role,active,password_changed_at,created_at,updated_at)
-            VALUES (:id,:email,:email,:password,'ORGANIZER',true,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""),
+            (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,active,password_changed_at,created_at,updated_at)
+            VALUES (:id,'50000000-0000-4000-8000-000000000001',
+                    '51000000-0000-4000-8000-000000000001',:email,:email,:password,
+                    'ORGANIZER',true,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""),
             {
                 "id": organizer_id,
                 "email": organizer_email,
@@ -830,12 +862,13 @@ def test_historical_membership_privacy_and_event_date_scoring(
     march_registration, _ = create_registration_for_person(
         database, march_event, "membership-history", person_id
     )
+    group_a_id = create_study_group(client, headers, "GROUP_A", "DEPT_A", 3)
+    group_b_id = create_study_group(client, headers, "GROUP_B", "DEPT_B", 4)
     group_a = client.post(
         f"/admin/people/{person_id}/memberships",
         headers=headers,
         json={
-            "studyGroup": "GROUP_A",
-            "department": "DEPT_A",
+            "studyGroupId": group_a_id,
             "validFrom": "2026-09-01",
             "validTo": "2026-12-31",
         },
@@ -844,8 +877,7 @@ def test_historical_membership_privacy_and_event_date_scoring(
         f"/admin/people/{person_id}/memberships",
         headers=headers,
         json={
-            "studyGroup": "GROUP_B",
-            "department": "DEPT_B",
+            "studyGroupId": group_b_id,
             "validFrom": "2027-01-01",
             "validTo": "2027-06-30",
         },
@@ -856,7 +888,7 @@ def test_historical_membership_privacy_and_event_date_scoring(
         f"/admin/people/{person_id}/memberships",
         headers=headers,
         json={
-            "studyGroup": "OVERLAP",
+            "studyGroupId": group_a_id,
             "validFrom": "2026-12-01",
             "validTo": "2027-02-01",
         },
@@ -1210,14 +1242,16 @@ def test_membership_uses_moscow_event_calendar_date(client: TestClient) -> None:
     january_registration, _ = create_registration_for_person(
         database, early_january_event, "moscow-date", person_id
     )
+    group_a_id = create_study_group(client, headers, "GROUP_A", "DATE_DEPT_A", 3)
+    group_b_id = create_study_group(client, headers, "GROUP_B", "DATE_DEPT_B", 4)
     for payload in (
         {
-            "studyGroup": "GROUP_A",
+            "studyGroupId": group_a_id,
             "validFrom": "2026-09-01",
             "validTo": "2026-12-31",
         },
         {
-            "studyGroup": "GROUP_B",
+            "studyGroupId": group_b_id,
             "validFrom": "2027-01-01",
             "validTo": None,
         },

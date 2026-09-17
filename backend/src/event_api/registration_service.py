@@ -96,9 +96,12 @@ def valid_answer(field: RowMapping, value: Any) -> bool:
     return value in options if field["type"] == "SINGLE_CHOICE" else bool(value.strip())
 
 
-def acquire_person_locks(connection: Connection, data: dict[str, Any]) -> list[str]:
+def acquire_person_locks(
+    connection: Connection, data: dict[str, Any], tenant_id: str
+) -> list[str]:
     name = "|".join(
         [
+            tenant_id,
             data["last_name"].lower(),
             data["first_name"].lower(),
             (data["middle_name"] or "").lower(),
@@ -135,6 +138,7 @@ def release_person_locks(connection: Connection, keys: list[str]) -> None:
 def create_person(
     connection: Connection,
     data: dict[str, Any],
+    tenant_id: str,
     *,
     dedup_review_required: bool = False,
 ) -> str:
@@ -142,12 +146,12 @@ def create_person(
     execute(
         connection,
         """INSERT INTO persons
-        (id,last_name,first_name,middle_name,birth_date,email,email_normalized,phone,
+        (id,tenant_id,last_name,first_name,middle_name,birth_date,email,email_normalized,phone,
          phone_normalized,person_type,organization,study_group,dedup_review_required,
          created_at,updated_at)
-        VALUES (:id,:last_name,:first_name,:middle_name,:birth_date,:email,:email,:phone,
+        VALUES (:id,:tenant,:last_name,:first_name,:middle_name,:birth_date,:email,:email,:phone,
                 :phone,:person_type,:organization,:study_group,:review,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
-        {**data, "id": person_id, "review": dedup_review_required},
+        {**data, "id": person_id, "tenant": tenant_id, "review": dedup_review_required},
     )
     return person_id
 
@@ -166,18 +170,20 @@ def update_person(connection: Connection, person_id: str, data: dict[str, Any]) 
 def find_or_create_person(
     connection: Connection,
     data: dict[str, Any],
+    tenant_id: str,
     *,
     update_existing: bool = True,
 ) -> str:
     candidates = rows(
         connection,
-        """SELECT id FROM persons WHERE merged_into_id IS NULL
+        """SELECT id FROM persons WHERE tenant_id=:tenant AND merged_into_id IS NULL
         AND lower(last_name)=lower(:last) AND lower(first_name)=lower(:first)
         AND ((:middle IS NULL AND middle_name IS NULL) OR lower(middle_name)=lower(:middle))
         AND (email_normalized=:email OR phone_normalized=:phone OR birth_date=:birth)
         FOR UPDATE""",
         {
             "last": data["last_name"],
+            "tenant": tenant_id,
             "first": data["first_name"],
             "middle": data["middle_name"],
             "email": data["email"],
@@ -191,7 +197,9 @@ def find_or_create_person(
         if update_existing:
             update_person(connection, person_id, data)
         return person_id
-    return create_person(connection, data, dedup_review_required=len(ids) > 1)
+    return create_person(
+        connection, data, tenant_id, dedup_review_required=len(ids) > 1
+    )
 
 
 def create_registration(
@@ -343,6 +351,15 @@ def register(
     actor: Staff | None,
     capacity_override: bool,
 ) -> dict[str, Any]:
+    scope = row(
+        connection,
+        """SELECT o.tenant_id FROM organizations o
+        WHERE o.id=:organization""",
+        {"organization": event["organization_id"]},
+    )
+    if not scope:
+        raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
+    tenant_id = scope["tenant_id"]
     validate_system_fields(
         event, values, "public" if source == "PUBLIC_FORM" else "onsite"
     )
@@ -400,7 +417,7 @@ def register(
     fields = form_fields(connection, event["id"])
     validate_answers(fields, values, onsite=source != "PUBLIC_FORM")
     person_id = find_or_create_person(
-        connection, data, update_existing=source != "PUBLIC_FORM"
+        connection, data, tenant_id, update_existing=source != "PUBLIC_FORM"
     )
     existing = row(
         connection,

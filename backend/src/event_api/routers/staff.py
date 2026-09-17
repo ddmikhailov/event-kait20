@@ -43,9 +43,9 @@ def list_invitations(
                 SELECT latest.id FROM email_deliveries latest
                 WHERE latest.staff_invitation_id=i.id
                 ORDER BY latest.queued_at DESC,latest.id DESC LIMIT 1)
-            WHERE (:super=true OR i.role='SCANNER')
+            WHERE i.tenant_id=:tenant AND (:super=true OR i.role='SCANNER')
             ORDER BY i.created_at DESC,i.id DESC LIMIT 100""",
-            {"super": staff.role == "SUPER_ADMIN"},
+            {"tenant": staff.tenant_id, "super": staff.role == "SUPER_ADMIN"},
         )
     return {
         "items": [
@@ -81,8 +81,8 @@ def resend_invitation(
     with db.transaction() as connection:
         invitation = row(
             connection,
-            "SELECT * FROM staff_invitations WHERE id=:id FOR UPDATE",
-            {"id": target},
+            "SELECT * FROM staff_invitations WHERE id=:id AND tenant_id=:tenant FOR UPDATE",
+            {"id": target, "tenant": staff.tenant_id},
         )
         if not invitation:
             raise ApiError(404, "NOT_FOUND", "Invitation not found")
@@ -138,13 +138,15 @@ def resend_invitation(
 
 @router.get("/staff")
 def list_staff(
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
         items = rows(
             connection,
-            "SELECT id,email,system_role,active,created_at FROM staff_users ORDER BY created_at DESC",
+            """SELECT id,email,system_role,active,created_at FROM staff_users
+            WHERE tenant_id=:tenant ORDER BY created_at DESC""",
+            {"tenant": staff.tenant_id},
         )
     return {
         "items": [
@@ -160,8 +162,15 @@ def list_staff(
     }
 
 
-def assert_event(connection: Any, event_id: str, assignable: bool = False) -> None:
-    event = row(connection, "SELECT status FROM events WHERE id=:id", {"id": event_id})
+def assert_event(
+    connection: Any, event_id: str, tenant_id: str, assignable: bool = False
+) -> None:
+    event = row(
+        connection,
+        """SELECT e.status FROM events e JOIN organizations o ON o.id=e.organization_id
+        WHERE e.id=:id AND o.tenant_id=:tenant""",
+        {"id": event_id, "tenant": tenant_id},
+    )
     if not event:
         raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
     if assignable and event["status"] == "ARCHIVED":
@@ -192,14 +201,14 @@ def invite(
             raise ApiError(409, "CONFLICT", "Staff account already exists")
         event_id = str(values.event_id) if values.event_id else None
         if event_id:
-            assert_event(connection, event_id, True)
+            assert_event(connection, event_id, staff.tenant_id, True)
         existing = row(
             connection,
             """SELECT id,expires_at,event_id,role FROM staff_invitations
-            WHERE email_normalized=:email
+            WHERE tenant_id=:tenant AND email_normalized=:email
               AND accepted_at IS NULL AND expires_at>UTC_TIMESTAMP(3)
             ORDER BY created_at DESC LIMIT 1 FOR UPDATE""",
-            {"email": email},
+            {"tenant": staff.tenant_id, "email": email},
         )
         if existing:
             if existing["role"] != role or existing["event_id"] != event_id:
@@ -225,10 +234,12 @@ def invite(
         execute(
             connection,
             """INSERT INTO staff_invitations
-            (id,email_normalized,token_hash,invited_by,event_id,role,expires_at,created_at)
-            VALUES (:id,:email,:hash,:actor,:event,:role,:expires,UTC_TIMESTAMP(3))""",
+            (id,tenant_id,organization_id,email_normalized,token_hash,invited_by,event_id,role,expires_at,created_at)
+            VALUES (:id,:tenant,:organization,:email,:hash,:actor,:event,:role,:expires,UTC_TIMESTAMP(3))""",
             {
                 "id": invitation_id,
+                "tenant": staff.tenant_id,
+                "organization": staff.organization_id,
                 "email": email,
                 "hash": token_hash(token),
                 "actor": staff.id,
@@ -275,8 +286,9 @@ def deactivate(
     with db.transaction() as connection:
         user = row(
             connection,
-            "SELECT active,system_role FROM staff_users WHERE id=:id FOR UPDATE",
-            {"id": target},
+            """SELECT active,system_role FROM staff_users
+            WHERE id=:id AND tenant_id=:tenant FOR UPDATE""",
+            {"id": target, "tenant": staff.tenant_id},
         )
         if not user:
             raise ApiError(404, "NOT_FOUND", "Staff user not found")
@@ -287,7 +299,9 @@ def deactivate(
         if user["system_role"] == "SUPER_ADMIN":
             count = row(
                 connection,
-                "SELECT count(*) AS count FROM staff_users WHERE system_role='SUPER_ADMIN' AND active=true",
+                """SELECT count(*) AS count FROM staff_users
+                WHERE tenant_id=:tenant AND system_role='SUPER_ADMIN' AND active=true""",
+                {"tenant": staff.tenant_id},
             )
             if int(count["count"] if count else 0) <= 1:
                 raise ApiError(
@@ -295,8 +309,9 @@ def deactivate(
                 )
         execute(
             connection,
-            "UPDATE staff_users SET active=false,updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
-            {"id": target},
+            """UPDATE staff_users SET active=false,updated_at=UTC_TIMESTAMP(3)
+            WHERE id=:id AND tenant_id=:tenant""",
+            {"id": target, "tenant": staff.tenant_id},
         )
         execute(
             connection,
@@ -310,11 +325,11 @@ def deactivate(
 @router.get("/events/{event_id}/access")
 def list_access(
     event_id: UUID,
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        assert_event(connection, str(event_id))
+        assert_event(connection, str(event_id), staff.tenant_id)
         items = rows(
             connection,
             """SELECT a.user_id,u.email,a.role,a.created_at FROM event_access a
@@ -342,11 +357,12 @@ def assign_access(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     with db.transaction() as connection:
-        assert_event(connection, str(event_id), True)
+        assert_event(connection, str(event_id), staff.tenant_id, True)
         user = row(
             connection,
-            "SELECT active,system_role FROM staff_users WHERE id=:id",
-            {"id": str(values.user_id)},
+            """SELECT active,system_role FROM staff_users
+            WHERE id=:id AND tenant_id=:tenant""",
+            {"id": str(values.user_id), "tenant": staff.tenant_id},
         )
         if not user:
             raise ApiError(404, "NOT_FOUND", "Staff user not found")
@@ -383,7 +399,7 @@ def remove_access(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     with db.transaction() as connection:
-        assert_event(connection, str(event_id))
+        assert_event(connection, str(event_id), staff.tenant_id)
         execute(
             connection,
             "DELETE FROM event_access WHERE event_id=:event AND user_id=:user",

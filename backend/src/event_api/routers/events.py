@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID, uuid4
@@ -56,15 +57,89 @@ TRANSITIONS: dict[str, set[str]] = {
 }
 
 
-def event_row(connection: Connection, event_id: str, lock: bool = False) -> RowMapping:
+def event_row(
+    connection: Connection,
+    event_id: str,
+    lock: bool = False,
+    tenant_id: str | None = None,
+) -> RowMapping:
+    tenant_join = " JOIN organizations o ON o.id=e.organization_id" if tenant_id else ""
+    tenant_filter = " AND o.tenant_id=:tenant" if tenant_id else ""
     item = row(
         connection,
-        f"SELECT * FROM events WHERE id=:id{' FOR UPDATE' if lock else ''}",
-        {"id": event_id},
+        f"SELECT e.* FROM events e{tenant_join} WHERE e.id=:id{tenant_filter}"
+        f"{' FOR UPDATE' if lock else ''}",
+        {"id": event_id, "tenant": tenant_id},
     )
     if not item:
         raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
     return item
+
+
+def resolve_direction(
+    connection: Connection,
+    tenant_id: str,
+    organization_id: str,
+    direction_id: str | None,
+    legacy_name: str | None,
+) -> tuple[str | None, str | None]:
+    if direction_id:
+        item = row(
+            connection,
+            """SELECT id,name,active FROM activity_directions
+            WHERE id=:id AND tenant_id=:tenant
+              AND (organization_id IS NULL OR organization_id=:organization)""",
+            {"id": direction_id, "tenant": tenant_id, "organization": organization_id},
+        )
+        if not item:
+            raise ApiError(404, "DIRECTION_NOT_FOUND", "Activity direction not found")
+        if not item["active"]:
+            raise ApiError(409, "DIRECTION_INACTIVE", "Activity direction is inactive")
+        if legacy_name is not None and legacy_name != item["name"]:
+            raise ApiError(409, "CONFLICT", "Direction reference and name do not match")
+        return item["id"], item["name"]
+    if not legacy_name:
+        return None, None
+    matches = rows(
+        connection,
+        """SELECT id,name,active FROM activity_directions
+        WHERE tenant_id=:tenant AND name=:name
+          AND (organization_id IS NULL OR organization_id=:organization)
+        ORDER BY (organization_id=:organization) DESC,created_at""",
+        {"tenant": tenant_id, "organization": organization_id, "name": legacy_name},
+    )
+    if len(matches) > 1:
+        raise ApiError(
+            409,
+            "DIRECTION_AMBIGUOUS",
+            "Direction name matches more than one available direction",
+        )
+    if matches:
+        item = matches[0]
+        if not item["active"]:
+            raise ApiError(409, "DIRECTION_INACTIVE", "Activity direction is inactive")
+        return item["id"], item["name"]
+    identity = str(uuid4())
+    code = (
+        "LEGACY_"
+        + hashlib.sha256(f"{organization_id}:{legacy_name}".encode())
+        .hexdigest()[:16]
+        .upper()
+    )
+    execute(
+        connection,
+        """INSERT INTO activity_directions
+        (id,tenant_id,organization_id,code,name,active,sort_order,created_at,updated_at)
+        VALUES (:id,:tenant,:organization,:code,:name,true,1000,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
+        {
+            "id": identity,
+            "tenant": tenant_id,
+            "organization": organization_id,
+            "code": code,
+            "name": legacy_name,
+        },
+    )
+    return identity, legacy_name
 
 
 def validate_dates(start: datetime, end: datetime, deadline: datetime) -> None:
@@ -88,21 +163,31 @@ def assert_slug(connection: Connection, slug: str, event_id: str | None = None) 
 
 @admin.get("")
 def list_events(
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
     page: int = Query(1, ge=1),
     page_size: int = Query(25, alias="pageSize", ge=1, le=100),
     include_archived: bool = Query(False, alias="includeArchived"),
 ) -> dict[str, Any]:
-    archived_filter = "" if include_archived else "WHERE status<>'ARCHIVED'"
+    archived_filter = "" if include_archived else "AND e.status<>'ARCHIVED'"
     with db.connect() as connection:
         items = rows(
             connection,
-            f"SELECT * FROM events {archived_filter} ORDER BY start_at DESC LIMIT :limit OFFSET :offset",
-            {"limit": page_size, "offset": (page - 1) * page_size},
+            f"""SELECT e.* FROM events e JOIN organizations o ON o.id=e.organization_id
+            WHERE o.tenant_id=:tenant {archived_filter}
+            ORDER BY e.start_at DESC LIMIT :limit OFFSET :offset""",
+            {
+                "tenant": staff.tenant_id,
+                "limit": page_size,
+                "offset": (page - 1) * page_size,
+            },
         )
         count = row(
-            connection, f"SELECT count(*) AS count FROM events {archived_filter}"
+            connection,
+            f"""SELECT count(*) AS count FROM events e
+            JOIN organizations o ON o.id=e.organization_id
+            WHERE o.tenant_id=:tenant {archived_filter}""",
+            {"tenant": staff.tenant_id},
         )
     return {
         "items": [event_response(item) for item in items],
@@ -128,6 +213,13 @@ def create_event(
     event_id = str(uuid4())
     with db.transaction() as connection:
         assert_slug(connection, values.slug)
+        direction_id, direction_name = resolve_direction(
+            connection,
+            staff.tenant_id,
+            staff.organization_id,
+            str(values.direction_id) if values.direction_id else None,
+            values.direction,
+        )
         if values.season_id:
             reference(connection, "seasons", str(values.season_id), active=False)
         if values.category_id:
@@ -138,10 +230,10 @@ def create_event(
         execute(
             connection,
             """INSERT INTO events
-               (id,title,slug,description,direction,form_config,allowed_person_types,is_listed,season_id,category_id,level_id,cover_object_key,start_at,end_at,timezone,
+               (id,organization_id,title,slug,description,direction,direction_id,form_config,allowed_person_types,is_listed,season_id,category_id,level_id,cover_object_key,start_at,end_at,timezone,
                 location,registration_deadline,capacity,status,created_by,
                 offline_data_version,created_at,updated_at)
-               VALUES (:id,:title,:slug,:description,:direction,:form_config,:allowed_person_types,:is_listed,:season_id,:category_id,:level_id,NULL,:start_at,:end_at,
+               VALUES (:id,:organization,:title,:slug,:description,:direction,:direction_id,:form_config,:allowed_person_types,:is_listed,:season_id,:category_id,:level_id,NULL,:start_at,:end_at,
                        :timezone,:location,:registration_deadline,:capacity,:status,:actor,
                        1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
             {
@@ -149,13 +241,16 @@ def create_event(
                 "form_config": db_json(values.form_config.model_dump(by_alias=True)),
                 "allowed_person_types": db_json(values.allowed_person_types),
                 "id": event_id,
+                "organization": staff.organization_id,
+                "direction": direction_name,
+                "direction_id": direction_id,
                 "actor": staff.id,
                 "start_at": naive_utc(values.start_at),
                 "end_at": naive_utc(values.end_at),
                 "registration_deadline": naive_utc(values.registration_deadline),
             },
         )
-        created = event_row(connection, event_id)
+        created = event_row(connection, event_id, tenant_id=staff.tenant_id)
         audit(
             connection,
             staff.id,
@@ -170,11 +265,13 @@ def create_event(
 @admin.get("/{event_id}")
 def get_event(
     event_id: UUID,
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        return event_response(event_row(connection, str(event_id)))
+        return event_response(
+            event_row(connection, str(event_id), tenant_id=staff.tenant_id)
+        )
 
 
 @admin.patch("/{event_id}")
@@ -186,10 +283,22 @@ def update_event(
 ) -> dict[str, Any]:
     event_id_s = str(event_id)
     with db.transaction() as connection:
-        existing = event_row(connection, event_id_s, True)
+        existing = event_row(connection, event_id_s, True, staff.tenant_id)
         if existing["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
         changes = values.model_dump(exclude_unset=True)
+        if "direction" in changes or "direction_id" in changes:
+            direction_id, direction_name = resolve_direction(
+                connection,
+                staff.tenant_id,
+                existing["organization_id"],
+                str(changes.get("direction_id"))
+                if changes.get("direction_id")
+                else None,
+                changes.get("direction"),
+            )
+            changes["direction_id"] = direction_id
+            changes["direction"] = direction_name
         if "form_config" in changes and changes["form_config"] is None:
             raise ApiError(400, "VALIDATION_ERROR", "Form configuration cannot be null")
         next_status = str(changes.get("status", existing["status"]))
@@ -258,12 +367,13 @@ def update_event(
         execute(
             connection,
             """UPDATE events SET title=:title,slug=:slug,description=:description,form_config=:form_config,
-                    direction=:direction,allowed_person_types=:allowed_person_types,is_listed=:is_listed,
+                    direction=:direction,direction_id=:direction_id,allowed_person_types=:allowed_person_types,is_listed=:is_listed,
                     season_id=:season_id,category_id=:category_id,level_id=:level_id,start_at=:start,end_at=:end,timezone=:timezone,
                     location=:location,registration_deadline=:deadline,capacity=:capacity,status=:status,
                     offline_data_version=offline_data_version+1,updated_at=UTC_TIMESTAMP(3) WHERE id=:id""",
             {
                 **merged,
+                "direction_id": changes.get("direction_id", existing["direction_id"]),
                 "form_config": db_json(changes["form_config"])
                 if "form_config" in changes
                 else existing["form_config"],
@@ -288,7 +398,7 @@ def update_event(
                 "id": event_id_s,
             },
         )
-        updated = event_row(connection, event_id_s)
+        updated = event_row(connection, event_id_s, tenant_id=staff.tenant_id)
         audit(
             connection,
             staff.id,
@@ -313,7 +423,7 @@ async def upload_event_cover(
     previous_key: str | None = None
     try:
         with db.transaction() as connection:
-            existing = event_row(connection, event_id_s, True)
+            existing = event_row(connection, event_id_s, True, staff.tenant_id)
             if existing["status"] == "ARCHIVED":
                 raise ApiError(
                     409, "INVALID_EVENT_STATE", "Archived Event is immutable"
@@ -325,7 +435,7 @@ async def upload_event_cover(
                 {"key": new_key, "id": event_id_s},
             )
             audit(connection, staff.id, "EVENT_COVER_UPDATED", "Event", event_id_s)
-            updated = event_row(connection, event_id_s)
+            updated = event_row(connection, event_id_s, tenant_id=staff.tenant_id)
     except Exception:
         remove_cover(config.media_root, new_key)
         raise
@@ -343,7 +453,7 @@ def delete_event_cover(
     event_id_s = str(event_id)
     previous_key: str | None = None
     with db.transaction() as connection:
-        existing = event_row(connection, event_id_s, True)
+        existing = event_row(connection, event_id_s, True, staff.tenant_id)
         if existing["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
         previous_key = existing["cover_object_key"]
@@ -353,7 +463,7 @@ def delete_event_cover(
             {"id": event_id_s},
         )
         audit(connection, staff.id, "EVENT_COVER_REMOVED", "Event", event_id_s)
-        updated = event_row(connection, event_id_s)
+        updated = event_row(connection, event_id_s, tenant_id=staff.tenant_id)
     remove_cover(config.media_root, previous_key)
     return event_response(updated)
 
@@ -384,7 +494,7 @@ def archive_event(
 ) -> dict[str, Any]:
     event_id_s = str(event_id)
     with db.transaction() as connection:
-        existing = event_row(connection, event_id_s, True)
+        existing = event_row(connection, event_id_s, True, staff.tenant_id)
         if existing["status"] != "ARCHIVED":
             execute(
                 connection,
@@ -392,7 +502,7 @@ def archive_event(
                 {"id": event_id_s},
             )
             audit(connection, staff.id, "EVENT_ARCHIVED", "Event", event_id_s)
-        archived = event_row(connection, event_id_s)
+        archived = event_row(connection, event_id_s, tenant_id=staff.tenant_id)
     return event_response(archived)
 
 
@@ -406,7 +516,7 @@ def purge_event(
     """Permanently remove one archived Event while preserving global Person rows."""
     event_id_s = str(event_id)
     with db.transaction() as connection:
-        existing = event_row(connection, event_id_s, True)
+        existing = event_row(connection, event_id_s, True, staff.tenant_id)
         if existing["status"] != "ARCHIVED":
             raise ApiError(
                 409,
@@ -538,11 +648,11 @@ def validate_options(field_type: str, options: Any) -> None:
 @admin.get("/{event_id}/form-fields")
 def list_fields(
     event_id: UUID,
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        event_row(connection, str(event_id))
+        event_row(connection, str(event_id), tenant_id=staff.tenant_id)
         items = rows(
             connection,
             "SELECT * FROM event_form_fields WHERE event_id=:id ORDER BY sort_order,created_at",
@@ -561,7 +671,7 @@ def create_field(
     validate_options(str(values.type), values.options)
     field_id = str(uuid4())
     with db.transaction() as connection:
-        event = event_row(connection, str(event_id), True)
+        event = event_row(connection, str(event_id), True, staff.tenant_id)
         if event["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
         execute(
@@ -609,7 +719,7 @@ def update_field(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
-        event = event_row(connection, str(event_id), True)
+        event = event_row(connection, str(event_id), True, staff.tenant_id)
         if event["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
         existing = row(
@@ -674,7 +784,7 @@ def deactivate_field(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
-        event = event_row(connection, str(event_id), True)
+        event = event_row(connection, str(event_id), True, staff.tenant_id)
         if event["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
         if not execute(
@@ -713,14 +823,19 @@ def scanner_events(
         if staff.role != "SCANNER":
             items = rows(
                 connection,
-                "SELECT * FROM events WHERE status<>'ARCHIVED' ORDER BY start_at LIMIT 100",
+                """SELECT e.* FROM events e JOIN organizations o ON o.id=e.organization_id
+                WHERE o.tenant_id=:tenant AND e.status<>'ARCHIVED'
+                ORDER BY e.start_at LIMIT 100""",
+                {"tenant": staff.tenant_id},
             )
         else:
             items = rows(
                 connection,
                 """SELECT e.* FROM events e JOIN event_access a ON a.event_id=e.id
-                WHERE a.user_id=:user AND a.role='SCANNER' AND e.status<>'ARCHIVED' ORDER BY e.start_at""",
-                {"user": staff.id},
+                JOIN organizations o ON o.id=e.organization_id
+                WHERE a.user_id=:user AND o.tenant_id=:tenant AND a.role='SCANNER'
+                  AND e.status<>'ARCHIVED' ORDER BY e.start_at""",
+                {"user": staff.id, "tenant": staff.tenant_id},
             )
     return {
         "items": [
@@ -750,7 +865,7 @@ def scanner_fields(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        event = event_row(connection, str(event_id))
+        event = event_row(connection, str(event_id), tenant_id=staff.tenant_id)
         if staff.role == "SCANNER" and not row(
             connection,
             "SELECT 1 FROM event_access WHERE event_id=:event AND user_id=:user",

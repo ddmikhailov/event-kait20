@@ -35,11 +35,13 @@ def serial(value: Any) -> Any:
 def event_response(item: RowMapping) -> dict[str, Any]:
     return {
         "id": item["id"],
+        "organizationId": item["organization_id"],
         "formConfig": event_form_config(item),
         "title": item["title"],
         "slug": item["slug"],
         "description": item["description"],
         "direction": item["direction"],
+        "directionId": item["direction_id"],
         "isListed": bool(item["is_listed"]),
         "streamsEnabled": bool(item["streams_enabled"]),
         "allowedPersonTypes": json_value(item["allowed_person_types"]),

@@ -71,8 +71,10 @@ def login(
     with db.connect() as connection:
         user = row(
             connection,
-            """SELECT id, email, password_hash, system_role, active
-               FROM staff_users WHERE email_normalized = :email""",
+            """SELECT u.id,u.email,u.password_hash,u.system_role,u.active
+               FROM staff_users u JOIN tenants t ON t.id=u.tenant_id
+               JOIN organizations o ON o.id=u.organization_id AND o.tenant_id=t.id
+               WHERE u.email_normalized=:email AND t.active=true AND o.active=true""",
             {"email": str(values.email).lower()},
         )
     if not user:
@@ -162,7 +164,11 @@ def forgot_password(
     with db.connect() as connection:
         user = row(
             connection,
-            "SELECT id,email FROM staff_users WHERE email_normalized=:email AND active=true",
+            """SELECT u.id,u.email FROM staff_users u
+            JOIN tenants t ON t.id=u.tenant_id
+            JOIN organizations o ON o.id=u.organization_id AND o.tenant_id=t.id
+            WHERE u.email_normalized=:email AND u.active=true
+              AND t.active=true AND o.active=true""",
             {"email": str(values.email).lower()},
         )
     if not user:
@@ -283,8 +289,8 @@ def accept_invitation(
     with db.transaction() as connection:
         invitation = row(
             connection,
-            """SELECT id,email_normalized,event_id,role,token_hash,expires_at,
-                      accepted_at,invited_by
+            """SELECT id,tenant_id,organization_id,email_normalized,event_id,role,
+                      token_hash,expires_at,accepted_at,invited_by
                FROM staff_invitations WHERE id=:id FOR UPDATE""",
             {"id": record_id},
         )
@@ -321,8 +327,9 @@ def accept_invitation(
         if not is_first_admin:
             inviter = row(
                 connection,
-                "SELECT system_role,active FROM staff_users WHERE id=:id",
-                {"id": invitation["invited_by"]},
+                """SELECT system_role,active FROM staff_users
+                WHERE id=:id AND tenant_id=:tenant""",
+                {"id": invitation["invited_by"], "tenant": invitation["tenant_id"]},
             )
             if not inviter or not inviter["active"]:
                 raise invalid_link()
@@ -333,8 +340,9 @@ def accept_invitation(
         if is_scanner and invitation["event_id"]:
             event = row(
                 connection,
-                "SELECT status FROM events WHERE id=:id",
-                {"id": invitation["event_id"]},
+                """SELECT e.status FROM events e JOIN organizations o ON o.id=e.organization_id
+                WHERE e.id=:id AND o.tenant_id=:tenant""",
+                {"id": invitation["event_id"], "tenant": invitation["tenant_id"]},
             )
             if not event or event["status"] == "ARCHIVED":
                 raise invalid_link()
@@ -353,12 +361,14 @@ def accept_invitation(
         execute(
             connection,
             """INSERT INTO staff_users
-               (id,email,email_normalized,password_hash,system_role,active,
+               (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,active,
                 password_changed_at,created_at,updated_at)
-               VALUES (:id,:email,:email,:hash,:role,true,
+               VALUES (:id,:tenant,:organization,:email,:email,:hash,:role,true,
                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
             {
                 "id": user_id,
+                "tenant": invitation["tenant_id"],
+                "organization": invitation["organization_id"],
                 "email": invitation["email_normalized"],
                 "hash": password,
                 "role": invitation["role"],

@@ -9,6 +9,7 @@ from sqlalchemy import text
 from .config import get_settings
 from .database import Database
 from .security import hash_password
+from .tenant_scope import default_tenant_scope
 
 
 def stable_id(name: str) -> str:
@@ -42,21 +43,26 @@ def main() -> None:
     removed_field_id = stable_id("field")
     database = Database(get_settings())
     with database.transaction() as connection:
+        scope = default_tenant_scope(connection)
         connection.execute(
             text("""INSERT INTO staff_users
-            (id,email,email_normalized,password_hash,system_role,active,
+            (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,active,
              password_changed_at,created_at,updated_at)
-            VALUES (:id,:email,:email,:password,:role,TRUE,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
+            VALUES (:id,:tenant,:organization,:email,:email,:password,:role,TRUE,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
             ON DUPLICATE KEY UPDATE password_hash=VALUES(password_hash),active=TRUE,updated_at=UTC_TIMESTAMP(3)"""),
             [
                 {
                     "id": admin_id,
+                    "tenant": scope.tenant_id,
+                    "organization": scope.organization_id,
                     "email": admin_email,
                     "password": hash_password(admin_password),
                     "role": "SUPER_ADMIN",
                 },
                 {
                     "id": scanner_id,
+                    "tenant": scope.tenant_id,
+                    "organization": scope.organization_id,
                     "email": scanner_email,
                     "password": hash_password(scanner_password),
                     "role": "SCANNER",
@@ -84,9 +90,9 @@ def main() -> None:
         )
         connection.execute(
             text("""INSERT INTO events
-            (id,title,slug,description,direction,start_at,end_at,timezone,location,
+            (id,organization_id,title,slug,description,direction,start_at,end_at,timezone,location,
              registration_deadline,capacity,status,created_by,offline_data_version,created_at,updated_at)
-            VALUES (:id,:title,:slug,:description,:direction,:start,:end,
+            VALUES (:id,:organization,:title,:slug,:description,:direction,:start,:end,
                     'Europe/Moscow',:location,:deadline,:capacity,'REGISTRATION_OPEN',
                     :admin,1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
             ON DUPLICATE KEY UPDATE title=VALUES(title),description=VALUES(description),
@@ -97,6 +103,7 @@ def main() -> None:
             [
                 {
                     "id": event_id,
+                    "organization": scope.organization_id,
                     "title": "Демонстрационное мероприятие",
                     "slug": "demo-event",
                     "description": "Локальный контур со всеми возможностями MVP",

@@ -178,11 +178,13 @@ def membership_for_activity(
     matches = rows(
         connection,
         """SELECT id FROM student_memberships
-        WHERE person_id=:person AND valid_from<=:activity_date
+        WHERE person_id=:person AND organization_id=:organization
+          AND valid_from<=:activity_date
           AND (valid_to IS NULL OR valid_to>=:activity_date)
         ORDER BY valid_from DESC,id FOR UPDATE""",
         {
             "person": participation["person_id"],
+            "organization": participation["organization_id"],
             "activity_date": activity_local_date,
         },
     )
@@ -208,7 +210,8 @@ def award_score(
 ) -> str | None:
     participation = row(
         connection,
-        """SELECT p.*,e.season_id,e.category_id,e.level_id,e.start_at AS event_start_at
+        """SELECT p.*,e.organization_id,e.season_id,e.category_id,e.level_id,
+        e.start_at AS event_start_at
         FROM participations p JOIN events e ON e.id=p.event_id
         WHERE p.id=:id FOR UPDATE""",
         {"id": participation_id},

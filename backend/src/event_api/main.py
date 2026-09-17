@@ -26,6 +26,7 @@ from .routers import (
     reporting,
     staff,
     streams,
+    structure,
 )
 from .security import RateLimiter, verify_csrf
 
@@ -151,6 +152,7 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
     for router in (
         auth.router,
         staff.router,
+        structure.router,
         events.admin,
         events.scanner,
         events.media,

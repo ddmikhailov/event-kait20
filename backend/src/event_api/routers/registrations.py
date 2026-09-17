@@ -174,7 +174,16 @@ def public_register(
                 "registration_deadline"
             ] <= datetime.now(UTC).replace(tzinfo=None):
                 raise ApiError(409, "REGISTRATION_CLOSED", "Registration is closed")
-            locks = acquire_person_locks(connection, participant(values))
+            scope = row(
+                connection,
+                "SELECT tenant_id FROM organizations WHERE id=:id",
+                {"id": event["organization_id"]},
+            )
+            if not scope:
+                raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
+            locks = acquire_person_locks(
+                connection, participant(values), scope["tenant_id"]
+            )
             result = register(
                 connection, event, values, config, "PUBLIC_FORM", True, None, False
             )
@@ -201,8 +210,9 @@ def onsite(
         try:
             event = row(
                 connection,
-                "SELECT * FROM events WHERE id=:id FOR UPDATE",
-                {"id": event_id},
+                """SELECT e.* FROM events e JOIN organizations o ON o.id=e.organization_id
+                WHERE e.id=:id AND o.tenant_id=:tenant FOR UPDATE""",
+                {"id": event_id, "tenant": staff.tenant_id},
             )
             if not event:
                 raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
@@ -222,7 +232,9 @@ def onsite(
                 {"event": event_id, "user": staff.id},
             ):
                 raise ApiError(403, "FORBIDDEN", "Event access is required")
-            locks = acquire_person_locks(connection, participant(values))
+            locks = acquire_person_locks(
+                connection, participant(values), staff.tenant_id
+            )
             result = register(
                 connection,
                 event,

@@ -44,6 +44,7 @@ from ..dependencies import (
 )
 from ..errors import ApiError
 from ..service_utils import audit, db_json, json_value, naive_utc, serial
+from ..tenant_scope import require_event_in_tenant, require_person_in_tenant
 
 admin = APIRouter(prefix="/admin/activity", tags=["activity"])
 event_admin = APIRouter(prefix="/admin/events", tags=["participations"])
@@ -731,7 +732,7 @@ def deactivate_scoring_rule(
 @event_admin.get("/{event_id}/participations")
 def list_event_participations(
     event_id: UUID,
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
     page: int = Query(1, ge=1),
     page_size: int = Query(50, alias="pageSize", ge=1, le=200),
@@ -742,10 +743,7 @@ def list_event_participations(
         "offset": (page - 1) * page_size,
     }
     with db.connect() as connection:
-        if not row(
-            connection, "SELECT 1 FROM events WHERE id=:id", {"id": str(event_id)}
-        ):
-            raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
+        require_event_in_tenant(connection, str(event_id), staff.tenant_id)
         items = rows(
             connection,
             PARTICIPATION_SELECT
@@ -774,6 +772,7 @@ def assign_participations(
 ) -> dict[str, Any]:
     assigned: list[str] = []
     with db.transaction() as connection:
+        require_event_in_tenant(connection, str(event_id), staff.tenant_id, lock=True)
         role = reference(connection, "participation_roles", str(values.role_id))
         if values.result_id:
             reference(connection, "participation_results", str(values.result_id))
@@ -843,6 +842,7 @@ def confirm_participations(
 ) -> dict[str, Any]:
     confirmed: list[str] = []
     with db.transaction() as connection:
+        require_event_in_tenant(connection, str(event_id), staff.tenant_id, lock=True)
         for registration_id in values.registration_ids:
             confirmed.append(
                 confirm_registration(
@@ -869,6 +869,7 @@ def patch_participation(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
+        require_event_in_tenant(connection, str(event_id), staff.tenant_id, lock=True)
         target = row(
             connection,
             "SELECT event_id FROM participations WHERE id=:id",
@@ -896,6 +897,7 @@ def cancel_participations(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, bool]:
     with db.transaction() as connection:
+        require_event_in_tenant(connection, str(event_id), staff.tenant_id, lock=True)
         for participation_id in values.participation_ids:
             target = row(
                 connection,
@@ -927,12 +929,9 @@ def manual_adjustment(
         "reason": values.reason,
     }
     with db.transaction() as connection:
-        if not row(
-            connection,
-            "SELECT 1 FROM persons WHERE id=:id",
-            {"id": str(values.person_id)},
-        ):
-            raise ApiError(404, "PERSON_NOT_FOUND", "Person not found")
+        require_person_in_tenant(
+            connection, str(values.person_id), staff.tenant_id, lock=True
+        )
         reference(connection, "seasons", str(values.season_id), active=False)
         existing = row(
             connection,
@@ -1015,14 +1014,9 @@ def profile_response(item: RowMapping, consent: RowMapping | None) -> dict[str, 
 
 
 def load_profile(
-    connection: Connection, person_id: str
+    connection: Connection, person_id: str, tenant_id: str
 ) -> tuple[RowMapping, RowMapping | None]:
-    if not row(
-        connection,
-        "SELECT id FROM persons WHERE id=:id FOR UPDATE",
-        {"id": person_id},
-    ):
-        raise ApiError(404, "PERSON_NOT_FOUND", "Person not found")
+    require_person_in_tenant(connection, person_id, tenant_id, lock=True)
     identity = str(uuid4())
     execute(
         connection,
@@ -1049,15 +1043,11 @@ def load_profile(
 @person_admin.get("/{person_id}/profile")
 def get_profile_admin(
     person_id: UUID,
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
-        if not row(
-            connection, "SELECT 1 FROM persons WHERE id=:id", {"id": str(person_id)}
-        ):
-            raise ApiError(404, "PERSON_NOT_FOUND", "Person not found")
-        profile, consent = load_profile(connection, str(person_id))
+        profile, consent = load_profile(connection, str(person_id), staff.tenant_id)
         return profile_response(profile, consent)
 
 
@@ -1069,7 +1059,7 @@ def update_profile_admin(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
-        profile, consent = load_profile(connection, str(person_id))
+        profile, consent = load_profile(connection, str(person_id), staff.tenant_id)
         if values.visibility != "PRIVATE" and not consent:
             raise ApiError(
                 409, "PUBLICATION_CONSENT_REQUIRED", "Publication consent is required"
@@ -1097,7 +1087,7 @@ def update_profile_admin(
             profile["id"],
             {"profileId": profile["id"], "visibility": values.visibility},
         )
-        updated, consent = load_profile(connection, str(person_id))
+        updated, consent = load_profile(connection, str(person_id), staff.tenant_id)
         return profile_response(updated, consent)
 
 
@@ -1109,7 +1099,7 @@ def grant_profile_consent(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
-        _profile, _ = load_profile(connection, str(person_id))
+        _profile, _ = load_profile(connection, str(person_id), staff.tenant_id)
         execute(
             connection,
             "UPDATE profile_publication_consents SET withdrawn_at=UTC_TIMESTAMP(3) WHERE person_id=:person AND withdrawn_at IS NULL",
@@ -1137,7 +1127,7 @@ def grant_profile_consent(
             consent_id,
             {"allowedFields": values.allowed_fields},
         )
-        updated, consent = load_profile(connection, str(person_id))
+        updated, consent = load_profile(connection, str(person_id), staff.tenant_id)
         return profile_response(updated, consent)
 
 
@@ -1148,7 +1138,7 @@ def withdraw_profile_consent(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, bool]:
     with db.transaction() as connection:
-        profile, consent = load_profile(connection, str(person_id))
+        profile, consent = load_profile(connection, str(person_id), staff.tenant_id)
         if consent:
             execute(
                 connection,
@@ -1181,8 +1171,13 @@ def membership_response(item: RowMapping) -> dict[str, Any]:
     return {
         "id": item["id"],
         "personId": item["person_id"],
+        "organizationId": item["organization_id"],
+        "organization": item["organization"],
+        "departmentId": item["department_id"],
+        "studyGroupId": item["study_group_id"],
         "studyGroup": item["study_group"],
         "department": item["department"],
+        "course": item["course"],
         "validFrom": item["valid_from"].isoformat(),
         "validTo": item["valid_to"].isoformat() if item["valid_to"] else None,
     }
@@ -1191,17 +1186,24 @@ def membership_response(item: RowMapping) -> dict[str, Any]:
 @person_admin.get("/{person_id}/memberships")
 def list_memberships(
     person_id: UUID,
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
         if not row(
-            connection, "SELECT 1 FROM persons WHERE id=:id", {"id": str(person_id)}
+            connection,
+            "SELECT 1 FROM persons WHERE id=:id AND tenant_id=:tenant",
+            {"id": str(person_id), "tenant": staff.tenant_id},
         ):
             raise ApiError(404, "PERSON_NOT_FOUND", "Person not found")
         items = rows(
             connection,
-            """SELECT * FROM student_memberships WHERE person_id=:person
+            """SELECT sm.*,o.name AS organization
+            FROM student_memberships sm
+            JOIN organizations o ON o.id=sm.organization_id
+            LEFT JOIN study_groups sg ON sg.id=sm.study_group_id
+            LEFT JOIN departments d ON d.id=sm.department_id
+            WHERE sm.person_id=:person
             ORDER BY valid_from DESC,id""",
             {"person": str(person_id)},
         )
@@ -1219,10 +1221,23 @@ def create_membership(
     with db.transaction() as connection:
         if not row(
             connection,
-            "SELECT id FROM persons WHERE id=:id FOR UPDATE",
-            {"id": str(person_id)},
+            """SELECT id FROM persons
+            WHERE id=:id AND tenant_id=:tenant FOR UPDATE""",
+            {"id": str(person_id), "tenant": staff.tenant_id},
         ):
             raise ApiError(404, "PERSON_NOT_FOUND", "Person not found")
+        group = row(
+            connection,
+            """SELECT sg.id,sg.organization_id,sg.department_id,sg.name,sg.course,
+            d.name AS department FROM study_groups sg
+            JOIN organizations o ON o.id=sg.organization_id
+            JOIN departments d ON d.id=sg.department_id
+            WHERE sg.id=:id AND sg.organization_id=:organization AND sg.active=true
+              AND d.active=true FOR UPDATE""",
+            {"id": str(values.study_group_id), "organization": staff.organization_id},
+        )
+        if not group or group["course"] is None:
+            raise ApiError(404, "STUDY_GROUP_NOT_FOUND", "Study group not found")
         overlap = row(
             connection,
             """SELECT id FROM student_memberships
@@ -1245,13 +1260,22 @@ def create_membership(
         execute(
             connection,
             """INSERT INTO student_memberships
-            (id,person_id,study_group,department,valid_from,valid_to,created_at,updated_at)
-            VALUES (:id,:person,:study_group,:department,:valid_from,:valid_to,
+            (id,person_id,organization_id,department_id,study_group_id,course,
+             study_group,department,valid_from,valid_to,created_at,updated_at)
+            VALUES (:id,:person,:organization,:department_id,:study_group_id,:course,
+                    :study_group,:department,:valid_from,:valid_to,
                     UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
             {
                 "id": identity,
                 "person": str(person_id),
-                **values.model_dump(),
+                "organization": group["organization_id"],
+                "department_id": group["department_id"],
+                "study_group_id": group["id"],
+                "course": group["course"],
+                "study_group": group["name"],
+                "department": group["department"],
+                "valid_from": values.valid_from,
+                "valid_to": values.valid_to,
             },
         )
         audit(
@@ -1264,7 +1288,10 @@ def create_membership(
         )
         item = row(
             connection,
-            "SELECT * FROM student_memberships WHERE id=:id",
+            """SELECT sm.*,o.name AS organization
+            FROM student_memberships sm JOIN organizations o ON o.id=sm.organization_id
+            LEFT JOIN study_groups sg ON sg.id=sm.study_group_id
+            LEFT JOIN departments d ON d.id=sm.department_id WHERE sm.id=:id""",
             {"id": identity},
         )
     assert item is not None
@@ -1274,16 +1301,13 @@ def create_membership(
 @person_admin.get("/{person_id}/activity")
 def person_activity(
     person_id: UUID,
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
     page: int = Query(1, ge=1),
     page_size: int = Query(50, alias="pageSize", ge=1, le=200),
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        if not row(
-            connection, "SELECT 1 FROM persons WHERE id=:id", {"id": str(person_id)}
-        ):
-            raise ApiError(404, "PERSON_NOT_FOUND", "Person not found")
+        require_person_in_tenant(connection, str(person_id), staff.tenant_id)
         participations = rows(
             connection,
             """SELECT p.id,p.status,p.scoring_state,p.confirmed_at,e.id AS event_id,e.title,
@@ -1399,12 +1423,7 @@ def create_achievement(
     identity = str(uuid4())
     data = values.model_dump()
     with db.transaction() as connection:
-        if not row(
-            connection,
-            "SELECT 1 FROM persons WHERE id=:id",
-            {"id": str(person_id)},
-        ):
-            raise ApiError(404, "PERSON_NOT_FOUND", "Person not found")
+        require_person_in_tenant(connection, str(person_id), staff.tenant_id, lock=True)
         if values.participation_id:
             participation = row(
                 connection,
@@ -1425,16 +1444,8 @@ def create_achievement(
                     "ACHIEVEMENT_REFERENCE_MISMATCH",
                     "Achievement references do not describe the same activity",
                 )
-        elif values.event_id and not row(
-            connection,
-            "SELECT 1 FROM events WHERE id=:id",
-            {"id": str(values.event_id)},
-        ):
-            raise ApiError(
-                400,
-                "ACHIEVEMENT_REFERENCE_MISMATCH",
-                "The referenced event is unavailable",
-            )
+        elif values.event_id:
+            require_event_in_tenant(connection, str(values.event_id), staff.tenant_id)
         if values.level_id:
             reference(connection, "event_levels", str(values.level_id))
         if values.result_id:
@@ -1786,19 +1797,28 @@ def membership_leaderboard(
 ) -> dict[str, Any]:
     if dimension not in {"study_group", "department"}:
         raise RuntimeError("Unsupported membership dimension")
+    identity = "sm.study_group_id" if dimension == "study_group" else "sm.department_id"
+    join = (
+        "JOIN study_groups structure ON structure.id=sm.study_group_id"
+        if dimension == "study_group"
+        else "JOIN departments structure ON structure.id=sm.department_id"
+    )
     with db.connect() as connection:
         reference(connection, "seasons", season_id, active=False)
         items = rows(
             connection,
-            f"""SELECT sm.{dimension} AS label,SUM(st.points) AS points,COUNT(DISTINCT st.person_id) AS people
+            f"""SELECT {identity} AS structure_id,structure.name AS label,
+            SUM(st.points) AS points,COUNT(DISTINCT st.person_id) AS people
             FROM score_transactions st
             JOIN student_memberships sm ON sm.id=st.membership_id
+            {join}
             JOIN student_profiles sp ON sp.person_id=st.person_id AND sp.visibility='PUBLIC'
             JOIN profile_publication_consents pc
               ON pc.person_id=st.person_id AND pc.withdrawn_at IS NULL
-            WHERE st.season_id=:season AND sm.{dimension} IS NOT NULL
+            WHERE st.season_id=:season AND {identity} IS NOT NULL
               AND JSON_CONTAINS(pc.allowed_fields,JSON_QUOTE('SCORES'))
-            GROUP BY sm.{dimension} ORDER BY points DESC,label LIMIT :limit OFFSET :offset""",
+            GROUP BY {identity},structure.name
+            ORDER BY points DESC,label LIMIT :limit OFFSET :offset""",
             {
                 "season": season_id,
                 "limit": limit,

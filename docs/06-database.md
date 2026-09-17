@@ -363,3 +363,46 @@ date-range overlap. Manual/legacy transactions retain null membership unless exp
 attributed later.
 See [docs/ACTIVE-INTEGRATION.md](./ACTIVE-INTEGRATION.md) for the ER model
 and lifecycle.
+
+## 21. Platform structure foundation
+
+Migration `015_platform_structure.sql` adds Tenant, Organization, Department,
+StudyGroup and the shared ActivityDirection directory. Existing records are
+backfilled to the default KAIT20 Tenant and Organization without changing their
+IDs. Person identity matching is tenant-scoped; staff sessions carry trusted
+tenant and organization context. Event belongs to Organization and keeps the
+legacy direction text only as a synchronized compatibility field for the
+canonical nullable `direction_id` relation.
+
+The KAIT20 IDs are migration backfill values, not permanent column defaults.
+After backfill, mandatory scope columns are `NOT NULL` with no KAIT20 `DEFAULT`,
+so a future write that omits trusted scope fails instead of silently entering
+the wrong Organization. Staff access also requires active Staff, Tenant and
+Organization.
+
+StudentMembership keeps its original ID and inclusive validity period, and now
+stores normalized organization, department and study-group relations plus a
+historical course snapshot. New memberships derive all four values from an
+active StudyGroup. Legacy rows that cannot be mapped safely keep nullable course;
+group names are never parsed to infer it. ScoreTransaction retains its existing
+`membership_id`. Historical membership responses display their saved group,
+department and course snapshots; normalized IDs remain nullable for unresolved
+legacy rows and are used for current directory linkage and aggregation.
+
+ActivityDirection code uniqueness is per Tenant plus scope: the same code may
+exist once in each Organization, and once as a tenant-global direction. MySQL
+8.1 enforces code and name uniqueness with stored generated scope keys because
+ordinary composite uniqueness would allow repeated `NULL` organization values.
+Current structure API creates only KAIT20 organization-local directions.
+
+The six seeded KAIT20 Departments use canonical display names: Датахаб, Кибер,
+АртТех, МосСовет, Техно and Диджитал. A migration-local controlled alias table
+maps exact trimmed legacy names such as Data Hub, Артех, Моссовет and Digital to
+their canonical IDs under the case-insensitive database collation. It is dropped
+after migration. Unknown Department text still creates a `LEGACY_*` record, and
+the original StudentMembership snapshot text is never rewritten.
+
+Non-PII legacy coverage counts are implemented by
+`backend/src/event_api/structure_diagnostics.py`. It compares StudentMembership,
+Person and Registration legacy group snapshots with normalized StudyGroups;
+reconciliation remains controlled and never infers course from group text.

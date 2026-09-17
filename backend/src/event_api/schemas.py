@@ -132,6 +132,7 @@ class EventValues(Contract):
     season_id: UUID | None = None
     category_id: UUID | None = None
     level_id: UUID | None = None
+    direction_id: UUID | None = None
     form_config: RegistrationFormConfig = Field(default_factory=default_form_config)
     is_listed: bool = True
     allowed_person_types: list[PersonType] | None = Field(
@@ -176,6 +177,7 @@ class UpdateEventRequest(Contract):
     season_id: UUID | None = None
     category_id: UUID | None = None
     level_id: UUID | None = None
+    direction_id: UUID | None = None
     form_config: RegistrationFormConfig | None = None
     is_listed: bool | None = None
     allowed_person_types: list[PersonType] | None = Field(
@@ -235,6 +237,7 @@ class UpdateEventRequest(Contract):
             "season_id",
             "category_id",
             "level_id",
+            "direction_id",
         }
         invalid = sorted(
             field

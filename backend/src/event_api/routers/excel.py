@@ -268,11 +268,15 @@ def _event(
     lock: bool = False,
     *,
     allow_archived: bool = False,
+    tenant_id: str | None = None,
 ) -> Any:
+    tenant_join = " JOIN organizations o ON o.id=e.organization_id" if tenant_id else ""
+    tenant_filter = " AND o.tenant_id=:tenant" if tenant_id else ""
     item = row(
         connection,
-        f"SELECT * FROM events WHERE id=:id{' FOR UPDATE' if lock else ''}",
-        {"id": event_id},
+        f"SELECT e.* FROM events e{tenant_join} WHERE e.id=:id{tenant_filter}"
+        f"{' FOR UPDATE' if lock else ''}",
+        {"id": event_id, "tenant": tenant_id},
     )
     if not item:
         raise ApiError(404, "NOT_FOUND", "Event not found")
@@ -289,6 +293,13 @@ def _classify(
 ) -> list[dict[str, Any]]:
     result = []
     event = _event(connection, event_id)
+    scope = row(
+        connection,
+        "SELECT tenant_id FROM organizations WHERE id=:id",
+        {"id": event["organization_id"]},
+    )
+    if not scope:
+        raise ApiError(404, "NOT_FOUND", "Event not found")
     streams = rows(
         connection,
         "SELECT id,title FROM event_streams WHERE event_id=:event",
@@ -333,9 +344,15 @@ def _classify(
                 connection,
                 """SELECT p.id,p.last_name,p.first_name,p.middle_name,p.email_normalized,p.phone_normalized,p.birth_date,
                 EXISTS(SELECT 1 FROM registrations r WHERE r.person_id=p.id AND r.event_id=:event AND r.status='ACTIVE') active
-                FROM persons p WHERE p.merged_into_id IS NULL AND lower(p.last_name)=lower(:last)
+                FROM persons p WHERE p.tenant_id=:tenant AND p.merged_into_id IS NULL
+                AND lower(p.last_name)=lower(:last)
                 AND lower(p.first_name)=lower(:first) LIMIT 10""",
-                {"event": event_id, "last": value.last_name, "first": value.first_name},
+                {
+                    "event": event_id,
+                    "tenant": scope["tenant_id"],
+                    "last": value.last_name,
+                    "first": value.first_name,
+                },
             )
             if any(
                 person["active"]
@@ -387,7 +404,7 @@ async def preview(
     source = await file.read(MAX_FILE + 1)
     expires = datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=24)
     with db.transaction() as connection:
-        event = _event(connection, str(event_id))
+        event = _event(connection, str(event_id), tenant_id=staff.tenant_id)
         fields = form_fields(connection, str(event_id))
         headers, resolved, parsed = _parse(source, mapping, fields)
         classified = _classify(connection, str(event_id), parsed, fields)
@@ -511,7 +528,7 @@ def commit(
         fields = form_fields(connection, str(event_id))
         _, _, parsed = _parse(bytes(job["file_data"]), mapping_json, fields)
         classified = _classify(connection, str(event_id), parsed, fields)
-        event = _event(connection, str(event_id), True)
+        event = _event(connection, str(event_id), True, tenant_id=staff.tenant_id)
         imported = skipped = duplicates = errors = without_email = 0
         for item in classified:
             if item["category"] == "ERROR":
@@ -547,9 +564,14 @@ def commit(
                         "Selected Person is not a candidate for this import row",
                     )
             elif decision and decision.get("action") == "CREATE_NEW":
-                person_id = create_person(connection, data, dedup_review_required=True)
+                person_id = create_person(
+                    connection,
+                    data,
+                    staff.tenant_id,
+                    dedup_review_required=True,
+                )
             else:
-                person_id = find_or_create_person(connection, data)
+                person_id = find_or_create_person(connection, data, staff.tenant_id)
             existing = row(
                 connection,
                 "SELECT id FROM registrations WHERE event_id=:event AND person_id=:person AND status='ACTIVE'",
@@ -629,11 +651,16 @@ def commit(
 @router.get("/{event_id}/export.xlsx")
 def export(
     event_id: UUID,
-    _: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> StreamingResponse:
     with db.connect() as connection:
-        event = _event(connection, str(event_id), allow_archived=True)
+        event = _event(
+            connection,
+            str(event_id),
+            allow_archived=True,
+            tenant_id=staff.tenant_id,
+        )
         registrations = rows(
             connection,
             """SELECT r.*,s.title AS stream_title,s.start_at AS stream_start,

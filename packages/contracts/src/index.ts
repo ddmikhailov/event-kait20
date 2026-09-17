@@ -11,6 +11,7 @@ export * from './participants.js';
 export * from './registrations.js';
 export * from './reporting.js';
 export * from './staff.js';
+export * from './structure.js';
 
 export const healthResponseSchema = z.object({
   service: z.string().min(1),

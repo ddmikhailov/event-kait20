@@ -473,3 +473,29 @@ leaderboards require PUBLIC + SCORES but not NAME and aggregate only transaction
 with saved historical membership attribution. Manual-adjustment requestId retries
 must match personId, seasonId, points and reason; otherwise the API returns
 `409 IDEMPOTENCY_KEY_REUSED` and creates neither a transaction nor audit record.
+
+## Platform structure API
+
+- `GET /admin/structure/organization`
+- `GET/POST/PATCH/DELETE /admin/structure/departments`
+- `GET/POST/PATCH/DELETE /admin/structure/groups`
+- `GET/POST/PATCH/DELETE /admin/structure/directions`
+
+DELETE on these directories means `active=false`; it never physically removes
+historical references. Group list filters are `departmentId`, `course` and
+`active`. Tenant and current Organization come only from the authenticated staff
+session. Supplying a tenant ID is not part of these contracts. A compatibility
+`organizationId` must equal the current Organization or returns
+`ORGANIZATION_SCOPE_MISMATCH`; inaccessible directory IDs return a generic
+not-found response. No Organization selector is exposed.
+
+Membership creation accepts `{ studyGroupId, validFrom, validTo }`. The backend
+derives Organization, Department and course and returns normalized IDs/names
+with the historical group, department and course snapshots. Normalized
+`studyGroupId`/`departmentId` may be null for unresolved legacy history, but the
+membership remains in the response. Event create/update accepts canonical
+`directionId`; deprecated `direction` remains a temporary compatibility input
+and is synchronized with the selected directory row. An inactive Direction is
+rejected through either input with `DIRECTION_INACTIVE`. Direction names are
+unique per exact scope; if legacy text matches more than one effective row, the
+API returns `DIRECTION_AMBIGUOUS` and creates no Event.
