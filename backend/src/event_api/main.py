@@ -16,6 +16,7 @@ from .errors import (
     validation_error_handler,
 )
 from .routers import (
+    activity,
     attendance,
     auth,
     events,
@@ -24,6 +25,7 @@ from .routers import (
     registrations,
     reporting,
     staff,
+    streams,
 )
 from .security import RateLimiter, verify_csrf
 
@@ -73,7 +75,9 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=()"
         )
-        if request.url.path.startswith(("/auth", "/admin", "/scanner", "/tickets")):
+        if request.url.path.startswith(
+            ("/auth", "/admin", "/scanner", "/tickets", "/public/events")
+        ):
             response.headers["Cache-Control"] = "no-store"
         if production:
             response.headers["Strict-Transport-Security"] = (
@@ -149,6 +153,9 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
         staff.router,
         events.admin,
         events.scanner,
+        events.media,
+        streams.admin,
+        streams.scanner,
         registrations.public,
         registrations.tickets,
         registrations.scanner,
@@ -157,6 +164,10 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
         participants.registrations,
         participants.scanner,
         attendance.router,
+        activity.admin,
+        activity.event_admin,
+        activity.person_admin,
+        activity.public,
         reporting.router,
         excel.router,
     ):

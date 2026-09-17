@@ -108,6 +108,13 @@ EVENT_REGISTRATION_ENV_FILE=/etc/event-registration/backend.env
 локальный или отдельный MySQL host; MySQL grant должен соответствовать реальному
 source IP/hostname backend-сервера.
 
+Загруженные обложки хранятся отдельно от приложения в `MEDIA_ROOT` (production
+example: `/var/lib/event-registration/media`). Каталог должен принадлежать
+runtime identity backend, не находиться в Apache DocumentRoot и входить в backup
+вместе с MySQL. Backend отдаёт только файлы со сгенерированными ключами через
+`/api/media/event-covers/*`; прямой directory listing запрещён.
+`COVER_MAX_BYTES` задаёт server-side limit, по умолчанию 5 MiB.
+
 ## Health and operations
 
 - `/health/live` подтверждает работу процесса;

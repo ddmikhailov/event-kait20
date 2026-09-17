@@ -8,7 +8,8 @@ EVENT REGISTRATION 1.0 — COMPILED PACKAGE FOR THE ORGANISATION
 - config/backend.env.example: шаблон конфигурации приложения и MySQL;
 - apache/: внутренние Apache HTTP virtual hosts;
 - database/: SQL создания схемы MySQL 8.1.0 и отдельные migrations;
-- MANIFEST.json: Git revision и SHA-256 каждого файла.
+- UPDATE-INSTRUCTIONS-RU.txt: пошаговое обновление уже работающего сервера;
+- MANIFEST.json: базовая Git revision, признак локальных изменений и SHA-256 каждого файла.
 
 Сетевая схема:
 
@@ -43,6 +44,10 @@ Backend:
 всех placeholder и нельзя размещать в DocumentRoot/Git. Три cryptographic
 secrets должны быть разными. DATABASE_URL может указывать на отдельный сервер
 MySQL; его runtime user должен быть разрешён именно с адреса backend-сервера.
+
+Создать каталог из MEDIA_ROOT (рекомендуется
+`/var/lib/event-registration/media`) вне Apache DocumentRoot, выдать на него
+запись только runtime-пользователю backend и включить каталог в backup.
 
 Запуск API:
 
@@ -89,3 +94,8 @@ Frontend:
 
 После этого проверяются вход, Event, регистрация, email и Scanner на реальном
 HTTPS-устройстве. MANIFEST.json сохраняется как evidence поставки.
+
+Для обновления существующей установки обязательно сначала прочитать
+UPDATE-INSTRUCTIONS-RU.txt. Нельзя смешивать старые и новые frontend assets,
+заменять защищённый backend.env шаблоном или запускать 01_schema.sql повторно
+поверх действующей базы.

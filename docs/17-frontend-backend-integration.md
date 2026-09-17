@@ -81,7 +81,8 @@ session не даёт доступ.
 
 Все права проверяются FastAPI:
 
-- SUPER_ADMIN получает административный scope версии 1.0;
+- SUPER_ADMIN получает полный scope, управление ролями администраторов и purge;
+- ORGANIZER получает глобальный рабочий scope и управление только SCANNER;
 - SCANNER видит только Event с актуальным EventAccess;
 - публичные endpoints не возвращают staff/participant lists;
 - скрытие элемента интерфейса не является authorization control.
@@ -106,7 +107,8 @@ API_PORT=3000
 CORS_ORIGINS=https://events.example.org,https://scanner.example.org
 PUBLIC_WEB_BASE_URL=https://events.example.org
 AUTH_LINK_BASE_URL=https://events.example.org/auth
-CONSENT_URL=https://events.example.org/privacy
+CONSENT_URL=https://static.mskobr.ru/docs/soglasie_na_obrabotku_pnd.pdf
+PRIVACY_POLICY_URL=https://st.educom.ru/eduoffices/gateways/get_file.php?id={C6751185-7D3C-F320-3D87-C704B3683104}&name=politika_v_otnoshenii_pd_rkait20.pdf
 ```
 
 Публичные values всегда HTTPS, хотя внутренний Apache принимает HTTP. Backend

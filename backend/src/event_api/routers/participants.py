@@ -8,14 +8,14 @@ from ..config import Settings
 from ..database import Database, execute, row, rows
 from ..dependencies import (
     Staff,
-    csrf_super_admin,
+    administrator,
+    csrf_administrator,
     current_staff,
     database,
     settings,
-    super_admin,
 )
 from ..errors import ApiError
-from ..registration_service import ticket_url
+from ..registration_service import ticket_url, validate_participant_type
 from ..schemas import PersonUpdate
 from ..service_utils import audit, json_value, serial
 
@@ -71,17 +71,19 @@ def registration_response(item: RowMapping) -> dict[str, Any]:
 
 
 def assert_shape(data: dict[str, Any]) -> None:
-    if str(data["person_type"]).endswith("_STUDENT") and not data.get("study_group"):
-        raise ApiError(400, "VALIDATION_ERROR", "Study group is required")
-    if str(data["person_type"]).startswith("EXTERNAL_") and not data.get(
-        "organization"
-    ):
-        raise ApiError(400, "VALIDATION_ERROR", "Organization is required")
+    if any(not data.get(key) for key in ("first_name", "last_name", "person_type")):
+        raise ApiError(
+            400, "VALIDATION_ERROR", "Name and participant type cannot be empty"
+        )
+    if str(data["person_type"]) != "KAIT_STUDENT":
+        data["study_group"] = None
+    if not str(data["person_type"]).startswith(("KAIT_", "EXTERNAL_")):
+        data["organization"] = None
 
 
 @people.get("")
 def list_people(
-    _staff: Annotated[Staff, Depends(super_admin)],
+    _staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
     query: str = Query("", max_length=200),
     page: int = Query(1, ge=1),
@@ -115,7 +117,7 @@ def list_people(
 @people.get("/{person_id}")
 def get_person(
     person_id: UUID,
-    _staff: Annotated[Staff, Depends(super_admin)],
+    _staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
@@ -155,7 +157,7 @@ def get_person(
 def update_person(
     person_id: UUID,
     values: PersonUpdate,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     target = str(person_id)
@@ -211,7 +213,7 @@ def assert_event(connection: Any, event_id: str) -> None:
 @registrations.get("/{event_id}/registrations")
 def list_registrations(
     event_id: UUID,
-    _staff: Annotated[Staff, Depends(super_admin)],
+    _staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
     query: str = Query("", max_length=200),
     status: str | None = Query(None, pattern="^(ACTIVE|ANNULLED)$"),
@@ -253,7 +255,7 @@ def list_registrations(
 def get_registration(
     event_id: UUID,
     registration_id: UUID,
-    _staff: Annotated[Staff, Depends(super_admin)],
+    _staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, Any]:
@@ -290,12 +292,17 @@ def update_registration(
     event_id: UUID,
     registration_id: UUID,
     values: PersonUpdate,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, Any]:
     rid = str(registration_id)
     with db.transaction() as connection:
+        event = row(
+            connection,
+            "SELECT allowed_person_types FROM events WHERE id=:id FOR UPDATE",
+            {"id": str(event_id)},
+        )
         existing = row(
             connection,
             "SELECT * FROM registrations WHERE id=:id AND event_id=:event FOR UPDATE",
@@ -306,6 +313,12 @@ def update_registration(
         if existing["status"] == "ANNULLED":
             raise ApiError(409, "REGISTRATION_ANNULLED", "Registration is annulled")
         changes = values.model_dump(exclude_unset=True)
+        if (
+            "person_type" in changes
+            and changes["person_type"] != existing["person_type"]
+            and event
+        ):
+            validate_participant_type(event, str(changes["person_type"]))
         data = {
             key: changes.get(key, existing[key])
             for key in (
@@ -352,7 +365,7 @@ def update_registration(
 def annul(
     event_id: UUID,
     registration_id: UUID,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     with db.transaction() as connection:
@@ -391,7 +404,7 @@ def annul(
 def resend(
     event_id: UUID,
     registration_id: UUID,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     with db.transaction() as connection:

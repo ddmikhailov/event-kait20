@@ -9,7 +9,7 @@ EVENT REGISTRATION 1.0 — APACHE HTTP + PYTHON SOURCE BACKEND
 - config/backend.env.example: конфигурация приложения и подключения к БД;
 - apache/: Apache :80 virtual hosts для внутреннего reverse-proxy контура;
 - database/: SQL создания и полной схемы MySQL 8.1.0;
-- MANIFEST.json: SHA-256 и исходный Git commit.
+- MANIFEST.json: SHA-256, базовый Git commit и признак локальных изменений.
 
 Локальный demo seed, тесты и frontend sources в production archive не входят.
 
@@ -44,6 +44,10 @@ headers и устанавливает корректный client IP. Apache п�
 `/etc/event-registration/backend.env`, заполнить реальные значения и ограничить
 чтение пользователем backend. Файл нельзя размещать в DocumentRoot, Git или
 отправлять пользователям. Три secrets должны быть разными.
+
+Создать каталог из MEDIA_ROOT (рекомендуется
+`/var/lib/event-registration/media`) вне Apache DocumentRoot, выдать на него
+запись только runtime-пользователю backend и включить каталог в backup.
 
 Если database/01_schema.sql уже выполнен, повторно применять его не нужно. Для
 новой пустой БД выполнить database/00_create_database.sql, затем

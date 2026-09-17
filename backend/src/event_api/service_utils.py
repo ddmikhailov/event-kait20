@@ -6,6 +6,8 @@ from uuid import uuid4
 from sqlalchemy.engine import Connection, RowMapping
 
 from .database import execute
+from .event_status import effective_status
+from .form_config import event_form_config
 from .security import utc_iso
 
 
@@ -33,17 +35,26 @@ def serial(value: Any) -> Any:
 def event_response(item: RowMapping) -> dict[str, Any]:
     return {
         "id": item["id"],
+        "formConfig": event_form_config(item),
         "title": item["title"],
         "slug": item["slug"],
         "description": item["description"],
+        "direction": item["direction"],
+        "isListed": bool(item["is_listed"]),
+        "streamsEnabled": bool(item["streams_enabled"]),
+        "allowedPersonTypes": json_value(item["allowed_person_types"]),
+        "seasonId": item["season_id"],
+        "categoryId": item["category_id"],
+        "levelId": item["level_id"],
         "coverObjectKey": item["cover_object_key"],
         "startAt": serial(item["start_at"]),
         "endAt": serial(item["end_at"]),
-        "timezone": item["timezone"],
+        "timezone": "Europe/Moscow",
         "location": item["location"],
         "registrationDeadline": serial(item["registration_deadline"]),
         "capacity": item["capacity"],
         "status": item["status"],
+        "effectiveStatus": effective_status(item),
         "archivedAt": serial(item["archived_at"]) if item["archived_at"] else None,
         "createdAt": serial(item["created_at"]),
         "updatedAt": serial(item["updated_at"]),
@@ -58,6 +69,11 @@ def field_response(item: RowMapping) -> dict[str, Any]:
         "type": item["type"],
         "label": item["label"],
         "required": bool(item["required"]),
+        "onsiteRequired": bool(
+            item["onsite_required"]
+            if item["onsite_required"] is not None
+            else item["required"]
+        ),
         "sortOrder": item["sort_order"],
         "options": options if isinstance(options, list) else None,
         "active": bool(item["active"]),

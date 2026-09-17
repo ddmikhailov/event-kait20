@@ -119,6 +119,7 @@ describe('admin API client', () => {
 
     const result = await client.inviteStaff({
       email: 'scanner@example.test',
+      role: 'SCANNER',
       eventId: '40000000-0000-4000-8000-000000000001',
     });
 
@@ -128,6 +129,7 @@ describe('admin API client', () => {
     );
     expect(JSON.parse(String(init.body))).toEqual({
       email: 'scanner@example.test',
+      role: 'SCANNER',
       eventId: '40000000-0000-4000-8000-000000000001',
     });
     expect(result).toEqual(invitation);

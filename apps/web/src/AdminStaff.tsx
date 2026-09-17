@@ -4,6 +4,7 @@ import {
   type EventAccessListResponse,
   type EventResponse,
   type StaffListResponse,
+  type StaffInvitationListResponse,
 } from '@event-registration/contracts';
 import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useState } from 'react';
@@ -13,24 +14,44 @@ import { AdminApiError, adminApi } from './admin-api.js';
 type Notice = { kind: 'error' | 'success'; text: string };
 type StaffSummary = StaffListResponse['items'][number];
 type AccessSummary = EventAccessListResponse['items'][number];
+type InvitationSummary = StaffInvitationListResponse['items'][number];
+
+const deliveryLabels = {
+  QUEUED: 'Ожидает отправки',
+  SENDING: 'Отправляется',
+  SENT: 'Принято почтовым сервером',
+  FAILED: 'Ошибка отправки',
+  MISSING: 'Письмо не создано',
+} as const;
 
 export const StaffDirectory = ({
   events,
   currentUserId,
+  currentRole,
   onBack,
 }: {
   events: EventResponse[];
   currentUserId: string;
+  currentRole: StaffSummary['role'];
   onBack: () => void;
 }) => {
   const [staff, setStaff] = useState<StaffSummary[]>([]);
+  const [invitations, setInvitations] = useState<InvitationSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
+  const [invitationRole, setInvitationRole] = useState<'ORGANIZER' | 'SCANNER'>(
+    'SCANNER',
+  );
 
   const load = useCallback(async () => {
     setBusy(true);
     try {
-      setStaff((await adminApi.staff()).items);
+      const [users, links] = await Promise.all([
+        adminApi.staff(),
+        adminApi.invitations(),
+      ]);
+      setStaff(users.items);
+      setInvitations(links.items);
     } catch (error) {
       setNotice(staffError(error));
     } finally {
@@ -50,12 +71,16 @@ export const StaffDirectory = ({
       const result = await adminApi.inviteStaff(
         staffInvitationRequestSchema.parse({
           email: String(form.get('email') ?? ''),
-          ...(eventId ? { eventId } : {}),
+          role: invitationRole,
+          ...(invitationRole === 'SCANNER' && eventId ? { eventId } : {}),
         }),
       );
       setNotice({
-        kind: 'success',
-        text: `Приглашение поставлено в очередь и действует до ${formatDateTime(result.expiresAt)}.`,
+        kind:
+          result.status === 'failed' || result.status === 'missing'
+            ? 'error'
+            : 'success',
+        text: `${deliveryLabels[result.status.toUpperCase() as keyof typeof deliveryLabels]}. Приглашение действует до ${formatDateTime(result.expiresAt)}.`,
       });
       await load();
     } catch (error) {
@@ -87,6 +112,27 @@ export const StaffDirectory = ({
     }
   };
 
+  const resend = async (item: InvitationSummary) => {
+    setBusy(true);
+    try {
+      const result = await adminApi.resendInvitation(
+        item.id,
+        crypto.randomUUID(),
+      );
+      await load();
+      setNotice({
+        kind: 'success',
+        text: deliveryLabels[
+          result.status.toUpperCase() as keyof typeof deliveryLabels
+        ],
+      });
+    } catch (error) {
+      setNotice(staffError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <main className="admin-shell">
       <header className="admin-editor-header">
@@ -100,7 +146,7 @@ export const StaffDirectory = ({
           <div className="admin-section-title">
             <div>
               <p className="eyebrow">Новый сотрудник</p>
-              <h1>Пригласить сканировщика</h1>
+              <h1>Пригласить сотрудника</h1>
               <p className="muted">
                 Ссылка создаётся на сервере и отправляется через очередь писем.
               </p>
@@ -118,19 +164,38 @@ export const StaffDirectory = ({
               <span>Email *</span>
               <input name="email" type="email" required />
             </label>
-            <label>
-              <span>Сразу назначить мероприятие</span>
-              <select name="eventId" defaultValue="">
-                <option value="">Без назначения</option>
-                {events
-                  .filter((event) => event.status !== 'ARCHIVED')
-                  .map((event) => (
-                    <option key={event.id} value={event.id}>
-                      {event.title}
-                    </option>
-                  ))}
-              </select>
-            </label>
+            {currentRole === 'SUPER_ADMIN' && (
+              <label>
+                <span>Роль *</span>
+                <select
+                  name="role"
+                  value={invitationRole}
+                  onChange={(event) =>
+                    setInvitationRole(
+                      event.target.value as 'ORGANIZER' | 'SCANNER',
+                    )
+                  }
+                >
+                  <option value="SCANNER">Сканировщик</option>
+                  <option value="ORGANIZER">Организатор</option>
+                </select>
+              </label>
+            )}
+            {invitationRole === 'SCANNER' && (
+              <label>
+                <span>Сразу назначить мероприятие</span>
+                <select name="eventId" defaultValue="">
+                  <option value="">Без назначения</option>
+                  {events
+                    .filter((event) => event.status !== 'ARCHIVED')
+                    .map((event) => (
+                      <option key={event.id} value={event.id}>
+                        {event.title}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
             <Button type="submit" disabled={busy}>
               {busy ? 'Создаём приглашение…' : 'Отправить приглашение'}
             </Button>
@@ -146,23 +211,96 @@ export const StaffDirectory = ({
           <StaffList
             staff={staff}
             currentUserId={currentUserId}
+            currentRole={currentRole}
             busy={busy}
             onDeactivate={deactivate}
           />
+          <h2>Приглашения и отправка писем</h2>
+          <p className="muted">
+            Последние 100 приглашений. Принятие письма почтовым сервером не
+            гарантирует попадание во входящие: проверьте также папку «Спам».
+          </p>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={busy}
+            onClick={() => void load()}
+          >
+            Обновить статусы
+          </button>
+          <InvitationList items={invitations} busy={busy} onResend={resend} />
         </section>
       </div>
     </main>
   );
 };
 
+export const InvitationList = ({
+  items,
+  busy,
+  onResend,
+}: {
+  items: InvitationSummary[];
+  busy: boolean;
+  onResend: (item: InvitationSummary) => Promise<void>;
+}) => (
+  <div className="staff-list">
+    {items.map((item) => {
+      const expired = new Date(item.expiresAt).getTime() <= Date.now();
+      return (
+        <article key={item.id}>
+          <div>
+            <strong>{item.email}</strong>
+            <span>
+              {roleLabel(item.role)} ·{' '}
+              {item.acceptedAt
+                ? 'Активировано'
+                : expired
+                  ? 'Ссылка истекла — создайте новое приглашение'
+                  : deliveryLabels[item.deliveryStatus]}
+            </span>
+            {!item.acceptedAt && (
+              <span>
+                Попыток: {item.attempts}
+                {item.lastErrorCode ? ` · ${item.lastErrorCode}` : ''}
+              </span>
+            )}
+            {item.nextAttemptAt && (
+              <span>
+                Следующая попытка: {formatDateTime(item.nextAttemptAt)}
+              </span>
+            )}
+          </div>
+          {!item.acceptedAt && !expired && (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={
+                busy ||
+                item.deliveryStatus === 'QUEUED' ||
+                item.deliveryStatus === 'SENDING'
+              }
+              onClick={() => void onResend(item)}
+            >
+              Отправить снова
+            </button>
+          )}
+        </article>
+      );
+    })}
+  </div>
+);
+
 export const StaffList = ({
   staff,
   currentUserId,
+  currentRole,
   busy,
   onDeactivate,
 }: {
   staff: StaffSummary[];
   currentUserId: string;
+  currentRole: StaffSummary['role'];
   busy: boolean;
   onDeactivate: (user: StaffSummary) => Promise<void>;
 }) => (
@@ -179,15 +317,17 @@ export const StaffList = ({
           <span className={`staff-status ${user.active ? 'active' : ''}`}>
             {user.active ? 'Активен' : 'Отключён'}
           </span>
-          {user.active && user.id !== currentUserId && (
-            <button
-              className="text-button danger-text"
-              disabled={busy}
-              onClick={() => void onDeactivate(user)}
-            >
-              Деактивировать
-            </button>
-          )}
+          {user.active &&
+            user.id !== currentUserId &&
+            (currentRole === 'SUPER_ADMIN' || user.role === 'SCANNER') && (
+              <button
+                className="text-button danger-text"
+                disabled={busy}
+                onClick={() => void onDeactivate(user)}
+              >
+                Деактивировать
+              </button>
+            )}
           {user.id === currentUserId && <em>Текущая учётная запись</em>}
         </div>
       </article>
@@ -392,7 +532,11 @@ const StaffNotice = ({ notice }: { notice: Notice }) => (
 );
 
 const roleLabel = (role: StaffSummary['role']) =>
-  role === 'SUPER_ADMIN' ? 'Администратор' : 'Сканировщик';
+  role === 'SUPER_ADMIN'
+    ? 'Суперадминистратор'
+    : role === 'ORGANIZER'
+      ? 'Организатор'
+      : 'Сканировщик';
 const formatDate = (value: string) =>
   new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium' }).format(
     new Date(value),

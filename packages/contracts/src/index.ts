@@ -1,9 +1,11 @@
 import { z } from 'zod';
 
 export * from './auth.js';
+export * from './activity.js';
 export * from './attendance.js';
 export * from './common.js';
 export * from './events.js';
+export * from './forms.js';
 export * from './excel.js';
 export * from './participants.js';
 export * from './registrations.js';

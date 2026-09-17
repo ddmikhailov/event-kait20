@@ -1,15 +1,25 @@
 import type {
+  ActivityReference,
   EventResponse,
   FormFieldResponse,
+  Season,
   SessionResponse,
 } from '@event-registration/contracts';
-import { loginRequestSchema } from '@event-registration/contracts';
+import {
+  loginRequestSchema,
+  personTypeSchema,
+  personTypeLabels,
+} from '@event-registration/contracts';
 import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
+import { ActivitySettings } from './AdminActivity.js';
+import { publicMediaUrl } from './api-client.js';
 import { EventParticipants, PeopleDirectory } from './AdminParticipants.js';
 import { EventStatistics } from './AdminReporting.js';
+import { RegistrationFormEditor } from './RegistrationFormEditor.js';
+import { EventStreamsEditor } from './EventStreams.js';
 import { EventAccessManager, StaffDirectory } from './AdminStaff.js';
 import {
   eventDefaults,
@@ -47,11 +57,19 @@ export const AdminApp = () => {
     setLoading(true);
     try {
       await adminApi.logout();
-    } catch {
-      // The local authenticated view must still close if the server is gone.
-    } finally {
       setSession(undefined);
       setNotice(undefined);
+    } catch (error) {
+      if (error instanceof AdminApiError && error.status === 401) {
+        setSession(undefined);
+        setNotice(undefined);
+      } else {
+        setNotice({
+          kind: 'error',
+          text: `Выход не завершён: ${errorNotice(error).text}`,
+        });
+      }
+    } finally {
       setLoading(false);
     }
   };
@@ -79,7 +97,7 @@ export const AdminApp = () => {
       />
     );
   }
-  if (session.user.role !== 'SUPER_ADMIN') {
+  if (session.user.role === 'SCANNER') {
     return <RoleDenied email={session.user.email} onLogout={logout} />;
   }
   return <AdminWorkspace session={session} onLogout={logout} />;
@@ -101,21 +119,23 @@ const AdminWorkspace = ({
     | 'people'
     | 'staff'
     | 'access'
+    | 'activity'
   >('events');
   const [selected, setSelected] = useState<EventResponse>();
+  const [showArchived, setShowArchived] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
 
   const loadEvents = useCallback(async () => {
     setBusy(true);
     try {
-      setEvents((await adminApi.events()).items);
+      setEvents((await adminApi.events(showArchived)).items);
     } catch (error) {
       setNotice(errorNotice(error));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [showArchived]);
 
   useEffect(() => {
     void loadEvents();
@@ -132,6 +152,7 @@ const AdminWorkspace = ({
       <EventEditor
         key={selected?.id ?? 'new-event'}
         event={selected}
+        currentRole={session.user.role}
         onBack={() => {
           setView('events');
           setSelected(undefined);
@@ -171,6 +192,7 @@ const AdminWorkspace = ({
       <StaffDirectory
         events={events}
         currentUserId={session.user.id}
+        currentRole={session.user.role}
         onBack={() => setView('events')}
       />
     );
@@ -186,6 +208,14 @@ const AdminWorkspace = ({
       />
     );
   }
+  if (view === 'activity') {
+    return (
+      <ActivitySettings
+        role={session.user.role}
+        onBack={() => setView('events')}
+      />
+    );
+  }
 
   return (
     <main className="admin-shell">
@@ -198,6 +228,20 @@ const AdminWorkspace = ({
             <p>Создавайте события и настраивайте форму регистрации.</p>
           </div>
           <div className="row-actions">
+            <label className="archive-toggle">
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(event) => setShowArchived(event.target.checked)}
+              />
+              <span>Показать архив</span>
+            </label>
+            <button
+              className="secondary-button"
+              onClick={() => setView('activity')}
+            >
+              Активность
+            </button>
             <button
               className="secondary-button"
               onClick={() => setView('staff')}
@@ -256,7 +300,7 @@ export const EventGrid = ({
     {events.map((event) => (
       <article className="admin-event-card" key={event.id}>
         <div className="admin-card-topline">
-          <StatusBadge status={event.status} />
+          <StatusBadge status={event.effectiveStatus ?? event.status} />
           <span>{event.capacity} мест</span>
         </div>
         <h2>{event.title}</h2>
@@ -301,15 +345,20 @@ export const EventGrid = ({
 
 const EventEditor = ({
   event,
+  currentRole,
   onBack,
 }: {
   event?: EventResponse | undefined;
+  currentRole: SessionResponse['user']['role'];
   onBack: () => void;
 }) => {
   const [savedEvent, setSavedEvent] = useState(event);
   const [fields, setFields] = useState<FormFieldResponse[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
+  const [seasons, setSeasons] = useState<Season[]>([]);
+  const [categories, setCategories] = useState<ActivityReference[]>([]);
+  const [levels, setLevels] = useState<ActivityReference[]>([]);
   const archived = savedEvent?.status === 'ARCHIVED';
 
   const loadFields = useCallback(async (eventId: string) => {
@@ -324,16 +373,49 @@ const EventEditor = ({
     if (savedEvent) void loadFields(savedEvent.id);
   }, [loadFields, savedEvent?.id]);
 
+  useEffect(() => {
+    void Promise.all([
+      adminApi.seasons(),
+      adminApi.activityCategories(),
+      adminApi.activityLevels(),
+    ])
+      .then(([seasonList, categoryList, levelList]) => {
+        setSeasons(seasonList.items);
+        setCategories(categoryList.items.filter((item) => item.active));
+        setLevels(levelList.items.filter((item) => item.active));
+      })
+      .catch((error: unknown) => setNotice(errorNotice(error)));
+  }, []);
+
   const saveEvent = async (form: FormData) => {
     setBusy(true);
     setNotice(undefined);
     try {
       const values = eventValues(form);
-      const result = savedEvent
+      let result = savedEvent
         ? await adminApi.updateEvent(savedEvent.id, values)
         : await adminApi.createEvent(values);
+      const cover = form.get('cover');
+      if (cover instanceof File && cover.size > 0) {
+        result = await adminApi.uploadEventCover(result.id, cover);
+      }
       setSavedEvent(result);
       setNotice({ kind: 'success', text: 'Изменения сохранены' });
+    } catch (error) {
+      setNotice(errorNotice(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteCover = async () => {
+    if (!savedEvent?.coverObjectKey || !window.confirm('Удалить обложку?'))
+      return;
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      setSavedEvent(await adminApi.deleteEventCover(savedEvent.id));
+      setNotice({ kind: 'success', text: 'Обложка удалена' });
     } catch (error) {
       setNotice(errorNotice(error));
     } finally {
@@ -354,16 +436,56 @@ const EventEditor = ({
     }
   };
 
+  const copyRegistrationLink = async () => {
+    if (!savedEvent) return;
+    try {
+      await navigator.clipboard.writeText(registrationUrl(savedEvent.slug));
+      setNotice({ kind: 'success', text: 'Ссылка на регистрацию скопирована' });
+    } catch {
+      setNotice({
+        kind: 'error',
+        text: 'Не удалось скопировать ссылку. Выделите и скопируйте её вручную.',
+      });
+    }
+  };
+
+  const purge = async () => {
+    if (!savedEvent || currentRole !== 'SUPER_ADMIN') return;
+    const confirmation = window.prompt(
+      `Удаление необратимо. Введите адрес страницы «${savedEvent.slug}», чтобы удалить мероприятие и все его регистрации. Общие карточки людей сохранятся.`,
+    );
+    if (confirmation === null) return;
+    if (confirmation.trim() !== savedEvent.slug) {
+      setNotice({ kind: 'error', text: 'Адрес страницы введён неверно' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await adminApi.purgeEvent(savedEvent.id, {
+        confirmationSlug: confirmation.trim(),
+      });
+      onBack();
+    } catch (error) {
+      setNotice(errorNotice(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <main className="admin-shell">
       <header className="admin-editor-header">
         <button className="text-button" onClick={onBack}>
           ← Все мероприятия
         </button>
-        {savedEvent && <StatusBadge status={savedEvent.status} />}
+        {savedEvent && (
+          <StatusBadge
+            status={savedEvent.effectiveStatus ?? savedEvent.status}
+          />
+        )}
       </header>
       <div className="admin-editor-layout">
-        <section className="admin-panel">
+        <section className="admin-panel event-primary-panel">
           <div className="admin-section-title">
             <div>
               <p className="eyebrow">Основные данные</p>
@@ -371,6 +493,27 @@ const EventEditor = ({
             </div>
           </div>
           {notice && <AdminNotice notice={notice} />}
+          {savedEvent && !archived && (
+            <div className="registration-link-panel">
+              <div>
+                <strong>Ссылка на регистрацию</strong>
+                <a
+                  href={registrationUrl(savedEvent.slug)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {registrationUrl(savedEvent.slug)}
+                </a>
+              </div>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void copyRegistrationLink()}
+              >
+                Скопировать ссылку
+              </button>
+            </div>
+          )}
           {archived && (
             <AdminNotice
               notice={{
@@ -384,6 +527,10 @@ const EventEditor = ({
             busy={busy}
             readOnly={archived}
             onSubmit={saveEvent}
+            onDeleteCover={deleteCover}
+            seasons={seasons}
+            categories={categories}
+            levels={levels}
           />
           {savedEvent && !archived && (
             <button
@@ -394,8 +541,24 @@ const EventEditor = ({
               Архивировать мероприятие
             </button>
           )}
+          {savedEvent && archived && currentRole === 'SUPER_ADMIN' && (
+            <button
+              className="danger-button"
+              disabled={busy}
+              onClick={() => void purge()}
+            >
+              Удалить мероприятие навсегда
+            </button>
+          )}
         </section>
         <section className="admin-panel">
+          {savedEvent && (
+            <RegistrationFormEditor
+              key={savedEvent.id}
+              event={savedEvent}
+              onSaved={setSavedEvent}
+            />
+          )}
           <div className="admin-section-title">
             <div>
               <p className="eyebrow">Форма участника</p>
@@ -415,6 +578,14 @@ const EventEditor = ({
             </p>
           )}
         </section>
+        {savedEvent && (
+          <EventStreamsEditor
+            event={savedEvent}
+            onChanged={async () =>
+              setSavedEvent(await adminApi.event(savedEvent.id))
+            }
+          />
+        )}
       </div>
     </main>
   );
@@ -425,13 +596,22 @@ export const EventForm = ({
   busy,
   readOnly,
   onSubmit,
+  onDeleteCover,
+  seasons = [],
+  categories = [],
+  levels = [],
 }: {
   event?: EventResponse | undefined;
   busy: boolean;
   readOnly: boolean;
   onSubmit: (form: FormData) => Promise<void>;
+  onDeleteCover?: (() => Promise<void>) | undefined;
+  seasons?: Season[];
+  categories?: ActivityReference[];
+  levels?: ActivityReference[];
 }) => {
   const values = eventDefaults(event);
+  const [coverPreview, setCoverPreview] = useState<string>();
   const statuses: EventResponse['status'][] = event
     ? allowedStatuses(event.status)
     : ['DRAFT', 'REGISTRATION_OPEN'];
@@ -487,6 +667,8 @@ export const EventForm = ({
           name="capacity"
           label="Количество мест"
           type="number"
+          key={values.capacity}
+          readOnly={event?.streamsEnabled ?? false}
           min={1}
           value={values.capacity}
           required
@@ -500,12 +682,95 @@ export const EventForm = ({
           disabled={readOnly}
         />
         <AdminText
-          name="timezone"
-          label="Часовой пояс"
-          value={values.timezone}
-          required
+          name="direction"
+          label="Направление"
+          value={values.direction}
+          maxLength={80}
+          placeholder="Например: Профориентация"
           disabled={readOnly}
         />
+        <label>
+          <span>Сезон активности</span>
+          <select
+            name="seasonId"
+            defaultValue={values.seasonId}
+            disabled={readOnly}
+          >
+            <option value="">Не выбран</option>
+            {seasons.map((season) => (
+              <option key={season.id} value={season.id}>
+                {season.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Категория активности</span>
+          <select
+            name="categoryId"
+            defaultValue={values.categoryId}
+            disabled={readOnly}
+          >
+            <option value="">Не выбрана</option>
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Уровень мероприятия</span>
+          <select
+            name="levelId"
+            defaultValue={values.levelId}
+            disabled={readOnly}
+          >
+            <option value="">Не выбран</option>
+            {levels.map((level) => (
+              <option key={level.id} value={level.id}>
+                {level.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="muted">Все даты и время — московские (UTC+3).</p>
+        <input type="hidden" name="visibilityConfigured" value="1" />
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            name="isListed"
+            defaultChecked={values.isListed}
+            disabled={readOnly}
+          />
+          Показывать в общем списке мероприятий
+        </label>
+        <p className="muted">
+          Если выключено, регистрация доступна только по прямой ссылке. Ссылку
+          можно переслать; это не проверка приглашения.
+        </p>
+        <fieldset disabled={readOnly}>
+          <legend>Кто может зарегистрироваться</legend>
+          <input type="hidden" name="allowedPersonTypesConfigured" value="1" />
+          {personTypeSchema.options.map((type) => (
+            <label className="checkbox-row" key={type}>
+              <input
+                type="checkbox"
+                name="allowedPersonTypes"
+                value={type}
+                defaultChecked={
+                  !values.allowedPersonTypes ||
+                  values.allowedPersonTypes.includes(type)
+                }
+              />
+              {personTypeLabels[type]}
+            </label>
+          ))}
+          <p className="muted">
+            Выберите хотя бы один тип участника. Уже созданные регистрации
+            сохранятся.
+          </p>
+        </fieldset>
         <label>
           <span>Статус *</span>
           <select
@@ -520,12 +785,61 @@ export const EventForm = ({
             ))}
           </select>
         </label>
-        <AdminText
-          name="coverObjectKey"
-          label="Ключ обложки"
-          value={values.coverObjectKey}
-          disabled={readOnly}
-        />
+      </div>
+      <div className="cover-editor">
+        <div className="cover-preview">
+          {coverPreview || event?.coverObjectKey ? (
+            <img
+              src={coverPreview ?? publicMediaUrl(event!.coverObjectKey!)}
+              alt="Предварительный просмотр обложки"
+            />
+          ) : (
+            <span>Обложка пока не загружена</span>
+          )}
+        </div>
+        {!readOnly && (
+          <div className="cover-controls">
+            <label className="cover-file-label">
+              <span>
+                {event?.coverObjectKey
+                  ? 'Заменить обложку'
+                  : 'Загрузить обложку'}
+              </span>
+              <input
+                name="cover"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={(changeEvent) => {
+                  if (coverPreview) URL.revokeObjectURL(coverPreview);
+                  const file = changeEvent.target.files?.[0];
+                  if (file && file.size > 5_242_880) {
+                    changeEvent.target.setCustomValidity(
+                      'Размер обложки не должен превышать 5 МБ',
+                    );
+                    changeEvent.target.reportValidity();
+                    changeEvent.target.value = '';
+                    setCoverPreview(undefined);
+                    return;
+                  }
+                  changeEvent.target.setCustomValidity('');
+                  setCoverPreview(file ? URL.createObjectURL(file) : undefined);
+                }}
+              />
+            </label>
+            <small>
+              JPEG, PNG или WebP, не более 5 МБ. Рекомендуем 1600 × 900.
+            </small>
+            {event?.coverObjectKey && onDeleteCover && (
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => void onDeleteCover()}
+              >
+                Удалить обложку
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <label>
         <span>Описание</span>
@@ -726,7 +1040,15 @@ const FormFieldForm = ({
           type="checkbox"
           defaultChecked={Boolean(defaults.required)}
         />
-        <span>Обязательное поле</span>
+        <span>Обязательный ответ на сайте</span>
+      </label>
+      <label className="admin-checkbox">
+        <input
+          name="onsiteRequired"
+          type="checkbox"
+          defaultChecked={Boolean(defaults.onsiteRequired)}
+        />
+        <span>Обязательный ответ при регистрации на месте</span>
       </label>
       <div className="row-actions">
         <Button type="submit" disabled={busy}>
@@ -882,8 +1204,8 @@ const statusLabels: Record<EventResponse['status'], string> = {
   DRAFT: 'Черновик',
   REGISTRATION_OPEN: 'Регистрация открыта',
   REGISTRATION_CLOSED: 'Регистрация закрыта',
-  ACTIVE: 'Идёт сейчас',
-  COMPLETED: 'Завершено',
+  ACTIVE: 'Мероприятие идёт',
+  COMPLETED: 'Мероприятие завершено',
   ARCHIVED: 'Архив',
 };
 
@@ -951,3 +1273,8 @@ const formatDate = (value: string, timezone: string) =>
     timeStyle: 'short',
     timeZone: timezone,
   }).format(new Date(value));
+
+const registrationUrl = (slug: string) => {
+  const origin = typeof window === 'undefined' ? '' : window.location.origin;
+  return `${origin}/events/${encodeURIComponent(slug)}`;
+};

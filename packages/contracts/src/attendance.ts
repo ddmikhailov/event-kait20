@@ -5,6 +5,7 @@ import { personTypeSchema } from './registrations.js';
 
 export const scannerParticipantSchema = z.object({
   registrationId: uuidSchema,
+  streamTitle: z.string().nullable().optional(),
   lastName: z.string(),
   firstName: z.string(),
   middleName: z.string().nullable(),
@@ -69,6 +70,7 @@ export const attendanceSyncItemStatusSchema = z.enum([
   'INVALID_REGISTRATION',
   'REGISTRATION_ANNULLED',
   'INVALID_TIMESTAMP',
+  'CLIENT_EVENT_CONFLICT',
 ]);
 
 export const attendanceSyncResponseSchema = z.object({

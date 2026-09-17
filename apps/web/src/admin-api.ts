@@ -1,15 +1,29 @@
 import {
+  activityOperationResponseSchema,
+  activityReferenceListSchema,
+  activityReferenceSchema,
   acceptedResponseSchema,
+  streamResponseSchema,
+  streamListResponseSchema,
+  type StreamValues,
+  type StreamResponse,
+  type StreamListResponse,
   excelImportCommitResponseSchema,
   excelImportPreviewResponseSchema,
   eventStatisticsResponseSchema,
   onsiteRegistrationResponseSchema,
   personDetailResponseSchema,
   personListResponseSchema,
+  participationListSchema,
   registrationDetailResponseSchema,
   registrationListResponseSchema,
   sendTicketsResponseSchema,
+  scoringRuleListSchema,
+  scoringRuleSchema,
+  seasonListSchema,
+  seasonSchema,
   staffInvitationResponseSchema,
+  staffInvitationListResponseSchema,
   staffListResponseSchema,
   eventAccessListResponseSchema,
   eventListResponseSchema,
@@ -18,6 +32,10 @@ import {
   formFieldResponseSchema,
   sessionResponseSchema,
   type AcceptedResponse,
+  type ActivityOperationResponse,
+  type ActivityReference,
+  type ActivityReferenceList,
+  type ActivityReferenceValues,
   type AdminOnsiteRegistrationRequest,
   type CreateEventRequest,
   type CreateFormFieldRequest,
@@ -35,13 +53,25 @@ import {
   type OnsiteRegistrationResponse,
   type PersonDetailResponse,
   type PersonListResponse,
+  type ParticipationAssignRequest,
+  type ParticipationCancelRequest,
+  type ParticipationConfirmRequest,
+  type ParticipationList,
+  type PurgeEventRequest,
   type RegistrationDetailResponse,
   type RegistrationListResponse,
   type SendTicketsRequest,
   type SendTicketsResponse,
+  type ScoringRule,
+  type ScoringRuleList,
+  type ScoringRuleValues,
+  type Season,
+  type SeasonList,
+  type SeasonValues,
   type SessionResponse,
   type StaffInvitationRequest,
   type StaffInvitationResponse,
+  type StaffInvitationListResponse,
   type StaffListResponse,
   type UpdateEventRequest,
   type UpdateFormFieldRequest,
@@ -68,6 +98,148 @@ export class AdminApiError extends Error {
 }
 
 export class AdminApiClient {
+  public activityRoles(): Promise<ActivityReferenceList> {
+    return this.request(
+      '/admin/activity/roles',
+      { method: 'GET' },
+      activityReferenceListSchema,
+    );
+  }
+
+  public activityResults(): Promise<ActivityReferenceList> {
+    return this.request(
+      '/admin/activity/results',
+      { method: 'GET' },
+      activityReferenceListSchema,
+    );
+  }
+
+  public activityCategories(): Promise<ActivityReferenceList> {
+    return this.request(
+      '/admin/activity/categories',
+      { method: 'GET' },
+      activityReferenceListSchema,
+    );
+  }
+
+  public activityLevels(): Promise<ActivityReferenceList> {
+    return this.request(
+      '/admin/activity/levels',
+      { method: 'GET' },
+      activityReferenceListSchema,
+    );
+  }
+
+  public createActivityRole(
+    values: ActivityReferenceValues,
+  ): Promise<ActivityReference> {
+    return this.request(
+      '/admin/activity/roles',
+      { method: 'POST', body: JSON.stringify(values) },
+      activityReferenceSchema,
+    );
+  }
+
+  public seasons(): Promise<SeasonList> {
+    return this.request(
+      '/admin/activity/seasons',
+      { method: 'GET' },
+      seasonListSchema,
+    );
+  }
+
+  public saveSeason(values: SeasonValues, id?: string): Promise<Season> {
+    return this.request(
+      `/admin/activity/seasons${id ? `/${encodeURIComponent(id)}` : ''}`,
+      { method: id ? 'PATCH' : 'POST', body: JSON.stringify(values) },
+      seasonSchema,
+    );
+  }
+
+  public scoringRules(seasonId?: string): Promise<ScoringRuleList> {
+    const query = seasonId ? `?seasonId=${encodeURIComponent(seasonId)}` : '';
+    return this.request(
+      `/admin/activity/scoring-rules${query}`,
+      { method: 'GET' },
+      scoringRuleListSchema,
+    );
+  }
+
+  public saveScoringRule(
+    values: ScoringRuleValues,
+    id?: string,
+  ): Promise<ScoringRule> {
+    return this.request(
+      `/admin/activity/scoring-rules${id ? `/${encodeURIComponent(id)}` : ''}`,
+      { method: id ? 'PATCH' : 'POST', body: JSON.stringify(values) },
+      scoringRuleSchema,
+    );
+  }
+
+  public participations(
+    eventId: string,
+    page = 1,
+    pageSize = 200,
+  ): Promise<ParticipationList> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/participations?page=${page}&pageSize=${pageSize}`,
+      { method: 'GET' },
+      participationListSchema,
+    );
+  }
+
+  public assignParticipations(
+    eventId: string,
+    values: ParticipationAssignRequest,
+  ): Promise<ActivityOperationResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/participations/assign`,
+      { method: 'POST', body: JSON.stringify(values) },
+      activityOperationResponseSchema,
+    );
+  }
+
+  public confirmParticipations(
+    eventId: string,
+    values: ParticipationConfirmRequest,
+  ): Promise<ActivityOperationResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/participations/confirm`,
+      { method: 'POST', body: JSON.stringify(values) },
+      activityOperationResponseSchema,
+    );
+  }
+
+  public cancelParticipations(
+    eventId: string,
+    values: ParticipationCancelRequest,
+  ): Promise<ActivityOperationResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/participations/cancel`,
+      { method: 'POST', body: JSON.stringify(values) },
+      activityOperationResponseSchema,
+    );
+  }
+
+  public streams(eventId: string): Promise<StreamListResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/streams`,
+      { method: 'GET' },
+      streamListResponseSchema,
+    );
+  }
+
+  public saveStream(
+    eventId: string,
+    values: StreamValues,
+    id?: string,
+  ): Promise<StreamResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/streams${id ? `/${encodeURIComponent(id)}` : ''}`,
+      { method: id ? 'PATCH' : 'POST', body: JSON.stringify(values) },
+      streamResponseSchema,
+    );
+  }
   private csrfToken: string | undefined;
 
   public async restoreSession(): Promise<SessionResponse | undefined> {
@@ -98,17 +270,19 @@ export class AdminApiClient {
   }
 
   public async logout(): Promise<void> {
-    try {
-      await this.request('/auth/logout', { method: 'POST' });
-    } finally {
-      this.csrfToken = undefined;
-    }
+    await this.request('/auth/logout', { method: 'POST' });
+    this.csrfToken = undefined;
   }
 
-  public events(page = 1, pageSize = 100): Promise<EventListResponse> {
+  public events(
+    includeArchived = false,
+    page = 1,
+    pageSize = 100,
+  ): Promise<EventListResponse> {
     const query = new URLSearchParams({
       page: String(page),
       pageSize: String(pageSize),
+      includeArchived: String(includeArchived),
     });
     return this.request(
       `/admin/events?${query.toString()}`,
@@ -149,6 +323,38 @@ export class AdminApiClient {
       `/admin/events/${encodeURIComponent(eventId)}/archive`,
       { method: 'POST' },
       eventResponseSchema,
+    );
+  }
+
+  public uploadEventCover(
+    eventId: string,
+    cover: File,
+  ): Promise<EventResponse> {
+    const body = new FormData();
+    body.set('cover', cover);
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/cover`,
+      { method: 'POST', body },
+      eventResponseSchema,
+    );
+  }
+
+  public deleteEventCover(eventId: string): Promise<EventResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/cover`,
+      { method: 'DELETE' },
+      eventResponseSchema,
+    );
+  }
+
+  public purgeEvent(
+    eventId: string,
+    values: PurgeEventRequest,
+  ): Promise<AcceptedResponse> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/purge`,
+      { method: 'POST', body: JSON.stringify(values) },
+      acceptedResponseSchema,
     );
   }
 
@@ -311,6 +517,25 @@ export class AdminApiClient {
       '/admin/staff',
       { method: 'GET' },
       staffListResponseSchema,
+    );
+  }
+
+  public invitations(): Promise<StaffInvitationListResponse> {
+    return this.request(
+      '/admin/staff/invitations',
+      { method: 'GET' },
+      staffInvitationListResponseSchema,
+    );
+  }
+
+  public resendInvitation(
+    id: string,
+    requestId: string,
+  ): Promise<StaffInvitationResponse> {
+    return this.request(
+      `/admin/staff/invitations/${id}/resend`,
+      { method: 'POST', body: JSON.stringify({ requestId }) },
+      staffInvitationResponseSchema,
     );
   }
 

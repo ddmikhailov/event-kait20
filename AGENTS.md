@@ -23,15 +23,16 @@ If code and documentation conflict, do not guess. Treat approved product/ADR doc
 MVP facts that must not be silently changed:
 
 - Participant has no account/dashboard.
-- Staff roles in MVP: `SUPER_ADMIN`, `SCANNER`; `EVENT_ADMIN` is future.
-- Only SUPER_ADMIN creates Events.
+- Staff roles: `SUPER_ADMIN`, `ORGANIZER`, `SCANNER`.
+- `SUPER_ADMIN` controls administrator roles and permanent Event purge;
+  `ORGANIZER` has global Event/data access but may manage only SCANNER accounts.
 - QR is unique per Registration/Event and contains no plaintext PII.
 - Scanner is an installable PWA. Do not introduce App Store/Google Play release work.
 - MySQL 8.1.0 is the source of truth; spreadsheets are import/export only.
 - Production is deployed on organisation-managed Russian infrastructure.
 - Scanner offline mode is required for prepared registrations/attendance.
 - Brand-new onsite Registration is online-only in MVP.
-- SCANNER cannot overbook capacity; SUPER_ADMIN may explicitly override and must be audited.
+- Assigned SCANNER and administrators may explicitly confirm onsite overbooking; the server must check EventAccess and audit the override. No implicit overbooking and no offline onsite registration.
 - Version 2.0 committed feature: mass Event email broadcasts. Do not pull it into MVP unless asked.
 
 ## 3. Architecture boundaries
@@ -81,7 +82,9 @@ Preserve these in DB constraints and tests where possible:
 
 - All schema changes require a migration and relevant docs/contracts update.
 - Do not use destructive production migrations without an explicit migration/rollback plan.
-- Business history uses archive/annul/deactivate rather than hard delete.
+- Business history normally uses archive/annul/deactivate. The explicit Event purge is
+  SUPER_ADMIN-only, requires prior archive plus typed slug confirmation, removes Event-scoped
+  history and preserves referenced global Person rows.
 - Preserve required MySQL invariants in reviewed SQL migrations.
 
 ## 7. API/contracts

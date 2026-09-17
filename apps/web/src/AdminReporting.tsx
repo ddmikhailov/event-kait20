@@ -3,6 +3,7 @@ import type {
   EventStatisticsResponse,
 } from '@event-registration/contracts';
 import { Button } from '@event-registration/ui';
+import { personTypeLabels } from '@event-registration/contracts';
 import { useCallback, useEffect, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
@@ -81,9 +82,17 @@ export const StatisticsDashboard = ({
     ['Лимит', statistics.capacity],
     ['Зарегистрировано', statistics.registered],
     ['Свободно', statistics.freePlaces],
+    [
+      'Сверх лимита',
+      statistics.overCapacity ??
+        Math.max(0, statistics.registered - statistics.capacity),
+    ],
     ['Пришло', statistics.attended],
     ['Не пришло', statistics.absent],
     ['Посещаемость', `${formatNumber(statistics.attendancePercentage)}%`],
+    ['Участие подтверждено', statistics.confirmedParticipations ?? 0],
+    ['Баллов начислено', statistics.scoreAwarded ?? 0],
+    ['Без правила баллов', statistics.participationsWithoutScoringRule ?? 0],
   ];
   const maximum = Math.max(
     1,
@@ -99,13 +108,92 @@ export const StatisticsDashboard = ({
           </article>
         ))}
       </section>
+      {statistics.byPersonType && (
+        <section className="admin-panel">
+          <h2>Участники по категориям</h2>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Тип участника</th>
+                  <th>Регистраций</th>
+                  <th>Пришло</th>
+                  <th>Не пришло</th>
+                </tr>
+              </thead>
+              <tbody>
+                {statistics.byPersonType.map((item) => (
+                  <tr key={item.personType}>
+                    <th scope="row">{personTypeLabels[item.personType]}</th>
+                    <td>{item.registered}</td>
+                    <td>{item.attended}</td>
+                    <td>{item.absent}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      {!!statistics.byParticipationRole?.length && (
+        <section className="admin-panel">
+          <h2>Подтверждённое участие по ролям</h2>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Роль</th>
+                  <th>Участников</th>
+                </tr>
+              </thead>
+              <tbody>
+                {statistics.byParticipationRole.map((item) => (
+                  <tr key={item.code}>
+                    <th scope="row">{item.name}</th>
+                    <td>{item.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      {!!statistics.byStream?.length && (
+        <section className="admin-panel">
+          <h2>Итоги по потокам</h2>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Поток</th>
+                  <th>Мест</th>
+                  <th>Регистраций</th>
+                  <th>Пришло</th>
+                  <th>Не пришло</th>
+                </tr>
+              </thead>
+              <tbody>
+                {statistics.byStream.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.title}</td>
+                    <td>{item.capacity}</td>
+                    <td>{item.registered}</td>
+                    <td>{item.attended}</td>
+                    <td>{item.absent}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
       <section className="admin-panel arrival-panel">
         <header>
           <div>
             <h2>Динамика прихода</h2>
             <p>Количество первых посещений по 15-минутным интервалам.</p>
           </div>
-          <span>{timezone}</span>
+          <span>Московское время (UTC+3)</span>
         </header>
         {statistics.arrivalSeries.length === 0 ? (
           <p className="admin-empty">Посещений пока нет.</p>

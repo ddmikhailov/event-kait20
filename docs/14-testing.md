@@ -6,7 +6,7 @@
 
 Tests must prove:
 - concurrent registration cannot exceed capacity;
-- SCANNER cannot administrative-overbook;
+- SCANNER can only explicitly confirm audited onsite overbooking within assigned EventAccess;
 - one Person cannot have two ACTIVE registrations for same Event after confident match;
 - ANNULLED does not count toward capacity;
 - QR for wrong Event cannot create attendance;
@@ -14,9 +14,17 @@ Tests must prove:
 - duplicate `client_event_id` is idempotent;
 - two offline devices can sync same participant without changing first attendance incorrectly;
 - SCANNER cannot access unassigned Event;
+- ORGANIZER has global Event/data access but cannot manage administrator roles or purge Events;
+- archived Events are hidden by default and explicit purge preserves Person rows;
 - failed email does not roll back Registration;
 - Person edit does not mutate Registration snapshot;
 - form edits do not corrupt historical RegistrationAnswer snapshots.
+
+Post-r2 regression coverage also checks: independent stream capacity under concurrent
+requests, one stream per Person/Event, composite same-Event FK, closed-stream ticket
+preservation, unlisted catalogue exclusion with working direct link, allowed participant
+categories, truthful invitation failure status and idempotent resend, Moscow stream time,
+and stream-name/checksum preservation through contract parsing into offline IndexedDB.
 
 ## 2. Unit tests
 
@@ -31,6 +39,10 @@ Tests must prove:
 
 ## 3. Integration tests — real MySQL 8.1.0
 
+Presentation coverage includes the public open-registration catalogue, the
+additive `005_event_presentation.sql` migration, authenticated cover upload,
+public raster delivery and rejection of SVG/unsupported media.
+
 - registration transaction;
 - capacity race with parallel requests;
 - generated-column unique active-registration constraint;
@@ -39,6 +51,7 @@ Tests must prove:
 - session/invitation/reset token lifecycle;
 - attendance idempotency;
 - EventAccess;
+- ORGANIZER role migration, invitation boundary and SUPER_ADMIN-only purge;
 - email delivery idempotency/outbox-equivalent boundary.
 - shared MySQL-backed rate limiting and SMTP worker retry transitions.
 
@@ -54,6 +67,11 @@ Every implemented endpoint gets:
 High-priority codes: `CAPACITY_FULL`, `ALREADY_REGISTERED`, `REGISTRATION_CLOSED`, `INVALID_QR`, `REGISTRATION_ANNULLED`.
 
 ## 5. Frontend E2E
+
+Responsive checks cover the desktop month grid, the mobile Event-card feed,
+direction filters and the official logo. Scanner checks assert that manual QR
+text entry is absent and fast scan keeps camera decoding active while showing a
+compact attendee result.
 
 - public registration → success/ticket;
 - duplicate registration → no duplicate row + resend behavior;
@@ -96,13 +114,13 @@ widths using synthetic accounts only.
 
 Excel coverage uses real MySQL 8.1.0 and proves empty-database migration,
 preview without business writes, aggregate-only `result_summary`, source-file
-deletion after commit, one-time commit, capacity recheck, SUPER_ADMIN-only
+deletion after commit, one-time commit, capacity recheck, administrator-only
 authorization, `EXCEL_IMPORT` persistence and formula-safe export. Parser unit
 tests cover the canonical template, formula cells and merged-cell rejection.
 
 MVP reporting coverage proves ACTIVE-only statistics, capacity/free/absence
 arithmetic, one-decimal percentage, 15-minute arrival buckets, private cache
-headers and SUPER_ADMIN authorization. Ticket-batch integration tests prove
+headers and administrator authorization. Ticket-batch integration tests prove
 import-only selection, no-email accounting, request-id idempotency, compact
 audit metadata and SCANNER denial. Web tests cover the metrics/empty states and
 in-memory CSRF propagation for a confirmed batch.
@@ -126,6 +144,11 @@ without replacement, local QR/search resolution, preservation of pending events
 during refresh and expiry, accepted/rejected per-item handling, logout cleanup,
 and the reconnect ordering contract. Camera permission and real service-worker
 upgrade behavior remain browser/device E2E checks before production rollout.
+
+Participant contract tests cover all six categories, including `PARENT` and
+`OTHER` without study group or organization. MySQL integration tests verify that
+both the Person record and historical Registration snapshot accept the extended
+enum after migration.
 
 ## 7. Security tests before production
 
@@ -183,3 +206,36 @@ Apache security-header baseline without creating business data. A production
 promotion additionally requires a MySQL 8.1.0
 migration rehearsal, a current recovery point and the applicable browser/device
 E2E checks from this document.
+
+## 11. r3 local regression (2026-08-30)
+
+Added real MySQL 8.1.0 integration coverage for public/onsite constructor policies,
+unchecked mandatory consent, hidden stale fields, legacy null configuration,
+independent custom-answer requirements and hash-only retry receipts. Equal names
+without contact/birth-date do not merge. Tests cover exact deadline/start/end
+boundaries (including Moscow offset), manual close/draft/archive precedence,
+catalogue inclusion and rejection of registration after the deadline.
+
+Browser checks use the real backend: registration/ticket, admin list, a real QR
+image fed through a simulated camera into the actual decoder, attendance offline
+retry, constructor preview/save and mobile accessibility. This does not replace
+testing physical device cameras over the organisation's HTTPS.
+
+The QR duplicate guard survives camera pause/resume and rearms the same ticket
+only after one second without a readable QR; another ticket is accepted immediately.
+Dependency advisory checks cover npm runtime packages and Python dependencies;
+the private application package itself is reviewed/tested, not a PyPI advisory target.
+
+## 12. Activity regression
+
+The real MySQL 8.1.0 suite proves Participation confirmation with and without
+Attendance, deterministic scoring, ambiguous-rule rejection, historical rule
+versioning, cancellation/reversal, idempotent repeat and concurrent confirmation.
+It also covers Scanner denial, field-level leaderboard consent, consent withdrawal,
+PUBLIC-only group/department aggregation, historical membership attribution,
+event-date scoring, non-overlapping rule periods and concurrent conflict protection,
+manual-adjustment payload idempotency, profile/consent concurrency, Achievement
+reference integrity, and Event purge refusal for DRAFT/confirmed/scored/Achievement
+Activity history while allowing purge of an Activity-free Event.
+Shared contract tests reject public profile PII and require an audit reason for
+confirmation without Attendance.

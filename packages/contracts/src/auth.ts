@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { emailSchema, passwordSchema } from './common.js';
 
-export const staffRoleSchema = z.enum(['SUPER_ADMIN', 'SCANNER']);
+export const staffRoleSchema = z.enum(['SUPER_ADMIN', 'ORGANIZER', 'SCANNER']);
 export type StaffRoleContract = z.infer<typeof staffRoleSchema>;
 
 export const loginRequestSchema = z

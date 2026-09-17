@@ -91,6 +91,8 @@ Do not claim browser storage is secure against a person who controls/unlocks the
 
 Every local attendance action is assigned `client_event_id UUID` before network transmission and persisted transactionally.
 
+The local database is bound to the authenticated StaffUser. A different account cannot submit another user's unresolved queue. A confirmed 401 revokes offline access and removes cached participant PII while preserving unresolved attendance identifiers for recovery after the original account is revalidated.
+
 Status locally:
 - `PENDING`;
 - `SYNCING`;

@@ -13,9 +13,13 @@ import { join, relative, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const runtime = resolve(root, '.runtime', 'native-demo');
-const dataDirectory = join(runtime, 'mysql-data');
+const storageRuntime =
+  process.platform === 'win32' && process.env.LOCALAPPDATA
+    ? resolve(process.env.LOCALAPPDATA, 'event-registration-native-demo')
+    : runtime;
+const dataDirectory = join(storageRuntime, 'mysql-data');
 const pidFile = join(runtime, 'controller.pid');
-const mysqlInitFile = join(runtime, 'mysql-init.sql');
+const mysqlInitFile = join(storageRuntime, 'mysql-init.sql');
 const envFile = resolve(root, '.demo.env');
 const mysqlPort = 3307;
 const processes = [];
@@ -33,6 +37,22 @@ const safeRuntimePath = (path) => {
   const part = relative(root, path);
   if (!part || part.startsWith('..') || !part.startsWith('.runtime')) {
     throw new Error(`Refusing to modify an unsafe runtime path: ${path}`);
+  }
+};
+
+const safeStorageRuntimePath = (path) => {
+  if (storageRuntime === runtime) {
+    safeRuntimePath(path);
+    return;
+  }
+  const localAppData = resolve(process.env.LOCALAPPDATA);
+  const part = relative(localAppData, path);
+  if (
+    !part ||
+    part.startsWith('..') ||
+    !part.startsWith('event-registration-native-demo')
+  ) {
+    throw new Error(`Refusing to modify an unsafe demo storage path: ${path}`);
   }
 };
 
@@ -378,7 +398,9 @@ const start = async () => {
     CORS_ORIGINS: 'http://localhost:5173,http://localhost:5174',
     AUTH_LINK_BASE_URL: 'http://localhost:5173/auth/',
     PUBLIC_WEB_BASE_URL: 'http://localhost:5173',
-    CONSENT_URL: 'http://localhost:5173/consent',
+    CONSENT_URL: 'https://static.mskobr.ru/docs/soglasie_na_obrabotku_pnd.pdf',
+    PRIVACY_POLICY_URL:
+      'https://st.educom.ru/eduoffices/gateways/get_file.php?id={C6751185-7D3C-F320-3D87-C704B3683104}&name=politika_v_otnoshenii_pd_rkait20.pdf',
     CONSENT_VERSION: 'demo-v1',
     VITE_API_BASE_URL: 'http://localhost:3000',
   };
@@ -505,6 +527,10 @@ const reset = () => {
   down();
   safeRuntimePath(runtime);
   rmSync(runtime, { recursive: true, force: true });
+  if (storageRuntime !== runtime) {
+    safeStorageRuntimePath(storageRuntime);
+    rmSync(storageRuntime, { recursive: true, force: true });
+  }
   rmSync(envFile, { force: true });
   console.log('Native demo data and local demo secrets were removed.');
 };

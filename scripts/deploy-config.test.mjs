@@ -29,7 +29,9 @@ const valid = () => ({
   AUTH_RATE_LIMIT_WINDOW_SECONDS: '60',
   QR_SIGNING_SECRET: 'qr-signing-secret-that-is-longer-than-32-bytes',
   PUBLIC_WEB_BASE_URL: 'https://events.kait20.ru',
-  CONSENT_URL: 'https://kait20.ru/privacy',
+  CONSENT_URL: 'https://static.mskobr.ru/docs/soglasie_na_obrabotku_pnd.pdf',
+  PRIVACY_POLICY_URL:
+    'https://st.educom.ru/eduoffices/gateways/get_file.php?id={C6751185-7D3C-F320-3D87-C704B3683104}&name=politika_v_otnoshenii_pd_rkait20.pdf',
   CONSENT_VERSION: '2026-08-26',
   EMAIL_MAX_ATTEMPTS: '5',
   EMAIL_POLL_INTERVAL_MS: '1000',

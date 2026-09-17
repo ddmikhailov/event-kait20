@@ -134,6 +134,7 @@ def database_url() -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def client(database_url: str) -> Iterator[TestClient]:
+    media_root = tempfile.mkdtemp(prefix="event-registration-media-")
     os.environ.update(
         DATABASE_URL=database_url,
         NODE_ENV="test",
@@ -143,9 +144,11 @@ def client(database_url: str) -> Iterator[TestClient]:
         AUTH_LINK_BASE_URL="http://localhost:5173/auth",
         QR_SIGNING_SECRET="q" * 32,
         PUBLIC_WEB_BASE_URL="http://localhost:5173",
-        CONSENT_URL="http://localhost:5173/consent",
+        CONSENT_URL="https://static.mskobr.ru/docs/soglasie_na_obrabotku_pnd.pdf",
+        PRIVACY_POLICY_URL="https://st.educom.ru/eduoffices/gateways/get_file.php?id={C6751185-7D3C-F320-3D87-C704B3683104}&name=politika_v_otnoshenii_pd_rkait20.pdf",
         CONSENT_VERSION="test-v1",
         AUTH_RATE_LIMIT_MAX="10000",
+        MEDIA_ROOT=media_root,
     )
     from event_api.config import get_settings
 
@@ -153,7 +156,29 @@ def client(database_url: str) -> Iterator[TestClient]:
     from event_api.migrate import apply_migrations
 
     apply_migrations()
+    from event_api.bootstrap import create_activation_token
     from event_api.main import create_app
+    from event_api.security import token_hash
 
     with TestClient(create_app()) as test_client:
+        database = test_client.app.state.database
+        config = test_client.app.state.settings
+        raw_activation = create_activation_token("admin@example.com", database, config)
+        with database.connect() as connection:
+            invitation_hash = connection.exec_driver_sql(
+                "SELECT token_hash FROM staff_invitations WHERE role='SUPER_ADMIN'"
+            ).scalar_one()
+        assert invitation_hash == token_hash(raw_activation)
+        assert raw_activation != invitation_hash
+        activated = test_client.post(
+            f"/auth/invitations/{raw_activation}/accept",
+            headers={"Origin": "http://localhost:5173"},
+            json={"password": "correct horse battery"},
+        )
+        assert activated.status_code == 200, activated.text
+        test_client.app.state.bootstrap_test = {
+            "rawActivation": raw_activation,
+            "invitationHash": invitation_hash,
+        }
         yield test_client
+    shutil.rmtree(media_root, ignore_errors=True)

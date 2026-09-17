@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  activityOperationResponseSchema,
   createEventRequestSchema,
   attendanceSyncRequestSchema,
   excelImportCommitRequestSchema,
   healthResponseSchema,
   passwordResetRequestSchema,
+  participationConfirmRequestSchema,
+  publicProfileSchema,
   scannerOnsiteRegistrationRequestSchema,
   publicRegistrationRequestSchema,
+  publicRegistrationResponseSchema,
   sendTicketsRequestSchema,
 } from './index';
 
@@ -41,7 +45,7 @@ describe('healthResponseSchema', () => {
     ).toBe('Europe/Moscow');
   });
 
-  it('normalizes a public registration and enforces conditional fields', () => {
+  it('normalizes registration; event configuration controls conditional requirements', () => {
     const result = publicRegistrationRequestSchema.parse({
       lastName: ' Иванов ',
       firstName: 'Иван',
@@ -62,11 +66,41 @@ describe('healthResponseSchema', () => {
         personType: 'EXTERNAL_STUDENT',
         organization: null,
       }),
+    ).not.toThrow();
+    for (const personType of ['PARENT', 'OTHER'] as const) {
+      expect(
+        publicRegistrationRequestSchema.parse({
+          ...result,
+          personType,
+          studyGroup: null,
+          organization: null,
+        }).personType,
+      ).toBe(personType);
+    }
+  });
+
+  it('keeps an existing public registration response free of ticket capabilities', () => {
+    const response = publicRegistrationResponseSchema.parse({
+      status: 'ALREADY_REGISTERED',
+      recoveryQueued: true,
+    });
+    expect(response).toEqual({
+      status: 'ALREADY_REGISTERED',
+      recoveryQueued: true,
+    });
+    expect(() =>
+      publicRegistrationResponseSchema.parse({
+        status: 'ALREADY_REGISTERED',
+        recoveryQueued: true,
+        registrationId: '22222222-2222-4222-8222-222222222222',
+        ticketUrl: 'https://example.test/ticket',
+      }),
     ).toThrow();
   });
 
-  it('allows onsite registration without email but rejects scanner overbooking flags', () => {
+  it('allows onsite registration without email and an explicit capacity override', () => {
     const values = {
+      consentAccepted: true,
       lastName: 'Петров',
       firstName: 'Пётр',
       birthDate: '2004-03-04',
@@ -78,12 +112,15 @@ describe('healthResponseSchema', () => {
     expect(scannerOnsiteRegistrationRequestSchema.parse(values).email).toBe(
       undefined,
     );
-    expect(() =>
+    expect(
       scannerOnsiteRegistrationRequestSchema.parse({
         ...values,
         capacityOverride: true,
-      }),
-    ).toThrow();
+      }).capacityOverride,
+    ).toBe(true);
+    expect(
+      scannerOnsiteRegistrationRequestSchema.parse(values).capacityOverride,
+    ).toBeUndefined();
   });
 
   it('bounds attendance batches and rejects duplicate client event ids', () => {
@@ -144,5 +181,49 @@ describe('healthResponseSchema', () => {
         registrationIds: [registrationId, registrationId],
       }),
     ).toThrow();
+  });
+
+  it('requires an audit reason when participation is confirmed without attendance', () => {
+    const registrationId = '11111111-1111-4111-8111-111111111111';
+    expect(() =>
+      participationConfirmRequestSchema.parse({
+        registrationIds: [registrationId],
+        confirmWithoutAttendance: true,
+      }),
+    ).toThrow();
+    expect(
+      participationConfirmRequestSchema.parse({
+        registrationIds: [registrationId],
+        confirmWithoutAttendance: true,
+        overrideReason: 'Подтверждено по ведомости организатора',
+      }).confirmWithoutAttendance,
+    ).toBe(true);
+  });
+
+  it('keeps public activity profiles free of internal person identifiers and PII', () => {
+    expect(
+      publicProfileSchema.parse({
+        publicSlug: 'public-profile-slug',
+        displayName: 'Иванов Иван',
+        totalPoints: 25,
+      }),
+    ).toEqual({
+      publicSlug: 'public-profile-slug',
+      displayName: 'Иванов Иван',
+      totalPoints: 25,
+    });
+    expect(() =>
+      publicProfileSchema.parse({
+        publicSlug: 'public-profile-slug',
+        personId: '22222222-2222-4222-8222-222222222222',
+        email: 'student@example.com',
+      }),
+    ).toThrow();
+  });
+
+  it('parses idempotent activity operation responses', () => {
+    expect(activityOperationResponseSchema.parse({ accepted: true })).toEqual({
+      accepted: true,
+    });
   });
 });

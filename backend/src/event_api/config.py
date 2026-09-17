@@ -6,6 +6,13 @@ from typing import Annotated, Literal
 from pydantic import AnyHttpUrl, Field, MySQLDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+APPROVED_CONSENT_URL = "https://static.mskobr.ru/docs/soglasie_na_obrabotku_pnd.pdf"
+APPROVED_PRIVACY_POLICY_URL = (
+    "https://st.educom.ru/eduoffices/gateways/get_file.php?"
+    "id={C6751185-7D3C-F320-3D87-C704B3683104}"
+    "&name=politika_v_otnoshenii_pd_rkait20.pdf"
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -30,6 +37,7 @@ class Settings(BaseSettings):
     qr_signing_secret: str = Field(min_length=32)
     public_web_base_url: AnyHttpUrl
     consent_url: AnyHttpUrl
+    privacy_policy_url: AnyHttpUrl
     consent_version: str = Field(min_length=1, max_length=255)
     email_max_attempts: int = Field(default=5, ge=1, le=20)
     email_poll_interval_ms: int = Field(default=1_000, ge=100, le=60_000)
@@ -40,6 +48,8 @@ class Settings(BaseSettings):
     smtp_from_email: str | None = None
     smtp_from_name: str = "Регистрация на мероприятие"
     smtp_starttls: bool = True
+    media_root: Path = Path(".runtime/media")
+    cover_max_bytes: int = Field(default=5_242_880, ge=1024, le=20_971_520)
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -61,6 +71,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
+        if str(self.consent_url) != APPROVED_CONSENT_URL:
+            raise ValueError("CONSENT_URL must reference the approved consent document")
+        if str(self.privacy_policy_url) != APPROVED_PRIVACY_POLICY_URL:
+            raise ValueError(
+                "PRIVACY_POLICY_URL must reference the approved privacy policy"
+            )
         if not self.production:
             return self
         urls = [
@@ -68,6 +84,7 @@ class Settings(BaseSettings):
             str(self.auth_link_base_url),
             str(self.public_web_base_url),
             str(self.consent_url),
+            str(self.privacy_policy_url),
         ]
         if any(not value.lower().startswith("https://") for value in urls):
             raise ValueError("Production browser-facing URLs must use HTTPS")
@@ -80,6 +97,8 @@ class Settings(BaseSettings):
             raise ValueError("SMTP_FROM_EMAIL is required when SMTP_HOST is set")
         if self.smtp_host and not self.smtp_starttls:
             raise ValueError("SMTP STARTTLS is required in production")
+        if not self.media_root.is_absolute():
+            raise ValueError("MEDIA_ROOT must be an absolute path in production")
         return self
 
     @property

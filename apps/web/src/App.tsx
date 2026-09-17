@@ -1,12 +1,27 @@
 import type {
   PublicEventResponse,
+  PublicEventSummary,
   PublicRegistrationResponse,
   TicketResponse,
 } from '@event-registration/contracts';
-import { Button } from '@event-registration/ui';
-import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
+import {
+  Button,
+  BooleanQuestion,
+  RegistrationSystemFields,
+  ConsentCheckbox,
+} from '@event-registration/ui';
+import { StreamSelector } from './EventStreams.js';
+import { defaultSystemFields } from '@event-registration/contracts';
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from 'react';
 
-import { PublicApiError, publicApi } from './api-client.js';
+import { PublicApiError, publicApi, publicMediaUrl } from './api-client.js';
 import {
   RegistrationFormError,
   registrationValues,
@@ -14,6 +29,7 @@ import {
 
 type Route =
   | { kind: 'admin' }
+  | { kind: 'events' }
   | { kind: 'event'; slug: string }
   | { kind: 'ticket'; publicId: string; signature: string }
   | { kind: 'password-reset'; token: string }
@@ -23,23 +39,36 @@ type Route =
 
 export const App = () => {
   const route = currentRoute();
+  let page: React.ReactNode;
   if (route.kind === 'admin') {
-    return (
+    page = (
       <Suspense fallback={<LoadingPage text="Открываем кабинет…" />}>
         <AdminApp />
       </Suspense>
     );
-  }
-  if (route.kind === 'event') return <EventPage slug={route.slug} />;
-  if (route.kind === 'ticket') {
-    return <TicketPage publicId={route.publicId} signature={route.signature} />;
-  }
-  if (route.kind === 'password-reset' || route.kind === 'invitation') {
-    return <AuthLinkPage kind={route.kind} token={route.token} />;
-  }
-  if (route.kind === 'password-forgot') return <PasswordForgotPage />;
-  return <HomePage />;
+  } else if (route.kind === 'events') page = <EventCatalogPage />;
+  else if (route.kind === 'event') page = <EventPage slug={route.slug} />;
+  else if (route.kind === 'ticket')
+    page = <TicketPage publicId={route.publicId} signature={route.signature} />;
+  else if (route.kind === 'password-reset' || route.kind === 'invitation')
+    page = <AuthLinkPage kind={route.kind} token={route.token} />;
+  else if (route.kind === 'password-forgot') page = <PasswordForgotPage />;
+  else page = <HomePage />;
+  return (
+    <>
+      <BrandLogo />
+      {page}
+    </>
+  );
 };
+
+const BrandLogo = () => (
+  <header className="site-header">
+    <a className="global-brand" href="/" aria-label="На главную КАИТ №20">
+      <img src="/kait20-logo.png" alt="КАИТ №20" />
+    </a>
+  </header>
+);
 
 const PasswordForgotPage = () => {
   const [sent, setSent] = useState(false);
@@ -108,7 +137,7 @@ const AuthLinkPage = ({
     try {
       if (kind === 'invitation') {
         const result = await publicApi.acceptInvitation(token, password);
-        setDestination(result.role === 'SUPER_ADMIN' ? '/admin' : '/scanner');
+        setDestination(result.role === 'SCANNER' ? '/scanner' : '/admin');
       } else await publicApi.resetPassword(token, password);
       setMessage('Пароль сохранён. Теперь можно войти в рабочий интерфейс.');
     } catch (caught) {
@@ -183,20 +212,26 @@ const EventPage = ({ slug }: { slug: string }) => {
 
   useEffect(() => {
     let cancelled = false;
-    void publicApi
-      .event(slug)
-      .then((response) => {
-        if (cancelled) return;
-        setEvent(response);
-        document.title = `${response.title} — регистрация`;
-      })
-      .catch((caught: unknown) => {
-        if (!cancelled) setError(messageForError(caught));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    const refresh = () =>
+      publicApi
+        .event(slug)
+        .then((response) => {
+          if (cancelled) return;
+          setEvent(response);
+          document.title = `${response.title} — регистрация`;
+        })
+        .catch((caught: unknown) => {
+          if (!cancelled) setError(messageForError(caught));
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    void refresh();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh();
+    }, 30_000);
     return () => {
+      window.clearInterval(interval);
       cancelled = true;
     };
   }, [slug]);
@@ -232,7 +267,7 @@ const EventPage = ({ slug }: { slug: string }) => {
               : availabilityMessage(event.availability)}
           </h2>
           <p>
-            После регистрации билет придёт на email. Поля со звёздочкой
+            Если вы укажете email, на него придёт билет. Поля со звёздочкой
             обязательны.
           </p>
         </div>
@@ -255,12 +290,22 @@ const EventPage = ({ slug }: { slug: string }) => {
 };
 
 const EventHero = ({ event }: { event: PublicEventResponse }) => (
-  <header className="event-hero">
-    <div className="brand-mark" aria-hidden="true">
-      КАИТ №20
-    </div>
+  <header
+    className={`event-hero ${event.coverObjectKey ? 'has-cover' : ''}`}
+    style={
+      event.coverObjectKey
+        ? {
+            backgroundImage: `linear-gradient(90deg, rgb(20 21 70 / 92%), rgb(43 44 124 / 58%)), url("${publicMediaUrl(event.coverObjectKey)}")`,
+          }
+        : undefined
+    }
+  >
     <div className="hero-content">
       <p className="eyebrow">Мероприятие КАИТ №20</p>
+      <EventStatusLabel status={event.effectiveStatus} />
+      {event.direction && (
+        <span className="event-direction">{event.direction}</span>
+      )}
       <h1>{event.title}</h1>
       {event.description && <p className="description">{event.description}</p>}
       <dl className="event-facts">
@@ -286,72 +331,20 @@ export const RegistrationForm = ({
   submitting: boolean;
   onSubmit: (values: FormData) => Promise<void>;
 }) => {
-  const [personType, setPersonType] = useState<
-    'KAIT_STUDENT' | 'KAIT_TEACHER' | 'EXTERNAL_STUDENT' | 'EXTERNAL_TEACHER'
-  >('KAIT_STUDENT');
+  const [requestId] = useState(() => crypto.randomUUID());
   const submit = (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
     void onSubmit(new FormData(formEvent.currentTarget));
   };
   return (
     <form className="registration-form" onSubmit={submit} noValidate={false}>
-      <fieldset>
-        <legend>Основная информация</legend>
-        <div className="form-grid">
-          <TextField name="lastName" label="Фамилия" required maxLength={100} />
-          <TextField name="firstName" label="Имя" required maxLength={100} />
-          <TextField name="middleName" label="Отчество" maxLength={100} />
-          <TextField
-            name="birthDate"
-            label="Дата рождения"
-            type="date"
-            required
-          />
-          <TextField name="email" label="Email" type="email" required />
-          <TextField
-            name="phone"
-            label="Телефон"
-            type="tel"
-            placeholder="+7 999 000-00-00"
-            required
-          />
-          <label>
-            <span>Статус участника *</span>
-            <select
-              name="personType"
-              value={personType}
-              onChange={(changeEvent) =>
-                setPersonType(changeEvent.target.value as typeof personType)
-              }
-            >
-              <option value="KAIT_STUDENT">Студент КАИТ №20</option>
-              <option value="KAIT_TEACHER">Преподаватель КАИТ №20</option>
-              <option value="EXTERNAL_STUDENT">
-                Студент другой организации
-              </option>
-              <option value="EXTERNAL_TEACHER">
-                Преподаватель другой организации
-              </option>
-            </select>
-          </label>
-          {personType.endsWith('_STUDENT') && (
-            <TextField
-              name="studyGroup"
-              label="Учебная группа"
-              required
-              maxLength={100}
-            />
-          )}
-          {personType.startsWith('EXTERNAL_') && (
-            <TextField
-              name="organization"
-              label="Образовательная организация"
-              required
-              maxLength={255}
-            />
-          )}
-        </div>
-      </fieldset>
+      {event.streamsEnabled && <StreamSelector streams={event.streams ?? []} />}
+      <input type="hidden" name="requestId" value={requestId} />
+      <RegistrationSystemFields
+        fields={event.systemFields ?? defaultSystemFields('public', true)}
+        allowedTypes={event.allowedPersonTypes}
+        disabled={submitting}
+      />
 
       {event.formFields.length > 0 && (
         <fieldset>
@@ -364,22 +357,16 @@ export const RegistrationForm = ({
         </fieldset>
       )}
 
-      <label className="consent-row">
-        <input name="consentAccepted" type="checkbox" required />
-        <span>
-          Я согласен(на) на обработку персональных данных в соответствии с{' '}
-          <a href={event.consentUrl} target="_blank" rel="noreferrer">
-            условиями обработки
-          </a>
-          . *
-        </span>
-      </label>
+      <ConsentCheckbox
+        consentUrl={event.consentUrl}
+        privacyPolicyUrl={event.privacyPolicyUrl}
+      />
       <Button type="submit" disabled={submitting}>
         {submitting ? 'Регистрируем…' : 'Получить билет'}
       </Button>
       <p className="form-footnote">
-        Если вы уже зарегистрированы, новая запись не создастся — билет будет
-        отправлен повторно.
+        Сохраните билет после регистрации. Если email не указан, письмо с
+        билетом не придёт.
       </p>
     </form>
   );
@@ -390,14 +377,14 @@ type PublicField = PublicEventResponse['formFields'][number];
 const DynamicField = ({ field }: { field: PublicField }) => {
   const name = `field-${field.id}`;
   const label = `${field.label}${field.required ? ' *' : ''}`;
-  if (field.type === 'BOOLEAN') {
+  if (field.type === 'BOOLEAN')
     return (
-      <label className="choice-row">
-        <input name={name} type="checkbox" required={field.required} />
-        <span>{label}</span>
-      </label>
+      <BooleanQuestion
+        name={name}
+        label={field.label}
+        required={field.required}
+      />
     );
-  }
   if (field.type === 'SINGLE_CHOICE') {
     return (
       <label>
@@ -436,24 +423,7 @@ const DynamicField = ({ field }: { field: PublicField }) => {
   );
 };
 
-const TextField = ({
-  label,
-  required = false,
-  ...props
-}: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'required'> & {
-  label: string;
-  required?: boolean;
-}) => (
-  <label>
-    <span>
-      {label}
-      {required ? ' *' : ''}
-    </span>
-    <input {...props} required={required} />
-  </label>
-);
-
-const RegistrationSuccess = ({
+export const RegistrationSuccess = ({
   event,
   result,
 }: {
@@ -468,18 +438,29 @@ const RegistrationSuccess = ({
       <p className="eyebrow">
         {result.status === 'REGISTERED'
           ? 'Регистрация завершена'
-          : 'Вы уже зарегистрированы'}
+          : 'Регистрация уже существует'}
       </p>
       <h1>{event.title}</h1>
-      <p>
-        {result.status === 'REGISTERED'
-          ? 'Мы отправили билет на указанный email.'
-          : 'Новую регистрацию создавать не стали. Билет отправлен повторно.'}
-      </p>
-      <a className="primary-link" href={result.ticketUrl} rel="noreferrer">
-        Открыть билет
-      </a>
-      <p className="muted">Сохраните письмо или эту ссылку до мероприятия.</p>
+      {result.status === 'REGISTERED' ? (
+        <>
+          <p>
+            Откройте и сохраните билет. Если вы указали email, письмо поставлено
+            в очередь отправки; его доставка может занять некоторое время.
+          </p>
+          <a className="primary-link" href={result.ticketUrl} rel="noreferrer">
+            Открыть билет
+          </a>
+          <p className="muted">
+            Сохраните письмо или эту ссылку до мероприятия.
+          </p>
+        </>
+      ) : (
+        <p>
+          {result.recoveryQueued
+            ? 'Билет повторно отправлен на email, который был указан при первоначальной регистрации. Мы не изменили сохранённые данные.'
+            : 'Мы не изменили сохранённые данные. Чтобы получить билет или скорректировать регистрацию, обратитесь к организатору мероприятия.'}
+        </p>
+      )}
     </section>
   </main>
 );
@@ -535,6 +516,7 @@ export const TicketCard = ({
       <header>
         <p className="eyebrow">Билет участника</p>
         <h1>{ticket.event.title}</h1>
+        {ticket.event.streamTitle && <p>{ticket.event.streamTitle}</p>}
       </header>
       <img className="ticket-qr" src={qrImage} alt="QR-код билета" />
       <section className="ticket-details">
@@ -553,18 +535,371 @@ export const TicketCard = ({
   </main>
 );
 
-const HomePage = () => (
-  <main className="centered-page">
-    <section className="home-card">
-      <p className="eyebrow">КАИТ №20</p>
-      <h1>Регистрация на мероприятия</h1>
-      <p>
-        Откройте персональную ссылку мероприятия, которую получили от
-        организаторов.
-      </p>
-    </section>
-  </main>
+const usePublicEvents = () => {
+  const [events, setEvents] = useState<PublicEventSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () =>
+      publicApi
+        .events()
+        .then((response) => {
+          if (!cancelled) setEvents(response.items);
+        })
+        .catch((caught: unknown) => {
+          if (!cancelled) setError(messageForError(caught));
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    void refresh();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh();
+    }, 30_000);
+    return () => {
+      window.clearInterval(interval);
+      cancelled = true;
+    };
+  }, []);
+  return { events, loading, error };
+};
+
+const HomePage = () => {
+  const { events, loading, error } = usePublicEvents();
+  const featured = events.slice(0, 4);
+  return (
+    <main className="calendar-page">
+      <header className="calendar-hero">
+        <p className="eyebrow">Открытые мероприятия КАИТ №20</p>
+        <h1>Учитесь, пробуйте, участвуйте</h1>
+        <p>Выберите интересное событие и зарегистрируйтесь онлайн.</p>
+      </header>
+      <section
+        className="featured-events-section"
+        aria-labelledby="featured-title"
+      >
+        <header className="public-section-heading">
+          <div>
+            <p className="eyebrow">Ближайшие события</p>
+            <h2 id="featured-title">Мероприятия</h2>
+          </div>
+          <a className="catalog-link" href="/events">
+            Все мероприятия <span aria-hidden="true">→</span>
+          </a>
+        </header>
+        {loading && <p className="calendar-state">Загружаем мероприятия…</p>}
+        {error && <Message kind="error">{error}</Message>}
+        {!loading && !error && featured.length === 0 && <PublicEventsEmpty />}
+        {featured.length > 0 && (
+          <div className="compact-event-list">
+            {featured.map((event) => (
+              <CompactEventRow event={event} key={event.id} />
+            ))}
+          </div>
+        )}
+      </section>
+      <footer className="calendar-footer">
+        КАИТ №20 · Мастерство и профессионализм
+      </footer>
+    </main>
+  );
+};
+
+const EventCatalogPage = () => {
+  const { events, loading, error } = usePublicEvents();
+  const [query, setQuery] = useState('');
+  const [direction, setDirection] = useState('ALL');
+  const [month, setMonth] = useState('ALL');
+  const [location, setLocation] = useState('ALL');
+  const directions = useMemo(
+    () =>
+      [
+        ...new Set(events.map((event) => event.direction).filter(Boolean)),
+      ] as string[],
+    [events],
+  );
+  const months = useMemo(() => {
+    const values = new Map<string, string>();
+    for (const event of events)
+      values.set(eventMonthKey(event), eventMonthLabel(event));
+    return [...values.entries()];
+  }, [events]);
+  const locations = useMemo(
+    () => [...new Set(events.map((event) => event.location))],
+    [events],
+  );
+  const visible = useMemo(
+    () => filterPublicEvents(events, { query, direction, month, location }),
+    [events, query, direction, month, location],
+  );
+  const hasFilters =
+    query.trim() !== '' ||
+    direction !== 'ALL' ||
+    month !== 'ALL' ||
+    location !== 'ALL';
+  return (
+    <main className="catalog-page">
+      <a className="back-link" href="/">
+        ← На главную
+      </a>
+      <header className="catalog-hero">
+        <p className="eyebrow">Афиша КАИТ №20</p>
+        <h1>Все мероприятия</h1>
+        <p>
+          Найдите событие по названию, категории, месяцу или месту проведения.
+        </p>
+      </header>
+      <section
+        className="catalog-filters"
+        aria-label="Поиск и фильтры мероприятий"
+      >
+        <label className="catalog-search">
+          <span>Поиск</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Название, описание или место"
+          />
+        </label>
+        <label>
+          <span>Категория</span>
+          <select
+            value={direction}
+            onChange={(event) => setDirection(event.target.value)}
+          >
+            <option value="ALL">Все категории</option>
+            {directions.map((item) => (
+              <option key={item}>{item}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Месяц</span>
+          <select
+            value={month}
+            onChange={(event) => setMonth(event.target.value)}
+          >
+            <option value="ALL">Любой месяц</option>
+            {months.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Место</span>
+          <select
+            value={location}
+            onChange={(event) => setLocation(event.target.value)}
+          >
+            <option value="ALL">Любое место</option>
+            {locations.map((item) => (
+              <option key={item}>{item}</option>
+            ))}
+          </select>
+        </label>
+        {hasFilters && (
+          <button
+            className="clear-filters"
+            type="button"
+            onClick={() => {
+              setQuery('');
+              setDirection('ALL');
+              setMonth('ALL');
+              setLocation('ALL');
+            }}
+          >
+            Сбросить фильтры
+          </button>
+        )}
+      </section>
+      <div className="catalog-results-heading" aria-live="polite">
+        <strong>{visible.length}</strong> {eventCountLabel(visible.length)}
+      </div>
+      {loading && <p className="calendar-state">Загружаем мероприятия…</p>}
+      {error && <Message kind="error">{error}</Message>}
+      {!loading && !error && visible.length === 0 && (
+        <section className="calendar-empty">
+          <h2>
+            {hasFilters ? 'Ничего не найдено' : 'Скоро появятся новые события'}
+          </h2>
+          <p>
+            {hasFilters
+              ? 'Измените запрос или сбросьте часть фильтров.'
+              : 'Сейчас нет опубликованных предстоящих мероприятий.'}
+          </p>
+        </section>
+      )}
+      <section
+        className="calendar-event-grid"
+        aria-label="Найденные мероприятия"
+      >
+        {visible.map((event) => (
+          <PublicEventCard event={event} key={event.id} />
+        ))}
+      </section>
+    </main>
+  );
+};
+
+type CatalogFilters = {
+  query: string;
+  direction: string;
+  month: string;
+  location: string;
+};
+
+export const filterPublicEvents = (
+  events: PublicEventSummary[],
+  filters: CatalogFilters,
+) => {
+  const query = filters.query.trim().toLocaleLowerCase('ru-RU');
+  return events.filter((event) => {
+    const searchable = [
+      event.title,
+      event.description,
+      event.location,
+      event.direction,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLocaleLowerCase('ru-RU');
+    return (
+      (!query || searchable.includes(query)) &&
+      (filters.direction === 'ALL' || event.direction === filters.direction) &&
+      (filters.month === 'ALL' || eventMonthKey(event) === filters.month) &&
+      (filters.location === 'ALL' || event.location === filters.location)
+    );
+  });
+};
+
+const CompactEventRow = ({ event }: { event: PublicEventSummary }) => (
+  <article className="compact-event-row">
+    <time dateTime={event.startAt} className="compact-event-date">
+      <strong>{eventDateParts(event).day}</strong>
+      <span>{shortMonth(event)}</span>
+    </time>
+    <div>
+      <EventStatusLabel status={event.effectiveStatus} />
+      <div className="event-card-meta">
+        <span>{eventDateParts(event).label}</span>
+        {event.direction && <span>{event.direction}</span>}
+      </div>
+      <h3>
+        <a href={`/events/${encodeURIComponent(event.slug)}`}>{event.title}</a>
+      </h3>
+      <p>{event.location}</p>
+    </div>
+    <a
+      className="compact-event-action"
+      href={`/events/${encodeURIComponent(event.slug)}`}
+      aria-label={`Открыть мероприятие «${event.title}»`}
+    >
+      <span aria-hidden="true">→</span>
+    </a>
+  </article>
 );
+
+const PublicEventsEmpty = () => (
+  <section className="calendar-empty">
+    <h2>Скоро здесь появятся новые события</h2>
+    <p>Сейчас нет мероприятий с открытой регистрацией.</p>
+  </section>
+);
+
+const zonedDateParts = (value: string, timezone: string) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: timezone,
+  }).formatToParts(new Date(value));
+  const number = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return { year: number('year'), month: number('month'), day: number('day') };
+};
+
+const PublicEventCard = ({ event }: { event: PublicEventSummary }) => (
+  <article className="public-event-card">
+    <a
+      className="event-cover"
+      href={`/events/${encodeURIComponent(event.slug)}`}
+    >
+      {event.coverObjectKey ? (
+        <img src={publicMediaUrl(event.coverObjectKey)} alt="" />
+      ) : (
+        <span aria-hidden="true">{eventDateParts(event).day}</span>
+      )}
+    </a>
+    <div className="public-event-content">
+      <EventStatusLabel status={event.effectiveStatus} />
+      <div className="event-card-meta">
+        <time dateTime={event.startAt}>{eventDateParts(event).label}</time>
+        {event.direction && <span>{event.direction}</span>}
+      </div>
+      <h3>
+        <a href={`/events/${encodeURIComponent(event.slug)}`}>{event.title}</a>
+      </h3>
+      {event.description && <p>{event.description}</p>}
+      <p className="event-location">{event.location}</p>
+      <a
+        className="event-register-link"
+        href={`/events/${encodeURIComponent(event.slug)}`}
+      >
+        Подробнее и регистрация <span aria-hidden="true">→</span>
+      </a>
+    </div>
+  </article>
+);
+
+const eventDateParts = (event: PublicEventSummary) => {
+  const date = new Date(event.startAt);
+  return {
+    day: new Intl.DateTimeFormat('ru-RU', {
+      day: '2-digit',
+      timeZone: event.timezone,
+    }).format(date),
+    label: new Intl.DateTimeFormat('ru-RU', {
+      day: 'numeric',
+      month: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: event.timezone,
+    }).format(date),
+  };
+};
+
+const shortMonth = (event: PublicEventSummary) =>
+  new Intl.DateTimeFormat('ru-RU', {
+    month: 'short',
+    timeZone: event.timezone,
+  })
+    .format(new Date(event.startAt))
+    .replace('.', '');
+
+const eventMonthKey = (event: PublicEventSummary) => {
+  const parts = zonedDateParts(event.startAt, event.timezone);
+  return `${parts.year}-${String(parts.month).padStart(2, '0')}`;
+};
+
+const eventMonthLabel = (event: PublicEventSummary) =>
+  new Intl.DateTimeFormat('ru-RU', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: event.timezone,
+  }).format(new Date(event.startAt));
+
+const eventCountLabel = (count: number) => {
+  const lastTwo = count % 100;
+  const last = count % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) return 'мероприятий';
+  if (last === 1) return 'мероприятие';
+  if (last >= 2 && last <= 4) return 'мероприятия';
+  return 'мероприятий';
+};
 
 const LoadingPage = ({ text }: { text: string }) => (
   <main className="centered-page" aria-busy="true">
@@ -610,6 +945,7 @@ const currentRoute = (): Route => {
       ? []
       : window.location.pathname.split('/').filter(Boolean);
   if (parts[0] === 'admin') return { kind: 'admin' };
+  if (parts[0] === 'events' && !parts[1]) return { kind: 'events' };
   if (parts[0] === 'events' && parts[1]) {
     return { kind: 'event', slug: decodeURIComponent(parts[1]) };
   }
@@ -639,6 +975,13 @@ const messageForError = (error: unknown): string => {
       EVENT_NOT_FOUND: 'Мероприятие не найдено',
       REGISTRATION_CLOSED: 'Регистрация закрыта',
       CAPACITY_FULL: 'Свободных мест больше нет',
+      STREAM_REQUIRED: 'Выберите поток мероприятия',
+      STREAM_INVALID:
+        'Этот поток недоступен. Обновите страницу и выберите другой',
+      STREAM_ALREADY_SELECTED:
+        'Вы уже записаны в другой поток этого мероприятия. Для изменения обратитесь к организатору',
+      PARTICIPANT_TYPE_NOT_ALLOWED:
+        'Мероприятие недоступно для выбранного типа участника',
       FORM_VERSION_INVALID:
         'Форма изменилась. Обновите страницу и попробуйте снова',
       VALIDATION_ERROR: 'Проверьте правильность заполнения формы',
@@ -675,3 +1018,23 @@ const formatPeriod = (start: string, end: string, timezone: string): string => {
 
 const fullName = (name: TicketResponse['participantName']): string =>
   [name.lastName, name.firstName, name.middleName].filter(Boolean).join(' ');
+
+export const EventStatusLabel = ({
+  status,
+}: {
+  status: PublicEventSummary['effectiveStatus'];
+}) =>
+  status ? (
+    <span className={`event-status event-status-${status.toLowerCase()}`}>
+      {
+        {
+          DRAFT: 'Черновик',
+          REGISTRATION_OPEN: 'Регистрация открыта',
+          REGISTRATION_CLOSED: 'Регистрация закрыта',
+          ACTIVE: 'Мероприятие идёт',
+          COMPLETED: 'Мероприятие завершено',
+          ARCHIVED: 'Архив',
+        }[status]
+      }
+    </span>
+  ) : null;

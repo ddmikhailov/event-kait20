@@ -272,6 +272,22 @@ def test_release_load_and_concurrency(client: TestClient) -> None:
     retry_processed = 0
     while process_once(database, smtp_config, retry_sender):
         retry_processed += 1
+    # A transient failure must schedule a future retry, not hot-loop the provider.
+    with database.transaction() as connection:
+        scheduled = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM email_deliveries WHERE status='QUEUED' AND next_attempt_at>UTC_TIMESTAMP(3)"
+            )
+        ).scalar_one()
+        assert scheduled == len(retry_ids)
+        connection.execute(
+            text(
+                "UPDATE email_deliveries SET next_attempt_at=UTC_TIMESTAMP(3) WHERE id IN :ids"
+            ).bindparams(bindparam("ids", expanding=True)),
+            {"ids": retry_ids},
+        )
+    while process_once(database, smtp_config, retry_sender):
+        retry_processed += 1
     email_seconds = time.perf_counter() - email_started
 
     with database.connect() as connection:

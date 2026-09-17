@@ -6,18 +6,139 @@ from fastapi import APIRouter, Depends
 
 from ..config import Settings
 from ..database import Database, execute, row, rows
-from ..dependencies import Staff, csrf_super_admin, database, settings, super_admin
+from ..dependencies import Staff, administrator, csrf_administrator, database, settings
 from ..errors import ApiError
-from ..schemas import EventAccessRequest, StaffInvitationRequest
+from ..schemas import (
+    EventAccessRequest,
+    InvitationResendRequest,
+    StaffInvitationRequest,
+)
 from ..security import auth_link_token, mysql_millis, token_hash, utc_iso
 from ..service_utils import audit
 
 router = APIRouter(prefix="/admin", tags=["staff"])
 
 
+def invitation_delivery(connection: Any, invitation_id: str) -> Any:
+    return row(
+        connection,
+        """SELECT status,updated_at FROM email_deliveries
+        WHERE staff_invitation_id=:id ORDER BY queued_at DESC,id DESC LIMIT 1""",
+        {"id": invitation_id},
+    )
+
+
+@router.get("/staff/invitations")
+def list_invitations(
+    staff: Annotated[Staff, Depends(administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.connect() as connection:
+        items = rows(
+            connection,
+            """SELECT i.id,i.email_normalized,i.role,i.expires_at,i.accepted_at,
+                d.status,d.attempts,d.last_error_code,d.next_attempt_at
+            FROM staff_invitations i
+            LEFT JOIN email_deliveries d ON d.id=(
+                SELECT latest.id FROM email_deliveries latest
+                WHERE latest.staff_invitation_id=i.id
+                ORDER BY latest.queued_at DESC,latest.id DESC LIMIT 1)
+            WHERE (:super=true OR i.role='SCANNER')
+            ORDER BY i.created_at DESC,i.id DESC LIMIT 100""",
+            {"super": staff.role == "SUPER_ADMIN"},
+        )
+    return {
+        "items": [
+            {
+                "id": item["id"],
+                "email": item["email_normalized"],
+                "role": item["role"],
+                "expiresAt": utc_iso(item["expires_at"]),
+                "acceptedAt": utc_iso(item["accepted_at"])
+                if item["accepted_at"]
+                else None,
+                "deliveryStatus": item["status"] or "MISSING",
+                "attempts": int(item["attempts"] or 0),
+                "lastErrorCode": item["last_error_code"],
+                "nextAttemptAt": utc_iso(item["next_attempt_at"])
+                if item["next_attempt_at"]
+                else None,
+            }
+            for item in items
+        ]
+    }
+
+
+@router.post("/staff/invitations/{invitation_id}/resend")
+def resend_invitation(
+    invitation_id: UUID,
+    values: InvitationResendRequest,
+    staff: Annotated[Staff, Depends(csrf_administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    target = str(invitation_id)
+    key = f"invitation-resend:{target}:{values.request_id}"
+    with db.transaction() as connection:
+        invitation = row(
+            connection,
+            "SELECT * FROM staff_invitations WHERE id=:id FOR UPDATE",
+            {"id": target},
+        )
+        if not invitation:
+            raise ApiError(404, "NOT_FOUND", "Invitation not found")
+        if staff.role == "ORGANIZER" and invitation["role"] != "SCANNER":
+            raise ApiError(
+                403, "FORBIDDEN", "Organizer may resend scanner invitations only"
+            )
+        if invitation["accepted_at"] or invitation["expires_at"] <= datetime.now(
+            UTC
+        ).replace(tzinfo=None):
+            raise ApiError(409, "AUTH_LINK_INVALID", "Invitation accepted or expired")
+        repeated = row(
+            connection,
+            "SELECT status FROM email_deliveries WHERE idempotency_key=:key",
+            {"key": key},
+        )
+        latest = invitation_delivery(connection, target)
+        if repeated or (latest and latest["status"] in {"QUEUED", "SENDING"}):
+            delivery = repeated or latest
+            return {
+                "id": target,
+                "expiresAt": utc_iso(invitation["expires_at"]),
+                "status": delivery["status"].lower(),
+            }
+        if latest and latest["updated_at"] > datetime.now(UTC).replace(
+            tzinfo=None
+        ) - timedelta(seconds=60):
+            raise ApiError(429, "RATE_LIMITED", "Wait before resending invitation")
+        execute(
+            connection,
+            """INSERT INTO email_deliveries
+            (id,idempotency_key,type,recipient_email,event_id,staff_invitation_id,
+             status,attempts,queued_at,created_at,updated_at)
+            VALUES (:id,:key,'STAFF_INVITATION',:email,:event,:invitation,
+                    'QUEUED',0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
+            {
+                "id": str(uuid4()),
+                "key": key,
+                "email": invitation["email_normalized"],
+                "event": invitation["event_id"],
+                "invitation": target,
+            },
+        )
+        audit(
+            connection, staff.id, "STAFF_INVITATION_RESENT", "StaffInvitation", target
+        )
+    return {
+        "id": target,
+        "expiresAt": utc_iso(invitation["expires_at"]),
+        "status": "queued",
+    }
+
+
 @router.get("/staff")
 def list_staff(
-    _staff: Annotated[Staff, Depends(super_admin)],
+    _staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
@@ -54,11 +175,14 @@ def assert_event(connection: Any, event_id: str, assignable: bool = False) -> No
 @router.post("/staff/invitations", status_code=201)
 def invite(
     values: StaffInvitationRequest,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, Any]:
     email = str(values.email).lower()
+    role = str(values.role)
+    if staff.role == "ORGANIZER" and role != "SCANNER":
+        raise ApiError(403, "FORBIDDEN", "Organizer may invite scanners only")
     with db.transaction() as connection:
         if row(
             connection,
@@ -71,17 +195,24 @@ def invite(
             assert_event(connection, event_id, True)
         existing = row(
             connection,
-            """SELECT id,expires_at FROM staff_invitations
-            WHERE email_normalized=:email AND event_id <=> :event
+            """SELECT id,expires_at,event_id,role FROM staff_invitations
+            WHERE email_normalized=:email
               AND accepted_at IS NULL AND expires_at>UTC_TIMESTAMP(3)
             ORDER BY created_at DESC LIMIT 1 FOR UPDATE""",
-            {"email": email, "event": event_id},
+            {"email": email},
         )
         if existing:
+            if existing["role"] != role or existing["event_id"] != event_id:
+                raise ApiError(
+                    409,
+                    "CONFLICT",
+                    "A different active invitation already exists for this email",
+                )
+            delivery = invitation_delivery(connection, existing["id"])
             return {
                 "id": existing["id"],
                 "expiresAt": utc_iso(existing["expires_at"]),
-                "status": "queued",
+                "status": delivery["status"].lower() if delivery else "missing",
             }
         invitation_id = str(uuid4())
         expires = mysql_millis(
@@ -95,13 +226,14 @@ def invite(
             connection,
             """INSERT INTO staff_invitations
             (id,email_normalized,token_hash,invited_by,event_id,role,expires_at,created_at)
-            VALUES (:id,:email,:hash,:actor,:event,'SCANNER',:expires,UTC_TIMESTAMP(3))""",
+            VALUES (:id,:email,:hash,:actor,:event,:role,:expires,UTC_TIMESTAMP(3))""",
             {
                 "id": invitation_id,
                 "email": email,
                 "hash": token_hash(token),
                 "actor": staff.id,
                 "event": event_id,
+                "role": role,
                 "expires": expires,
             },
         )
@@ -126,7 +258,7 @@ def invite(
             "STAFF_INVITATION_CREATED",
             "StaffInvitation",
             invitation_id,
-            {"eventAssigned": bool(event_id)},
+            {"eventAssigned": bool(event_id), "role": role},
         )
     return {"id": invitation_id, "expiresAt": utc_iso(expires), "status": "queued"}
 
@@ -134,7 +266,7 @@ def invite(
 @router.post("/staff/{user_id}/deactivate")
 def deactivate(
     user_id: UUID,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     target = str(user_id)
@@ -148,6 +280,8 @@ def deactivate(
         )
         if not user:
             raise ApiError(404, "NOT_FOUND", "Staff user not found")
+        if staff.role == "ORGANIZER" and user["system_role"] != "SCANNER":
+            raise ApiError(403, "FORBIDDEN", "Organizer may deactivate scanners only")
         if not user["active"]:
             return {"status": "accepted"}
         if user["system_role"] == "SUPER_ADMIN":
@@ -176,7 +310,7 @@ def deactivate(
 @router.get("/events/{event_id}/access")
 def list_access(
     event_id: UUID,
-    _staff: Annotated[Staff, Depends(super_admin)],
+    _staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
@@ -204,7 +338,7 @@ def list_access(
 def assign_access(
     event_id: UUID,
     values: EventAccessRequest,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     with db.transaction() as connection:
@@ -245,7 +379,7 @@ def assign_access(
 def remove_access(
     event_id: UUID,
     user_id: UUID,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     with db.transaction() as connection:

@@ -4,6 +4,22 @@
 
 ## 1. Таблицы MVP
 
+Локальное обновление после r2 добавляет миграции 007–010, не меняя 001–006:
+
+- 007: email_deliveries.next_attempt_at и индекс очереди отложенных повторов;
+- 008: events.allowed_person_types (JSON; NULL означает все категории);
+- 009: events.is_listed=true по умолчанию и индекс публичного каталога;
+- 010: events.streams_enabled=false по умолчанию, event_streams и nullable
+  registrations.stream_id. Составной FK (stream_id,event_id) гарантирует принадлежность
+  потока мероприятию. Удаление по FK — RESTRICT. Индекс (stream_id,status) используется
+  при подсчёте мест. CHECK ограничивает положительную capacity, порядок и интервал.
+
+Все даты новых таблиц — UTC DATETIME(3), отображение — Europe/Moscow.
+Уникальность ACTIVE (event_id,person_id) не меняется. При регистрации и изменении
+потоков сначала блокируется Event; это сериализует конкурирующие заявки на место.
+Миграция не назначает потоки старым регистрациям. Для Event с уже существующими
+регистрациями автоматическое включение потоков запрещено.
+
 1. `persons`
 2. `events`
 3. `event_form_fields`
@@ -49,7 +65,7 @@
 - `email_normalized varchar null`
 - `phone varchar null`
 - `phone_normalized varchar null`
-- `person_type enum not null`
+- `person_type enum not null`: `KAIT_STUDENT`, `KAIT_TEACHER`, `EXTERNAL_STUDENT`, `EXTERNAL_TEACHER`, `PARENT`, `OTHER`
 - `organization varchar null`
 - `study_group varchar null`
 - `dedup_review_required boolean default false`
@@ -69,6 +85,7 @@ Do not impose global `UNIQUE(email_normalized)` or `UNIQUE(phone_normalized)`: b
 - `title varchar not null`
 - `slug varchar not null unique`
 - `description text null`
+- `direction varchar(80) null` — public catalogue filter/label
 - `cover_object_key varchar null`
 - `start_at datetime(3) not null`
 - `end_at datetime(3) not null`
@@ -114,6 +131,7 @@ Changes after registrations are allowed but audited. Existing RegistrationAnswer
 - `consent_accepted boolean not null`
 - `consent_version varchar null`
 - `consent_url varchar null`
+- `privacy_policy_url varchar null`
 - `consent_accepted_at datetime(3) null`
 - `registered_at datetime(3) not null`
 - `first_attended_at datetime(3) null`
@@ -177,7 +195,7 @@ Source may distinguish `ONLINE` and `OFFLINE_SYNC`.
 - `password_changed_at datetime(3) not null`
 - timestamps
 
-MVP roles: `SUPER_ADMIN`, `SCANNER`.
+Roles: `SUPER_ADMIN`, `ORGANIZER`, `SCANNER`.
 
 ## 10. `event_access`
 
@@ -268,11 +286,20 @@ concurrent public submissions with the same normalized name plus email, phone
 or birth date from silently creating separate Person rows. Matching remains in
 the service layer; no deduplication trigger is introduced.
 
-SUPER_ADMIN administrative overbooking is a separate explicit action/flag and must be audit logged.
+Administrative overbooking by SUPER_ADMIN/ORGANIZER is a separate explicit
+action/flag and must be audit logged. An assigned SCANNER can also explicitly confirm onsite overbooking; EventAccess remains mandatory.
 
 ## 16. Delete policies
 
-- Event with business history: `RESTRICT`, use archive.
+- Event uses `RESTRICT` by default and archive for normal history retention.
+- Explicit permanent Event purge is available only after archive and only to
+  SUPER_ADMIN. It is rejected with `EVENT_HAS_ACTIVITY_HISTORY` when the Event has
+  any Participation (including DRAFT), linked ScoreTransaction or Achievement.
+  Archive is the normal lifecycle operation; immutable Activity ledger/audit rows
+  are never erased by ordinary purge. An Activity-free purge preserves global
+  Person rows and leaves a compact non-PII `EVENT_PURGED` audit fact.
+- Backup copies are not modified retroactively by purge and disappear only under
+  the organisation's configured backup-retention policy.
 - Registration: annul, not hard delete.
 - Person referenced by Registration: `RESTRICT`; future merge uses `merged_into_id`.
 - EventFormField referenced by answers: soft deactivate, never destructive delete.
@@ -295,6 +322,7 @@ SUPER_ADMIN administrative overbooking is a separate explicit action/flag and mu
 - `attendance_events(event_id, estimated_scanned_at)`
 - `event_access(user_id)`
 - `email_deliveries(status)`
+- `events(status, registration_deadline, start_at)` — public catalogue query
 
 ## 18. Stage 1 implementation decisions
 
@@ -304,3 +332,34 @@ Resolved in the MySQL 8.1.0 baseline migration:
 - the baseline Person name index is a B-tree on `(last_name, first_name, middle_name)`; no optional database extension is required;
 - business timestamp columns use UTC `datetime(3)` values;
 - one ACTIVE Registration per `(event_id, person_id)` is enforced by the reviewed generated-column unique index `registrations_event_id_person_id_active_key` because MySQL 8.1 has no partial unique indexes.
+
+## 19. Registration constructor and retry receipts
+
+Migration `011_registration_form_config.sql` adds nullable `events.form_config` (JSON) and `event_form_fields.onsite_required`. Null configuration preserves r2 requirements; new Events store optional defaults. Both public/onsite configurations contain exactly seven unique system-field keys, each with HIDDEN/OPTIONAL/REQUIRED mode; array order determines presentation. Names and consent cannot be disabled. Null onsite_required inherits the historical required flag.
+
+Technical `registration_requests` stores only SHA-256 request hash, HMAC payload hash, Event/Registration references and creation time. Requests are scoped to Event and staff actor (or public channel), serialized under the Event lock. A matching retry returns the same ticket, without another registration/email; reusing a key with a changed payload is rejected. No raw request UUID or duplicate PII payload is persisted. Receipts live with the Registration and are removed by the explicit Event purge before referenced rows; FK deletion is RESTRICT. Existing strong-identifier deduplication remains; FIO-only matching never merges persons.
+
+Automatic `effectiveStatus` is derived at read time from UTC timestamps and operator publication status, not a mutable counter or scheduled DB update. No status migration or background cron is required; see product spec for exact boundaries.
+
+## 20. Activity foundation
+
+Migration `013_active_foundation.sql` adds seasons, event classifiers,
+participation roles/results, participations, versioned scoring rules, immutable
+score transactions, student profiles/consents, achievements, historical
+memberships and a transactional domain outbox. Existing Event classification
+columns are nullable. Generated unique keys enforce one active Season and one
+award per Participation scoring cycle on MySQL 8.1.0.
+
+Additive migration `014_activity_integrity.sql` adds nullable
+`score_transactions.membership_id` with RESTRICT FK to the historical membership,
+and a generated unique `active_person_id` that permits at most one consent with
+`withdrawn_at IS NULL` per Person. Existing duplicate active consents, if any, are
+withdrawn deterministically except for the latest before the unique index is added.
+The former scoring-rule unique match key becomes a lookup index because identical
+dimensions may have disjoint validity periods. Service writes lock the Season row,
+validate dimension/priority/time overlap and preserve prior versions for delayed
+scoring by `Event.start_at`. Membership writes lock Person and reject inclusive
+date-range overlap. Manual/legacy transactions retain null membership unless explicitly
+attributed later.
+See [docs/ACTIVE-INTEGRATION.md](./ACTIVE-INTEGRATION.md) for the ER model
+and lifecycle.

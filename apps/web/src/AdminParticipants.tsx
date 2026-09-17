@@ -6,11 +6,19 @@ import type {
   RegistrationDetailResponse,
   RegistrationListResponse,
 } from '@event-registration/contracts';
-import { Button } from '@event-registration/ui';
+import {
+  Button,
+  BooleanQuestion,
+  RegistrationSystemFields,
+  ConsentCheckbox,
+} from '@event-registration/ui';
+import { defaultSystemFields } from '@event-registration/contracts';
 import { useCallback, useEffect, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
+import { EventParticipationWorkspace } from './AdminActivity.js';
 import { downloadEventExcel, EventExcel } from './AdminExcel.js';
+import { OnsiteStreamSelector } from './EventStreams.js';
 import {
   onsiteValues,
   participantDefaults,
@@ -37,6 +45,7 @@ export const EventParticipants = ({
   const [selected, setSelected] = useState<RegistrationDetailResponse>();
   const [onsite, setOnsite] = useState(false);
   const [excel, setExcel] = useState(false);
+  const [participation, setParticipation] = useState(false);
   const [fields, setFields] = useState<FormFieldResponse[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
@@ -150,6 +159,17 @@ export const EventParticipants = ({
       />
     );
   }
+  if (participation) {
+    return (
+      <EventParticipationWorkspace
+        event={event}
+        onBack={() => {
+          setParticipation(false);
+          void load();
+        }}
+      />
+    );
+  }
 
   const canRegisterOnsite = [
     'REGISTRATION_OPEN',
@@ -174,6 +194,13 @@ export const EventParticipants = ({
             <p>Регистрационные данные относятся только к этому мероприятию.</p>
           </div>
           <div className="row-actions">
+            <button
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => setParticipation(true)}
+            >
+              Участие и баллы
+            </button>
             <button
               className="secondary-button"
               disabled={busy}
@@ -550,7 +577,7 @@ export const ParticipantForm = ({
             ))}
           </select>
         </label>
-        {personType.endsWith('_STUDENT') && (
+        {personType === 'KAIT_STUDENT' && (
           <ParticipantInput
             name="studyGroup"
             label="Учебная группа"
@@ -633,19 +660,23 @@ const OnsiteRegistration = ({
   fields: FormFieldResponse[];
   onBack: () => void;
 }) => {
-  const [personType, setPersonType] = useState<
-    'KAIT_STUDENT' | 'KAIT_TEACHER' | 'EXTERNAL_STUDENT' | 'EXTERNAL_TEACHER'
-  >('KAIT_STUDENT');
+  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const systemFields =
+    event.formConfig?.onsite ?? defaultSystemFields('onsite', true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
-  const submit = async (form: FormData) => {
+  const submit = async (formElement: HTMLFormElement) => {
+    if (busy) return;
+    const form = new FormData(formElement);
     setBusy(true);
     setNotice(undefined);
     try {
       const result = await adminApi.onsiteRegistration(
         event.id,
-        onsiteValues(form, fields),
+        onsiteValues(form, fields, systemFields),
       );
+      formElement.reset();
+      setRequestId(crypto.randomUUID());
       setNotice({
         kind: 'success',
         text:
@@ -681,95 +712,44 @@ const OnsiteRegistration = ({
             className="admin-form"
             onSubmit={(submitEvent) => {
               submitEvent.preventDefault();
-              void submit(new FormData(submitEvent.currentTarget));
+              void submit(submitEvent.currentTarget);
             }}
           >
-            <div className="form-grid">
-              <ParticipantInput
-                name="lastName"
-                label="Фамилия"
-                value=""
-                required
+            <fieldset disabled={busy}>
+              <input type="hidden" name="requestId" value={requestId} />
+              <OnsiteStreamSelector event={event} />
+              <RegistrationSystemFields
+                key={requestId}
+                fields={systemFields}
+                allowedTypes={event.allowedPersonTypes}
               />
-              <ParticipantInput
-                name="firstName"
-                label="Имя"
-                value=""
-                required
-              />
-              <ParticipantInput name="middleName" label="Отчество" value="" />
-              <ParticipantInput
-                name="birthDate"
-                label="Дата рождения"
-                type="date"
-                value=""
-                required
-              />
-              <ParticipantInput
-                name="email"
-                label="Email"
-                type="email"
-                value=""
-              />
-              <ParticipantInput
-                name="phone"
-                label="Телефон"
-                type="tel"
-                value=""
-                required
-              />
-              <label>
-                <span>Тип участника *</span>
-                <select
-                  name="personType"
-                  value={personType}
-                  onChange={(changeEvent) =>
-                    setPersonType(changeEvent.target.value as typeof personType)
-                  }
-                >
-                  {personTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {personTypeLabel(type)}
-                    </option>
+              <ConsentCheckbox onsite />
+              {fields.length > 0 && (
+                <fieldset className="onsite-fields">
+                  <legend>Дополнительные вопросы</legend>
+                  {fields.map((field) => (
+                    <OnsiteField
+                      key={field.id}
+                      field={{
+                        ...field,
+                        required: field.onsiteRequired ?? field.required,
+                      }}
+                    />
                   ))}
-                </select>
+                </fieldset>
+              )}
+              <label className="capacity-override">
+                <input name="capacityOverride" type="checkbox" />
+                <span>
+                  <strong>Разрешить превышение вместимости</strong>Используйте
+                  только по осознанному решению администратора. Действие попадёт
+                  в аудит.
+                </span>
               </label>
-              {personType.endsWith('_STUDENT') && (
-                <ParticipantInput
-                  name="studyGroup"
-                  label="Учебная группа"
-                  value=""
-                  required
-                />
-              )}
-              {personType.startsWith('EXTERNAL_') && (
-                <ParticipantInput
-                  name="organization"
-                  label="Организация"
-                  value=""
-                  required
-                />
-              )}
-            </div>
-            {fields.length > 0 && (
-              <fieldset className="onsite-fields">
-                <legend>Дополнительные вопросы</legend>
-                {fields.map((field) => (
-                  <OnsiteField key={field.id} field={field} />
-                ))}
-              </fieldset>
-            )}
-            <label className="capacity-override">
-              <input name="capacityOverride" type="checkbox" />
-              <span>
-                <strong>Разрешить превышение вместимости</strong>Используйте
-                только по осознанному решению администратора. Действие попадёт в
-                аудит.
-              </span>
-            </label>
-            <Button type="submit" disabled={busy}>
-              {busy ? 'Регистрируем…' : 'Зарегистрировать'}
-            </Button>
+              <Button type="submit" disabled={busy}>
+                {busy ? 'Регистрируем…' : 'Зарегистрировать'}
+              </Button>
+            </fieldset>
           </form>
         </div>
       </section>
@@ -782,10 +762,11 @@ const OnsiteField = ({ field }: { field: FormFieldResponse }) => {
   const label = `${field.label}${field.required ? ' *' : ''}`;
   if (field.type === 'BOOLEAN')
     return (
-      <label className="admin-checkbox">
-        <input name={name} type="checkbox" required={field.required} />
-        <span>{label}</span>
-      </label>
+      <BooleanQuestion
+        name={name}
+        label={field.label}
+        required={field.required}
+      />
     );
   if (field.type === 'SINGLE_CHOICE')
     return (
@@ -1111,12 +1092,16 @@ const personTypes = [
   'KAIT_TEACHER',
   'EXTERNAL_STUDENT',
   'EXTERNAL_TEACHER',
+  'PARENT',
+  'OTHER',
 ] as const;
 const personTypeLabels = {
   KAIT_STUDENT: 'Студент КАИТ №20',
-  KAIT_TEACHER: 'Преподаватель КАИТ №20',
+  KAIT_TEACHER: 'Сотрудник КАИТ №20',
   EXTERNAL_STUDENT: 'Студент другой организации',
-  EXTERNAL_TEACHER: 'Преподаватель другой организации',
+  EXTERNAL_TEACHER: 'Сотрудник другой организации',
+  PARENT: 'Родитель',
+  OTHER: 'Другое',
 } as const;
 const sourceLabels = {
   PUBLIC_FORM: 'Публичная форма',
@@ -1158,6 +1143,10 @@ const participantError = (error: unknown): Notice => {
       REGISTRATION_NOT_FOUND: 'Регистрация не найдена',
       REGISTRATION_ANNULLED: 'Регистрация уже аннулирована',
       CAPACITY_FULL: 'Свободных мест нет',
+      STREAM_REQUIRED: 'Выберите поток мероприятия',
+      STREAM_INVALID: 'Поток недоступен. Обновите список',
+      STREAM_ALREADY_SELECTED:
+        'Участник уже зарегистрирован в другом потоке этого мероприятия',
       INVALID_EVENT_STATE:
         'Состояние мероприятия не позволяет выполнить операцию',
       FORM_VERSION_INVALID: 'Поля формы изменились. Обновите страницу',

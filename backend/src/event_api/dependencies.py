@@ -9,7 +9,7 @@ from .database import Database, execute, row
 from .errors import ApiError
 from .security import csrf_token, token_hash, verify_csrf
 
-Role = Literal["SUPER_ADMIN", "SCANNER"]
+Role = Literal["SUPER_ADMIN", "ORGANIZER", "SCANNER"]
 
 
 @dataclass(frozen=True)
@@ -89,7 +89,19 @@ def super_admin(staff: Annotated[Staff, Depends(current_staff)]) -> Staff:
     return staff
 
 
+def administrator(staff: Annotated[Staff, Depends(current_staff)]) -> Staff:
+    if staff.role not in {"SUPER_ADMIN", "ORGANIZER"}:
+        raise ApiError(403, "FORBIDDEN", "Insufficient permission")
+    return staff
+
+
 def csrf_super_admin(staff: Annotated[Staff, Depends(csrf_staff)]) -> Staff:
     if staff.role != "SUPER_ADMIN":
+        raise ApiError(403, "FORBIDDEN", "Insufficient permission")
+    return staff
+
+
+def csrf_administrator(staff: Annotated[Staff, Depends(csrf_staff)]) -> Staff:
+    if staff.role not in {"SUPER_ADMIN", "ORGANIZER"}:
         raise ApiError(403, "FORBIDDEN", "Insufficient permission")
     return staff

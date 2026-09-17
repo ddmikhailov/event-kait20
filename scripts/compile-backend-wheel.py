@@ -99,7 +99,8 @@ def compile_wheel(source: Path, output_dir: Path) -> Path:
             "AUTH_LINK_BASE_URL": "http://localhost:5173/auth",
             "QR_SIGNING_SECRET": "q" * 43,
             "PUBLIC_WEB_BASE_URL": "http://localhost:5173",
-            "CONSENT_URL": "http://localhost:5173/privacy",
+            "CONSENT_URL": "https://static.mskobr.ru/docs/soglasie_na_obrabotku_pnd.pdf",
+            "PRIVACY_POLICY_URL": "https://st.educom.ru/eduoffices/gateways/get_file.php?id={C6751185-7D3C-F320-3D87-C704B3683104}&name=politika_v_otnoshenii_pd_rkait20.pdf",
             "CONSENT_VERSION": "release-build-test",
         }
         subprocess.run(

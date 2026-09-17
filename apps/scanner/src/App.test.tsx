@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { App } from './App.js';
+import { App, OnsiteRegistrationForm } from './App.js';
 import { QrCamera } from './QrCamera.js';
 
 describe('scanner shell', () => {
@@ -18,5 +18,17 @@ describe('scanner shell', () => {
         <QrCamera active={false} onDecode={() => undefined} />,
       ),
     ).toContain('aria-label="Область сканирования QR"');
+  });
+
+  it('offers parent and other participant categories onsite', () => {
+    const markup = renderToStaticMarkup(
+      <OnsiteRegistrationForm
+        fields={[]}
+        busy={false}
+        onSubmit={async () => undefined}
+      />,
+    );
+    expect(markup).toContain('<option value="PARENT">Родитель</option>');
+    expect(markup).toContain('<option value="OTHER">Другое</option>');
   });
 });

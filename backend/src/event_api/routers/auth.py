@@ -306,13 +306,38 @@ def accept_invitation(
         is_scanner = (
             invitation["role"] == "SCANNER" and invitation["invited_by"] is not None
         )
+        is_organizer = (
+            invitation["role"] == "ORGANIZER"
+            and invitation["invited_by"] is not None
+            and invitation["event_id"] is None
+        )
         is_first_admin = (
             invitation["role"] == "SUPER_ADMIN"
             and invitation["invited_by"] is None
             and invitation["event_id"] is None
         )
-        if not is_scanner and not is_first_admin:
+        if not is_scanner and not is_organizer and not is_first_admin:
             raise invalid_link()
+        if not is_first_admin:
+            inviter = row(
+                connection,
+                "SELECT system_role,active FROM staff_users WHERE id=:id",
+                {"id": invitation["invited_by"]},
+            )
+            if not inviter or not inviter["active"]:
+                raise invalid_link()
+            if inviter["system_role"] != "SUPER_ADMIN" and not (
+                is_scanner and inviter["system_role"] == "ORGANIZER"
+            ):
+                raise invalid_link()
+        if is_scanner and invitation["event_id"]:
+            event = row(
+                connection,
+                "SELECT status FROM events WHERE id=:id",
+                {"id": invitation["event_id"]},
+            )
+            if not event or event["status"] == "ARCHIVED":
+                raise invalid_link()
         if is_first_admin and row(
             connection,
             "SELECT id FROM staff_users WHERE system_role='SUPER_ADMIN'",
