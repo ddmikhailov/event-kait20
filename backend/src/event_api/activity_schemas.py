@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -134,7 +135,7 @@ class ParticipationCancelRequest(Contract):
 class ManualAdjustmentRequest(Contract):
     person_id: UUID
     season_id: UUID
-    points: int = Field(ge=-1_000_000, le=1_000_000)
+    points: Decimal = Field(ge=-1_000_000, le=1_000_000, decimal_places=4)
     reason: Reason
     request_id: UUID
 

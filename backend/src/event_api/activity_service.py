@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -11,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .database import execute, row, rows
 from .errors import ApiError
+from .scoring_v2 import calculate_participation, decimal_string
 from .service_utils import audit, serial
 
 
@@ -84,7 +86,8 @@ def participation_response(item: RowMapping) -> dict[str, Any]:
             else None
         ),
         "scoringState": item["scoring_state"] or "NOT_SCORED",
-        "scoreAwarded": int(item["score_awarded"] or 0),
+        "scoringSequence": item["scoring_sequence"],
+        "scoreAwarded": decimal_string(item["score_awarded"]),
         "scoreReason": item["score_reason"],
         "confirmedAt": serial(item["confirmed_at"]) if item["confirmed_at"] else None,
         "finalizedAt": serial(item["finalized_at"]) if item["finalized_at"] else None,
@@ -106,7 +109,7 @@ PARTICIPATION_SELECT = """SELECT
     r.id AS registration_id,r.person_id,r.event_id,r.stream_id,r.last_name,r.first_name,
     r.middle_name,r.status AS registration_status,r.first_attended_at,r.study_group,
     s.title AS stream_title,p.id AS participation_id,p.status AS participation_status,
-    p.source AS participation_source,p.scoring_state,p.confirmed_at,p.finalized_at,
+    p.source AS participation_source,p.scoring_state,p.scoring_sequence,p.confirmed_at,p.finalized_at,
     pr.id AS role_id,pr.code AS role_code,pr.name AS role_name,
     pres.id AS result_id,pres.code AS result_code,pres.name AS result_name,
     COALESCE((SELECT SUM(st.points) FROM score_transactions st WHERE st.participation_id=p.id),0) AS score_awarded,
@@ -211,8 +214,14 @@ def award_score(
     participation = row(
         connection,
         """SELECT p.*,e.organization_id,e.season_id,e.category_id,e.level_id,
-        e.start_at AS event_start_at
+        e.start_at AS event_start_at,s.scoring_policy_id,s.scoring_policy_effective_from,
+        pr.code AS role_code,pr.name AS role_name,el.code AS level_code,el.name AS level_name,
+        pres.code AS result_code,pres.name AS result_name
         FROM participations p JOIN events e ON e.id=p.event_id
+        LEFT JOIN seasons s ON s.id=e.season_id
+        LEFT JOIN participation_roles pr ON pr.id=p.role_id
+        LEFT JOIN event_levels el ON el.id=e.level_id
+        LEFT JOIN participation_results pres ON pres.id=p.result_id
         WHERE p.id=:id FOR UPDATE""",
         {"id": participation_id},
     )
@@ -226,6 +235,94 @@ def award_score(
             "SELECT id FROM seasons WHERE id=:season FOR UPDATE",
             {"season": participation["season_id"]},
         )
+    use_v2 = bool(
+        participation["scoring_policy_id"]
+        and participation["scoring_policy_effective_from"]
+        and participation["event_start_at"]
+        >= participation["scoring_policy_effective_from"]
+    )
+    if use_v2:
+        try:
+            points, snapshot, policy_version_id = calculate_participation(
+                connection, participation, persist_sequence=True
+            )
+        except ApiError as error:
+            if error.code not in {
+                "SCORING_COMPONENT_MISSING",
+                "SCORING_POLICY_VERSION_NOT_FOUND",
+            }:
+                raise
+            execute(
+                connection,
+                "UPDATE participations SET scoring_state='NO_RULE',updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
+                {"id": participation_id},
+            )
+            audit(connection, actor_id, error.code, "Participation", participation_id)
+            return None
+        identity = str(uuid4())
+        membership_id = membership_for_activity(connection, participation, actor_id)
+        idempotency = (
+            f"participation:{participation_id}:award:{participation['scoring_cycle']}"
+        )
+        try:
+            execute(
+                connection,
+                """INSERT INTO score_transactions
+                (id,person_id,season_id,membership_id,participation_id,scoring_policy_version_id,
+                 scoring_engine_version,transaction_type,points,reason,source,scoring_cycle,
+                 calculation_snapshot,idempotency_key,created_at,created_by)
+                VALUES (:id,:person,:season,:membership,:participation,:version,'V2','AWARD',:points,
+                        :reason,'SCORING_ENGINE',:cycle,:snapshot,:idempotency,UTC_TIMESTAMP(3),:actor)""",
+                {
+                    "id": identity,
+                    "person": participation["person_id"],
+                    "season": participation["season_id"],
+                    "membership": membership_id,
+                    "participation": participation_id,
+                    "version": policy_version_id,
+                    "points": points,
+                    "reason": f"MosActive v2: {decimal_string(points)} баллов.",
+                    "cycle": participation["scoring_cycle"],
+                    "snapshot": json.dumps(snapshot, ensure_ascii=False),
+                    "idempotency": idempotency,
+                    "actor": actor_id,
+                },
+            )
+        except IntegrityError:
+            existing = row(
+                connection,
+                "SELECT id FROM score_transactions WHERE idempotency_key=:key",
+                {"key": idempotency},
+            )
+            if not existing:
+                raise
+            identity = existing["id"]
+        execute(
+            connection,
+            "UPDATE participations SET scoring_state='AWARDED',updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
+            {"id": participation_id},
+        )
+        audit(
+            connection,
+            actor_id,
+            "SCORE_AWARDED",
+            "ScoreTransaction",
+            identity,
+            {
+                "participationId": participation_id,
+                "points": decimal_string(points),
+                "engine": "V2",
+            },
+        )
+        outbox(
+            connection,
+            "score.awarded",
+            "Participation",
+            participation_id,
+            {"participationId": participation_id, "scoreTransactionId": identity},
+        )
+        return identity
+
     rule = find_scoring_rule(connection, participation)
     if not rule:
         execute(
@@ -243,9 +340,9 @@ def award_score(
         execute(
             connection,
             """INSERT INTO score_transactions
-            (id,person_id,season_id,membership_id,participation_id,scoring_rule_id,transaction_type,points,
+            (id,person_id,season_id,membership_id,participation_id,scoring_rule_id,scoring_engine_version,transaction_type,points,
              reason,source,scoring_cycle,rule_version_snapshot,idempotency_key,created_at,created_by)
-            VALUES (:id,:person,:season,:membership,:participation,:rule,'AWARD',:points,
+            VALUES (:id,:person,:season,:membership,:participation,:rule,'V1','AWARD',:points,
                     :reason,'SCORING_ENGINE',:cycle,:version,:idempotency,UTC_TIMESTAMP(3),:actor)""",
             {
                 "id": identity,
@@ -285,7 +382,11 @@ def award_score(
         "SCORE_AWARDED",
         "ScoreTransaction",
         identity,
-        {"participationId": participation_id, "points": int(rule["points"])},
+        {
+            "participationId": participation_id,
+            "points": decimal_string(rule["points"]),
+            "engine": "V1",
+        },
     )
     outbox(
         connection,
@@ -320,14 +421,35 @@ def reverse_current_award(
     if existing:
         return existing["id"]
     identity = str(uuid4())
+    original_snapshot = award["calculation_snapshot"]
+    if isinstance(original_snapshot, str):
+        original_snapshot = json.loads(original_snapshot)
+    reversal_snapshot = (
+        json.dumps(
+            {
+                "snapshotSchemaVersion": 1,
+                "engineVersion": award["scoring_engine_version"],
+                "transactionType": "REVERSAL",
+                "originalTransactionId": award["id"],
+                "originalFinalPoints": decimal_string(award["points"]),
+                "reversalPoints": decimal_string(-Decimal(str(award["points"]))),
+                "originalCalculation": original_snapshot,
+                "calculatedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            },
+            ensure_ascii=False,
+        )
+        if original_snapshot
+        else None
+    )
     execute(
         connection,
         """INSERT INTO score_transactions
-        (id,person_id,season_id,membership_id,participation_id,scoring_rule_id,transaction_type,points,
-         reason,source,scoring_cycle,rule_version_snapshot,original_transaction_id,idempotency_key,
+        (id,person_id,season_id,membership_id,participation_id,scoring_rule_id,scoring_policy_version_id,
+         scoring_engine_version,transaction_type,points,reason,source,scoring_cycle,rule_version_snapshot,
+         calculation_snapshot,original_transaction_id,idempotency_key,
          created_at,created_by)
-        VALUES (:id,:person,:season,:membership,:participation,:rule,'REVERSAL',:points,:reason,
-                'SCORING_ENGINE',:cycle,:version,:original,:idempotency,UTC_TIMESTAMP(3),:actor)""",
+        VALUES (:id,:person,:season,:membership,:participation,:rule,:policy_version,:engine,'REVERSAL',:points,:reason,
+                'SCORING_ENGINE',:cycle,:version,:snapshot,:original,:idempotency,UTC_TIMESTAMP(3),:actor)""",
         {
             "id": identity,
             "person": award["person_id"],
@@ -335,10 +457,13 @@ def reverse_current_award(
             "membership": award["membership_id"],
             "participation": participation["id"],
             "rule": award["scoring_rule_id"],
-            "points": -int(award["points"]),
+            "points": -Decimal(str(award["points"])),
             "reason": reason,
             "cycle": award["scoring_cycle"],
             "version": award["rule_version_snapshot"],
+            "policy_version": award["scoring_policy_version_id"],
+            "engine": award["scoring_engine_version"],
+            "snapshot": reversal_snapshot,
             "original": award["id"],
             "idempotency": f"score:{award['id']}:reversal",
             "actor": actor_id,

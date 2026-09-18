@@ -930,14 +930,14 @@ def test_historical_membership_privacy_and_event_date_scoring(
     groups = client.get("/public/leaderboard/groups", params={"seasonId": season_id})
     assert groups.status_code == 200, groups.text
     group_points = {item["name"]: item["points"] for item in groups.json()["items"]}
-    assert group_points == {"GROUP_B": 20, "GROUP_A": 10}
+    assert group_points == {"GROUP_B": "20.0000", "GROUP_A": "10.0000"}
     departments = client.get(
         "/public/leaderboard/departments", params={"seasonId": season_id}
     )
     department_points = {
         item["name"]: item["points"] for item in departments.json()["items"]
     }
-    assert department_points == {"DEPT_B": 20, "DEPT_A": 10}
+    assert department_points == {"DEPT_B": "20.0000", "DEPT_A": "10.0000"}
     with database.connect() as connection:
         attributed = connection.execute(
             text("""SELECT sm.study_group,st.points FROM score_transactions st

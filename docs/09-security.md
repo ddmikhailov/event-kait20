@@ -233,3 +233,8 @@ consent per Person. Public group/department aggregates include only PUBLIC profi
 with active SCORES consent and historically attributed score transactions. They
 expose no Person IDs. Small aggregate cohorts currently have no k-anonymity
 suppression and must pass a separate privacy review before broad public launch.
+
+ScoringPolicy lifecycle, Season policy assignment and Person Status writes are
+SUPER_ADMIN-only and derive Organization from authenticated staff context.
+Client-supplied organization authority is not accepted. Preview is authenticated
+administration functionality; calculation snapshots are not public.

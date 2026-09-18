@@ -499,3 +499,15 @@ and is synchronized with the selected directory row. An inactive Direction is
 rejected through either input with `DIRECTION_INACTIVE`. Direction names are
 unique per exact scope; if legacy text matches more than one effective row, the
 API returns `DIRECTION_AMBIGUOUS` and creates no Event.
+
+Scoring v2 administration is under `/admin/activity/scoring-v2`: policy list and
+creation, draft-version create/update, publish/retire, Season policy assignment
+with an explicit historical activation boundary,
+preview and Person status assignment/retirement. Writes require SUPER_ADMIN;
+ORGANIZER may list and preview. Score amounts in changed Activity responses are
+canonical four-place decimal strings, never JSON floats. Calculation snapshots
+are admin-only and are not exposed by public leaderboard APIs. Snapshot
+`eventStartAt` is explicit UTC ISO 8601 ending in `Z`; `eventMoscowDate` remains a
+separate `YYYY-MM-DD` value. Season assignment returns
+`SEASON_SCORING_POLICY_RETROACTIVE_CONFLICT` rather than crossing existing v1
+award history.

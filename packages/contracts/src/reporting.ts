@@ -39,7 +39,10 @@ export type SendTicketsResponse = z.infer<typeof sendTicketsResponseSchema>;
 export const eventStatisticsResponseSchema = z.object({
   confirmedParticipations: z.number().int().nonnegative().optional(),
   participationsWithoutScoringRule: z.number().int().nonnegative().optional(),
-  scoreAwarded: z.number().int().optional(),
+  scoreAwarded: z
+    .string()
+    .regex(/^-?\d+\.\d{4}$/)
+    .optional(),
   byParticipationRole: z
     .array(
       z.object({

@@ -24,6 +24,7 @@ from .routers import (
     participants,
     registrations,
     reporting,
+    scoring_v2,
     staff,
     streams,
     structure,
@@ -170,6 +171,7 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
         activity.event_admin,
         activity.person_admin,
         activity.public,
+        scoring_v2.router,
         reporting.router,
         excel.router,
     ):

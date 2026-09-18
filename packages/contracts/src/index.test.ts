@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   activityOperationResponseSchema,
+  calculationSnapshotSchema,
   createEventRequestSchema,
   attendanceSyncRequestSchema,
   excelImportCommitRequestSchema,
@@ -205,12 +206,12 @@ describe('healthResponseSchema', () => {
       publicProfileSchema.parse({
         publicSlug: 'public-profile-slug',
         displayName: 'Иванов Иван',
-        totalPoints: 25,
+        totalPoints: '25.0000',
       }),
     ).toEqual({
       publicSlug: 'public-profile-slug',
       displayName: 'Иванов Иван',
-      totalPoints: 25,
+      totalPoints: '25.0000',
     });
     expect(() =>
       publicProfileSchema.parse({
@@ -225,5 +226,46 @@ describe('healthResponseSchema', () => {
     expect(activityOperationResponseSchema.parse({ accepted: true })).toEqual({
       accepted: true,
     });
+  });
+
+  it('requires explicit UTC in scoring calculation Event timestamps', () => {
+    const snapshot = {
+      snapshotSchemaVersion: 1,
+      engineVersion: 'V2',
+      scoringPolicyId: '11111111-1111-4111-8111-111111111111',
+      policyVersionId: '22222222-2222-4222-8222-222222222222',
+      policyVersion: 1,
+      policyVersionStatus: 'PUBLISHED',
+      eventId: '33333333-3333-4333-8333-333333333333',
+      eventStartAt: '2026-10-01T10:00:00Z',
+      eventMoscowDate: '2026-10-01',
+      seasonId: '44444444-4444-4444-8444-444444444444',
+      participationId: '55555555-5555-4555-8555-555555555555',
+      personId: '66666666-6666-4666-8666-666666666666',
+      role: {
+        id: 'role',
+        code: 'ORGANIZER',
+        name: 'Организатор',
+        value: '3.0000',
+      },
+      level: { id: 'level', code: 'CITY', name: 'Городской', value: '2.0000' },
+      statuses: [],
+      newcomer: { sequence: 1, value: '1.0000' },
+      result: null,
+      multiplicativeSubtotal: '6.0000',
+      resultBonus: '0.0000',
+      finalPoints: '6.0000',
+      roundingMode: 'ROUND_HALF_UP',
+      calculatedAt: '2026-10-02T10:00:00Z',
+    };
+    expect(calculationSnapshotSchema.parse(snapshot).eventStartAt).toBe(
+      '2026-10-01T10:00:00Z',
+    );
+    expect(() =>
+      calculationSnapshotSchema.parse({
+        ...snapshot,
+        eventStartAt: '2026-10-01T13:00:00+03:00',
+      }),
+    ).toThrow();
   });
 });

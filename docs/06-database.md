@@ -406,3 +406,19 @@ Non-PII legacy coverage counts are implemented by
 `backend/src/event_api/structure_diagnostics.py`. It compares StudentMembership,
 Person and Registration legacy group snapshots with normalized StudyGroups;
 reconciliation remains controlled and never infers course from group text.
+
+## 22. MosActive scoring v2
+
+Migration 016 adds organization-owned versioned scoring policies while retaining
+legacy ScoringRule. `Season.scoring_policy_id IS NULL` means v1. With an assigned
+policy, Events before `scoring_policy_effective_from` remain v1 and Events at/after
+the boundary use v2. Ledger amounts use `DECIMAL(12,4)` and v2
+rows retain the policy-version FK plus immutable JSON calculation snapshot.
+Published policy versions and historical transactions are never rewritten.
+Assignment of a v2 boundary is rejected when an engine-generated v1 AWARD already
+exists for an Event at/after that boundary. Migration backfill marks only legacy
+ScoringRule AWARD rows and their REVERSAL rows as `V1`; manual/import rows keep a
+null engine marker. New Stage 2 classifier seeds use exact existing codes and
+policy components resolve the actual existing IDs, without changing display names.
+Newcomer history counts distinct confirmed Participation or Participation with a
+historical engine AWARD, so later cancellation/reversal cannot reclaim a sequence.

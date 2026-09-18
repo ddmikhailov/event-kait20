@@ -7,6 +7,7 @@ from ..database import Database, execute, row, rows
 from ..dependencies import Staff, administrator, csrf_administrator, database
 from ..errors import ApiError
 from ..schemas import SendTicketsRequest
+from ..scoring_v2 import decimal_string
 from ..service_utils import audit, utc_iso
 
 router = APIRouter(prefix="/admin/events", tags=["reporting"])
@@ -108,7 +109,7 @@ def statistics(
         "participationsWithoutScoringRule": int(
             participation_totals["without_rule"] or 0 if participation_totals else 0
         ),
-        "scoreAwarded": int(
+        "scoreAwarded": decimal_string(
             participation_totals["points"] or 0 if participation_totals else 0
         ),
         "byParticipationRole": [

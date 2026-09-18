@@ -43,6 +43,7 @@ from ..dependencies import (
     database,
 )
 from ..errors import ApiError
+from ..scoring_v2 import decimal_string
 from ..service_utils import audit, db_json, json_value, naive_utc, serial
 from ..tenant_scope import require_event_in_tenant, require_person_in_tenant
 
@@ -259,16 +260,24 @@ def season_response(item: RowMapping) -> dict[str, Any]:
         "startsAt": serial(item["starts_at"]),
         "endsAt": serial(item["ends_at"]),
         "active": bool(item["active"]),
+        "scoringPolicyId": item["scoring_policy_id"],
+        "scoringPolicyEffectiveFrom": serial(item["scoring_policy_effective_from"])
+        if item["scoring_policy_effective_from"]
+        else None,
     }
 
 
 @admin.get("/seasons")
 def seasons(
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        items = rows(connection, "SELECT * FROM seasons ORDER BY starts_at DESC,id")
+        items = rows(
+            connection,
+            "SELECT * FROM seasons WHERE organization_id=:organization ORDER BY starts_at DESC,id",
+            {"organization": staff.organization_id},
+        )
     return {"items": [season_response(item) for item in items]}
 
 
@@ -277,13 +286,14 @@ def save_season(
     identity: str,
     values: SeasonValues,
     actor_id: str,
+    organization_id: str,
     existing: RowMapping | None = None,
 ) -> None:
     if values.active:
         execute(
             connection,
-            "UPDATE seasons SET active=false,updated_at=UTC_TIMESTAMP(3) WHERE active=true AND id<>:id",
-            {"id": identity},
+            "UPDATE seasons SET active=false,updated_at=UTC_TIMESTAMP(3) WHERE active=true AND organization_id=:organization AND id<>:id",
+            {"id": identity, "organization": organization_id},
         )
     data = {
         "id": identity,
@@ -292,6 +302,7 @@ def save_season(
         "starts": naive_utc(values.starts_at),
         "ends": naive_utc(values.ends_at),
         "active": values.active,
+        "organization": organization_id,
     }
     if existing:
         execute(
@@ -303,8 +314,8 @@ def save_season(
     else:
         execute(
             connection,
-            """INSERT INTO seasons (id,code,name,starts_at,ends_at,active,created_at,updated_at)
-            VALUES (:id,:code,:name,:starts,:ends,:active,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
+            """INSERT INTO seasons (id,organization_id,code,name,starts_at,ends_at,active,created_at,updated_at)
+            VALUES (:id,:organization,:code,:name,:starts,:ends,:active,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
             data,
         )
     audit(
@@ -326,7 +337,7 @@ def create_season(
     identity = str(uuid4())
     try:
         with db.transaction() as connection:
-            save_season(connection, identity, values, staff.id)
+            save_season(connection, identity, values, staff.id, staff.organization_id)
             item = row(
                 connection, "SELECT * FROM seasons WHERE id=:id", {"id": identity}
             )
@@ -353,7 +364,11 @@ def update_season(
         )
         if not existing:
             raise ApiError(404, "SEASON_NOT_FOUND", "Season not found")
-        save_season(connection, str(identity), values, staff.id, existing)
+        if existing["organization_id"] != staff.organization_id:
+            raise ApiError(404, "SEASON_NOT_FOUND", "Season not found")
+        save_season(
+            connection, str(identity), values, staff.id, staff.organization_id, existing
+        )
         item = row(
             connection, "SELECT * FROM seasons WHERE id=:id", {"id": str(identity)}
         )
@@ -970,7 +985,7 @@ def manual_adjustment(
             actual = {
                 "person_id": existing["person_id"],
                 "season_id": existing["season_id"],
-                "points": int(existing["points"]),
+                "points": existing["points"],
                 "reason": existing["reason"],
             }
             if (
@@ -990,7 +1005,7 @@ def manual_adjustment(
                 "SCORE_MANUAL_ADJUSTMENT",
                 "ScoreTransaction",
                 identity,
-                {"points": values.points, "reason": values.reason},
+                {"points": decimal_string(values.points), "reason": values.reason},
             )
     return {"id": identity, "accepted": True}
 
@@ -1367,7 +1382,7 @@ def person_activity(
                 "result": {"code": item["result_code"], "name": item["result_name"]}
                 if item["result_code"]
                 else None,
-                "points": int(item["points"] or 0),
+                "points": decimal_string(item["points"]),
             }
             for item in participations
         ],
@@ -1388,7 +1403,7 @@ def person_activity(
             {
                 "seasonId": item["season_id"],
                 "seasonName": item["season_name"],
-                "points": int(item["points"] or 0),
+                "points": decimal_string(item["points"]),
             }
             for item in totals
         ],
@@ -1445,7 +1460,17 @@ def create_achievement(
                     "Achievement references do not describe the same activity",
                 )
         elif values.event_id:
-            require_event_in_tenant(connection, str(values.event_id), staff.tenant_id)
+            if not row(
+                connection,
+                """SELECT e.id FROM events e JOIN organizations o ON o.id=e.organization_id
+                WHERE e.id=:id AND o.tenant_id=:tenant""",
+                {"id": str(values.event_id), "tenant": staff.tenant_id},
+            ):
+                raise ApiError(
+                    400,
+                    "ACHIEVEMENT_REFERENCE_MISMATCH",
+                    "The referenced Event is unavailable",
+                )
         if values.level_id:
             reference(connection, "event_levels", str(values.level_id))
         if values.result_id:
@@ -1566,7 +1591,7 @@ def public_profile(
     if "ORGANIZATION" in allowed:
         response["organization"] = item["organization"]
     if "SCORES" in allowed:
-        response["totalPoints"] = int(total["points"] if total else 0)
+        response["totalPoints"] = decimal_string(total["points"] if total else 0)
     if "PARTICIPATIONS" in allowed:
         response["confirmedParticipations"] = int(
             participation_count["total"] if participation_count else 0
@@ -1609,7 +1634,9 @@ def public_participations(
                 "eventStartAt": serial(item["start_at"]),
                 "role": item["role_name"],
                 "result": item["result_name"],
-                "points": int(item["points"] or 0) if "SCORES" in allowed else None,
+                "points": decimal_string(item["points"] or 0)
+                if "SCORES" in allowed
+                else None,
             }
             for item in items
         ],
@@ -1680,7 +1707,7 @@ def public_score_summary(
             {
                 "seasonCode": x["code"],
                 "seasonName": x["name"],
-                "points": int(x["points"]),
+                "points": decimal_string(x["points"]),
             }
             for x in items
         ]
@@ -1773,7 +1800,7 @@ def leaderboard(
                     )
                     if part
                 ),
-                "points": int(item["points"]),
+                "points": decimal_string(item["points"]),
                 **(
                     {"confirmedParticipations": int(item["participations"])}
                     if "PARTICIPATIONS" in set(json_value(item["allowed_fields"]) or [])
@@ -1830,7 +1857,7 @@ def membership_leaderboard(
             {
                 "rank": offset + index + 1,
                 "name": item["label"],
-                "points": int(item["points"]),
+                "points": decimal_string(item["points"]),
                 "people": int(item["people"]),
             }
             for index, item in enumerate(items)

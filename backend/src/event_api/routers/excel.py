@@ -748,7 +748,7 @@ def export(
                     item["participation_status"] or "DRAFT",
                     item["participation_role"],
                     item["participation_result"],
-                    int(item["score_awarded"] or 0),
+                    str(item["score_awarded"] or "0.0000"),
                     *(
                         answer_by_registration.get((item["id"], field["id"]))
                         for field in fields

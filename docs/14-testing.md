@@ -239,3 +239,19 @@ reference integrity, and Event purge refusal for DRAFT/confirmed/scored/Achievem
 Activity history while allowing purge of an Activity-free Event.
 Shared contract tests reject public profile PII and require an audit reason for
 confirmation without Attendance.
+
+Scoring v2 targeted coverage uses disposable MySQL 8.1.0 and verifies exact
+Decimal formula/order, seeded values, migration and legacy value/membership
+preservation, explicit v1/v2 selection, published-version immutability,
+preview/production parity, snapshot persistence and exact reversal. Targeted tests
+also cover concurrent version publication, safe/cancelled retirement, historical
+status retirement, delayed version lookup, NO_RULE sequence behavior, existing
+history and concurrent newcomer assignment. Newcomer assignment is protected by a
+Person row lock and a unique sequence index.
+
+Historical-integrity coverage additionally rejects v2 activation across an
+existing v1 AWARD, verifies semantic engine-marker backfill, preserves reversed
+pre-v2 Participation in newcomer history, retains an inactive StatusType multiplier
+for delayed historical scoring, reuses colliding Stage 2 classifier codes and IDs,
+requires explicit UTC snapshot timestamps, and proves inclusive same-day status
+retirement with an exclusive next-day boundary.

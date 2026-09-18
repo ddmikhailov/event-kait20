@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -785,7 +786,13 @@ def test_legacy_upgrade_preserves_membership_and_score_attribution(
         membership_id,
         season_id,
         score_id,
-    ) = (str(uuid4()) for _ in range(7))
+        award_id,
+        reversal_id,
+        manual_id,
+        rule_id,
+        spectator_id,
+        grand_prix_id,
+    ) = (str(uuid4()) for _ in range(13))
     try:
         with server.connect() as connection:
             connection.exec_driver_sql(
@@ -864,6 +871,16 @@ def test_legacy_upgrade_preserves_membership_and_score_attribution(
             )
             connection.execute(
                 text(
+                    """INSERT INTO scoring_rules
+                    (id,season_id,points,priority,active,version,created_at,updated_at,
+                     created_by,updated_by)
+                    VALUES (:id,:season,7,1,true,1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),
+                            :staff,:staff)"""
+                ),
+                {"id": rule_id, "season": season_id, "staff": staff_id},
+            )
+            connection.execute(
+                text(
                     """INSERT INTO score_transactions
                     (id,person_id,season_id,membership_id,transaction_type,points,reason,
                      source,idempotency_key,created_at)
@@ -878,7 +895,63 @@ def test_legacy_upgrade_preserves_membership_and_score_attribution(
                     "key": f"legacy:{score_id}",
                 },
             )
+            connection.execute(
+                text(
+                    """INSERT INTO score_transactions
+                    (id,person_id,season_id,scoring_rule_id,transaction_type,points,
+                     reason,source,scoring_cycle,idempotency_key,created_at)
+                    VALUES
+                    (:award,:person,:season,:rule,'AWARD',7,'v1 award',
+                     'SCORING_ENGINE',1,:award_key,UTC_TIMESTAMP(3)),
+                    (:manual,:person,:season,NULL,'MANUAL_ADJUSTMENT',3,'manual',
+                     'ADMIN',NULL,:manual_key,UTC_TIMESTAMP(3))"""
+                ),
+                {
+                    "award": award_id,
+                    "manual": manual_id,
+                    "person": person_id,
+                    "season": season_id,
+                    "rule": rule_id,
+                    "award_key": f"award:{award_id}",
+                    "manual_key": f"manual:{manual_id}",
+                },
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO score_transactions
+                    (id,person_id,season_id,transaction_type,points,reason,source,
+                     scoring_cycle,original_transaction_id,idempotency_key,created_at)
+                    VALUES (:id,:person,:season,'REVERSAL',-7,'v1 reversal',
+                            'SCORING_ENGINE',1,:original,:key,UTC_TIMESTAMP(3))"""
+                ),
+                {
+                    "id": reversal_id,
+                    "person": person_id,
+                    "season": season_id,
+                    "original": award_id,
+                    "key": f"reversal:{reversal_id}",
+                },
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO participation_roles
+                    (id,code,name,active,built_in,sort_order,created_at,updated_at)
+                    VALUES (:id,'SPECTATOR','Пользовательский зритель',true,false,99,
+                            UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+                ),
+                {"id": spectator_id},
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO participation_results
+                    (id,code,name,active,built_in,sort_order,created_at,updated_at)
+                    VALUES (:id,'GRAND_PRIX','Пользовательский гран-при',true,false,99,
+                            UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+                ),
+                {"id": grand_prix_id},
+            )
             execute_migration(connection, migrations / "015_platform_structure.sql")
+            execute_migration(connection, migrations / "016_scoring_engine_v2.sql")
             membership = (
                 connection.execute(
                     text(
@@ -890,10 +963,50 @@ def test_legacy_upgrade_preserves_membership_and_score_attribution(
                 .mappings()
                 .one()
             )
-            score_membership = connection.execute(
-                text("SELECT membership_id FROM score_transactions WHERE id=:id"),
-                {"id": score_id},
-            ).scalar_one()
+            score = (
+                connection.execute(
+                    text(
+                        """SELECT id,membership_id,points,original_transaction_id
+                        FROM score_transactions WHERE id=:id"""
+                    ),
+                    {"id": score_id},
+                )
+                .mappings()
+                .one()
+            )
+            engine_markers = {
+                item["id"]: item
+                for item in connection.execute(
+                    text(
+                        """SELECT id,points,original_transaction_id,
+                               scoring_engine_version
+                        FROM score_transactions
+                        WHERE id IN (:award,:reversal,:manual,:imported)"""
+                    ),
+                    {
+                        "award": award_id,
+                        "reversal": reversal_id,
+                        "manual": manual_id,
+                        "imported": score_id,
+                    },
+                ).mappings()
+            }
+            resolved_classifiers = {
+                item["code"]: item
+                for item in connection.execute(
+                    text(
+                        """SELECT r.code,r.id,r.name,b.value FROM scoring_policy_role_bases b
+                        JOIN participation_roles r ON r.id=b.role_id
+                        WHERE b.policy_version_id='61000000-0000-4000-8000-000000000001'
+                          AND r.code='SPECTATOR'
+                        UNION ALL
+                        SELECT r.code,r.id,r.name,b.value FROM scoring_policy_result_bonuses b
+                        JOIN participation_results r ON r.id=b.result_id
+                        WHERE b.policy_version_id='61000000-0000-4000-8000-000000000001'
+                          AND r.code='GRAND_PRIX'"""
+                    )
+                ).mappings()
+            }
             person_tenant = connection.execute(
                 text("SELECT tenant_id FROM persons WHERE id=:id"), {"id": person_id}
             ).scalar_one()
@@ -918,7 +1031,25 @@ def test_legacy_upgrade_preserves_membership_and_score_attribution(
         assert membership["department_id"]
         assert membership["study_group_id"]
         assert membership["course"] is None
-        assert score_membership == membership_id
+        assert score["id"] == score_id
+        assert score["membership_id"] == membership_id
+        assert score["points"] == Decimal("1.0000")
+        assert score["original_transaction_id"] is None
+        assert engine_markers[award_id]["scoring_engine_version"] == "V1"
+        assert engine_markers[reversal_id]["scoring_engine_version"] == "V1"
+        assert engine_markers[reversal_id]["original_transaction_id"] == award_id
+        assert engine_markers[manual_id]["scoring_engine_version"] is None
+        assert engine_markers[score_id]["scoring_engine_version"] is None
+        assert engine_markers[award_id]["points"] == Decimal("7.0000")
+        assert engine_markers[reversal_id]["points"] == Decimal("-7.0000")
+        assert resolved_classifiers["SPECTATOR"]["id"] == spectator_id
+        assert resolved_classifiers["SPECTATOR"]["name"] == "Пользовательский зритель"
+        assert resolved_classifiers["SPECTATOR"]["value"] == Decimal("0.5000")
+        assert resolved_classifiers["GRAND_PRIX"]["id"] == grand_prix_id
+        assert resolved_classifiers["GRAND_PRIX"]["name"] == (
+            "Пользовательский гран-при"
+        )
+        assert resolved_classifiers["GRAND_PRIX"]["value"] == Decimal("10.0000")
         assert person_tenant == "50000000-0000-4000-8000-000000000001"
         assert event["id"] == event_id
         assert event["organization_id"] == "51000000-0000-4000-8000-000000000001"

@@ -45,13 +45,15 @@ export const seasonSchema = z
     startsAt: z.iso.datetime({ offset: true }),
     endsAt: z.iso.datetime({ offset: true }),
     active: z.boolean(),
+    scoringPolicyId: uuidSchema.nullable(),
+    scoringPolicyEffectiveFrom: z.iso.datetime({ offset: true }).nullable(),
   })
   .strict();
 export const seasonListSchema = z
   .object({ items: z.array(seasonSchema) })
   .strict();
 export const seasonValuesSchema = seasonSchema
-  .omit({ id: true })
+  .omit({ id: true, scoringPolicyId: true, scoringPolicyEffectiveFrom: true })
   .refine((value) => value.endsAt > value.startsAt, {
     message: 'Season end must be after start',
   });
@@ -113,7 +115,8 @@ export const participationSchema = z
     role: participationReferenceSchema.nullable(),
     result: participationReferenceSchema.nullable(),
     scoringState: scoringStateSchema,
-    scoreAwarded: z.number().int(),
+    scoringSequence: z.number().int().positive().nullable(),
+    scoreAwarded: z.string().regex(/^-?\d+\.\d{4}$/),
     scoreReason: z.string().nullable(),
     confirmedAt: z.iso.datetime({ offset: true }).nullable(),
     finalizedAt: z.iso.datetime({ offset: true }).nullable(),
@@ -236,7 +239,10 @@ export const publicProfileSchema = z
     displayName: z.string().optional(),
     studyGroup: z.string().nullable().optional(),
     organization: z.string().nullable().optional(),
-    totalPoints: z.number().int().optional(),
+    totalPoints: z
+      .string()
+      .regex(/^-?\d+\.\d{4}$/)
+      .optional(),
     confirmedParticipations: z.number().int().nonnegative().optional(),
   })
   .strict();
@@ -250,7 +256,7 @@ export const leaderboardResponseSchema = z
           rank: z.number().int().positive(),
           publicSlug: z.string(),
           displayName: z.string(),
-          points: z.number().int(),
+          points: z.string().regex(/^-?\d+\.\d{4}$/),
           confirmedParticipations: z.number().int().nonnegative().optional(),
           achievements: z.number().int().nonnegative().optional(),
         })

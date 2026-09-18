@@ -10,6 +10,7 @@ export * from './excel.js';
 export * from './participants.js';
 export * from './registrations.js';
 export * from './reporting.js';
+export * from './scoring-v2.js';
 export * from './staff.js';
 export * from './structure.js';
 
