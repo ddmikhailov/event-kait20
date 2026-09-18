@@ -9,6 +9,7 @@ import {
 
 const event: EventResponse = {
   id: '10000000-0000-4000-8000-000000000001',
+  organizationId: '51000000-0000-4000-8000-000000000001',
   title: 'Завершённое мероприятие',
   slug: 'completed-event',
   description: null,
