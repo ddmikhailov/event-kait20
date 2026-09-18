@@ -428,6 +428,56 @@ def test_publish_rejects_incomplete_newcomer_coverage(client: TestClient) -> Non
     )
 
 
+def test_list_and_get_version_expose_camel_case_components(
+    client: TestClient,
+) -> None:
+    headers = login(client)
+    policy_id, version_id = create_policy(client, headers, publish=False)
+
+    policies = client.get("/admin/activity/scoring-v2/policies", headers=headers)
+    assert policies.status_code == 200, policies.text
+    listed_policy = next(
+        item for item in policies.json()["items"] if item["id"] == policy_id
+    )
+    assert listed_policy["organizationId"] and listed_policy["createdAt"]
+    assert "organization_id" not in listed_policy
+
+    versions = client.get(
+        f"/admin/activity/scoring-v2/policies/{policy_id}/versions", headers=headers
+    )
+    assert versions.status_code == 200, versions.text
+    listed_version = next(
+        item for item in versions.json()["items"] if item["id"] == version_id
+    )
+    assert listed_version["scoringPolicyId"] == policy_id
+    assert listed_version["status"] == "DRAFT"
+    assert "scoring_policy_id" not in listed_version
+
+    detail = client.get(
+        f"/admin/activity/scoring-v2/versions/{version_id}", headers=headers
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["status"] == "DRAFT"
+    assert body["roleBases"] == [
+        {"classifierId": "30000000-0000-4000-8000-000000000004", "value": "3.0000"}
+    ]
+    assert body["resultBonuses"] == [
+        {"classifierId": "40000000-0000-4000-8000-000000000001", "value": "5.0000"}
+    ]
+    assert body["newcomerTiers"][0] == {
+        "sequenceFrom": 1,
+        "sequenceTo": 1,
+        "value": "1.5000",
+    }
+    assert body["newcomerTiers"][-1]["sequenceTo"] is None
+
+    statuses = client.get("/admin/activity/scoring-v2/status-types", headers=headers)
+    assert statuses.status_code == 200, statuses.text
+    codes = {item["code"] for item in statuses.json()["items"]}
+    assert "PROFESSION_AMBASSADOR" in codes
+
+
 def test_concurrent_overlapping_publish_is_serialized(client: TestClient) -> None:
     headers = login(client)
     policy_id, first_version = create_policy(client, headers, publish=False)

@@ -20,6 +20,12 @@ import {
   sendTicketsResponseSchema,
   scoringRuleListSchema,
   scoringRuleSchema,
+  scoringPolicyListSchema,
+  policyCreatedResponseSchema,
+  policyVersionListSchema,
+  policyVersionDetailSchema,
+  policyVersionCreatedResponseSchema,
+  statusTypeListSchema,
   seasonListSchema,
   seasonSchema,
   staffInvitationResponseSchema,
@@ -65,6 +71,15 @@ import {
   type ScoringRule,
   type ScoringRuleList,
   type ScoringRuleValues,
+  type ScoringPolicyList,
+  type PolicyCreate,
+  type PolicyCreatedResponse,
+  type PolicyVersionList,
+  type PolicyVersionDetail,
+  type PolicyVersionValues,
+  type PolicyVersionCreatedResponse,
+  type PublishPolicyVersion,
+  type StatusTypeList,
   type Season,
   type SeasonList,
   type SeasonValues,
@@ -173,6 +188,91 @@ export class AdminApiClient {
       `/admin/activity/scoring-rules${id ? `/${encodeURIComponent(id)}` : ''}`,
       { method: id ? 'PATCH' : 'POST', body: JSON.stringify(values) },
       scoringRuleSchema,
+    );
+  }
+
+  public scoringPolicies(): Promise<ScoringPolicyList> {
+    return this.request(
+      '/admin/activity/scoring-v2/policies',
+      { method: 'GET' },
+      scoringPolicyListSchema,
+    );
+  }
+
+  public createScoringPolicy(
+    values: PolicyCreate,
+  ): Promise<PolicyCreatedResponse> {
+    return this.request(
+      '/admin/activity/scoring-v2/policies',
+      { method: 'POST', body: JSON.stringify(values) },
+      policyCreatedResponseSchema,
+    );
+  }
+
+  public scoringPolicyVersions(policyId: string): Promise<PolicyVersionList> {
+    return this.request(
+      `/admin/activity/scoring-v2/policies/${encodeURIComponent(policyId)}/versions`,
+      { method: 'GET' },
+      policyVersionListSchema,
+    );
+  }
+
+  public scoringPolicyVersion(versionId: string): Promise<PolicyVersionDetail> {
+    return this.request(
+      `/admin/activity/scoring-v2/versions/${encodeURIComponent(versionId)}`,
+      { method: 'GET' },
+      policyVersionDetailSchema,
+    );
+  }
+
+  public createScoringPolicyVersion(
+    policyId: string,
+    values: PolicyVersionValues,
+  ): Promise<PolicyVersionCreatedResponse> {
+    return this.request(
+      `/admin/activity/scoring-v2/policies/${encodeURIComponent(policyId)}/versions`,
+      { method: 'POST', body: JSON.stringify(values) },
+      policyVersionCreatedResponseSchema,
+    );
+  }
+
+  public updateScoringPolicyVersion(
+    versionId: string,
+    values: PolicyVersionValues,
+  ): Promise<ActivityOperationResponse> {
+    return this.request(
+      `/admin/activity/scoring-v2/versions/${encodeURIComponent(versionId)}`,
+      { method: 'PATCH', body: JSON.stringify(values) },
+      activityOperationResponseSchema,
+    );
+  }
+
+  public publishScoringPolicyVersion(
+    versionId: string,
+    values: PublishPolicyVersion,
+  ): Promise<ActivityOperationResponse> {
+    return this.request(
+      `/admin/activity/scoring-v2/versions/${encodeURIComponent(versionId)}/publish`,
+      { method: 'POST', body: JSON.stringify(values) },
+      activityOperationResponseSchema,
+    );
+  }
+
+  public retireScoringPolicyVersion(
+    versionId: string,
+  ): Promise<ActivityOperationResponse> {
+    return this.request(
+      `/admin/activity/scoring-v2/versions/${encodeURIComponent(versionId)}/retire`,
+      { method: 'POST' },
+      activityOperationResponseSchema,
+    );
+  }
+
+  public scoringStatusTypes(): Promise<StatusTypeList> {
+    return this.request(
+      '/admin/activity/scoring-v2/status-types',
+      { method: 'GET' },
+      statusTypeListSchema,
     );
   }
 

@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, RowMapping
 from sqlalchemy.exc import IntegrityError
 
 from ..database import Database, execute, row, rows
@@ -268,6 +268,95 @@ def _replace_components(
         )
 
 
+def _policy_response(item: RowMapping) -> dict[str, Any]:
+    return {
+        "id": item["id"],
+        "organizationId": item["organization_id"],
+        "code": item["code"],
+        "name": item["name"],
+        "active": bool(item["active"]),
+        "createdAt": serial(item["created_at"]),
+        "updatedAt": serial(item["updated_at"]),
+    }
+
+
+def _version_response(item: RowMapping) -> dict[str, Any]:
+    return {
+        "id": item["id"],
+        "scoringPolicyId": item["scoring_policy_id"],
+        "version": int(item["version"]),
+        "status": item["status"],
+        "effectiveFrom": serial(item["effective_from"]),
+        "effectiveTo": serial(item["effective_to"]),
+        "createdAt": serial(item["created_at"]),
+        "publishedAt": serial(item["published_at"]),
+        "retiredAt": serial(item["retired_at"]),
+        "createdBy": item["created_by"],
+    }
+
+
+def _status_type_response(item: RowMapping) -> dict[str, Any]:
+    return {
+        "id": item["id"],
+        "code": item["code"],
+        "name": item["name"],
+        "active": bool(item["active"]),
+    }
+
+
+def _version_components(connection: Connection, version_id: str) -> dict[str, Any]:
+    def component_list(table: str, key: str) -> list[dict[str, Any]]:
+        items = rows(
+            connection,
+            f"SELECT value,{key} AS classifier_id FROM {table} WHERE policy_version_id=:version",
+            {"version": version_id},
+        )
+        return [
+            {
+                "classifierId": item["classifier_id"],
+                "value": decimal_string(item["value"]),
+            }
+            for item in items
+        ]
+
+    tiers = rows(
+        connection,
+        """SELECT sequence_from,sequence_to,value FROM scoring_policy_newcomer_tiers
+        WHERE policy_version_id=:version ORDER BY sequence_from""",
+        {"version": version_id},
+    )
+    return {
+        "roleBases": component_list("scoring_policy_role_bases", "role_id"),
+        "levelMultipliers": component_list(
+            "scoring_policy_level_multipliers", "level_id"
+        ),
+        "statusMultipliers": component_list(
+            "scoring_policy_status_multipliers", "status_type_id"
+        ),
+        "newcomerTiers": [
+            {
+                "sequenceFrom": int(tier["sequence_from"]),
+                "sequenceTo": int(tier["sequence_to"])
+                if tier["sequence_to"] is not None
+                else None,
+                "value": decimal_string(tier["value"]),
+            }
+            for tier in tiers
+        ],
+        "resultBonuses": component_list("scoring_policy_result_bonuses", "result_id"),
+    }
+
+
+@router.get("/status-types")
+def list_status_types(
+    staff: Annotated[Staff, Depends(administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.connect() as connection:
+        items = rows(connection, "SELECT * FROM person_status_types ORDER BY code")
+    return {"items": [_status_type_response(item) for item in items]}
+
+
 @router.get("/policies")
 def list_policies(
     staff: Annotated[Staff, Depends(administrator)],
@@ -279,7 +368,7 @@ def list_policies(
             "SELECT * FROM scoring_policies WHERE organization_id=:organization ORDER BY code",
             {"organization": staff.organization_id},
         )
-    return {"items": [dict(item) for item in items]}
+    return {"items": [_policy_response(item) for item in items]}
 
 
 @router.post("/policies", status_code=201)
@@ -327,16 +416,19 @@ def list_versions(
             "SELECT * FROM scoring_policy_versions WHERE scoring_policy_id=:policy ORDER BY version",
             {"policy": str(policy_id)},
         )
-    return {
-        "items": [
-            {
-                **dict(item),
-                "effective_from": serial(item["effective_from"]),
-                "effective_to": serial(item["effective_to"]),
-            }
-            for item in items
-        ]
-    }
+    return {"items": [_version_response(item) for item in items]}
+
+
+@router.get("/versions/{version_id}")
+def get_version(
+    version_id: UUID,
+    staff: Annotated[Staff, Depends(administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.connect() as connection:
+        version = _version(connection, str(version_id), staff)
+        components = _version_components(connection, str(version_id))
+    return {**_version_response(version), **components}
 
 
 @router.post("/policies/{policy_id}/versions", status_code=201)

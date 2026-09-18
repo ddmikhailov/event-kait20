@@ -77,13 +77,14 @@ def main() -> None:
         )
         connection.execute(
             text("""INSERT INTO seasons
-            (id,code,name,starts_at,ends_at,active,created_at,updated_at)
-            VALUES (:id,'DEMO_SEASON','Демонстрационный сезон',:starts,:ends,true,
+            (id,organization_id,code,name,starts_at,ends_at,active,created_at,updated_at)
+            VALUES (:id,:organization,'DEMO_SEASON','Демонстрационный сезон',:starts,:ends,true,
                     UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
             ON DUPLICATE KEY UPDATE name=VALUES(name),starts_at=VALUES(starts_at),
               ends_at=VALUES(ends_at),active=true,updated_at=UTC_TIMESTAMP(3)"""),
             {
                 "id": season_id,
+                "organization": scope.organization_id,
                 "starts": now - timedelta(days=30),
                 "ends": now + timedelta(days=365),
             },
@@ -117,6 +118,7 @@ def main() -> None:
                 },
                 {
                     "id": stable_id("open-day"),
+                    "organization": scope.organization_id,
                     "title": "День открытых дверей",
                     "slug": "open-day",
                     "description": "Экскурсия по колледжу, знакомство с программами и ответы на вопросы.",
@@ -130,6 +132,7 @@ def main() -> None:
                 },
                 {
                     "id": stable_id("web-workshop"),
+                    "organization": scope.organization_id,
                     "title": "Мастер-класс по веб-разработке",
                     "slug": "web-workshop",
                     "description": "Практическое занятие для тех, кто хочет попробовать себя в разработке.",
@@ -143,6 +146,7 @@ def main() -> None:
                 },
                 {
                     "id": stable_id("design-workshop"),
+                    "organization": scope.organization_id,
                     "title": "Практикум по графическому дизайну",
                     "slug": "design-workshop",
                     "description": "Знакомство с композицией, типографикой и созданием визуальных материалов.",

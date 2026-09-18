@@ -112,9 +112,82 @@ export const statusAssignmentSchema = z
   })
   .strict();
 
+export const scoringPolicySchema = z
+  .object({
+    id: uuidSchema,
+    organizationId: uuidSchema,
+    code: z.string(),
+    name: z.string(),
+    active: z.boolean(),
+    createdAt: z.iso.datetime({ offset: true }),
+    updatedAt: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+export const scoringPolicyListSchema = z
+  .object({ items: z.array(scoringPolicySchema) })
+  .strict();
+
+export const policyVersionSchema = z
+  .object({
+    id: uuidSchema,
+    scoringPolicyId: uuidSchema,
+    version: z.number().int().positive(),
+    status: policyVersionStatusSchema,
+    effectiveFrom: z.iso.datetime({ offset: true }).nullable(),
+    effectiveTo: z.iso.datetime({ offset: true }).nullable(),
+    createdAt: z.iso.datetime({ offset: true }),
+    publishedAt: z.iso.datetime({ offset: true }).nullable(),
+    retiredAt: z.iso.datetime({ offset: true }).nullable(),
+    createdBy: uuidSchema.nullable(),
+  })
+  .strict();
+export const policyVersionListSchema = z
+  .object({ items: z.array(policyVersionSchema) })
+  .strict();
+export const policyVersionDetailSchema = policyVersionSchema.extend(
+  policyVersionValuesSchema.shape,
+);
+
+export const statusTypeReferenceSchema = z
+  .object({
+    id: uuidSchema,
+    code: z.string(),
+    name: z.string(),
+    active: z.boolean(),
+  })
+  .strict();
+export const statusTypeListSchema = z
+  .object({ items: z.array(statusTypeReferenceSchema) })
+  .strict();
+
+export const policyCreatedResponseSchema = z
+  .object({ id: uuidSchema })
+  .strict();
+export const policyVersionCreatedResponseSchema = z
+  .object({
+    id: uuidSchema,
+    version: z.number().int().positive(),
+    status: policyVersionStatusSchema,
+  })
+  .strict();
+
 export type PolicyCreate = z.infer<typeof policyCreateSchema>;
+export type ScoringComponentValue = z.infer<typeof scoringComponentSchema>;
+export type NewcomerTierValue = z.infer<typeof newcomerTierSchema>;
 export type PolicyVersionValues = z.infer<typeof policyVersionValuesSchema>;
+export type PublishPolicyVersion = z.infer<typeof publishPolicyVersionSchema>;
 export type ScoringPreviewRequest = z.infer<typeof scoringPreviewRequestSchema>;
 export type ScoringPreviewResponse = z.infer<
   typeof scoringPreviewResponseSchema
+>;
+export type ScoringPolicy = z.infer<typeof scoringPolicySchema>;
+export type ScoringPolicyList = z.infer<typeof scoringPolicyListSchema>;
+export type PolicyVersion = z.infer<typeof policyVersionSchema>;
+export type PolicyVersionList = z.infer<typeof policyVersionListSchema>;
+export type PolicyVersionDetail = z.infer<typeof policyVersionDetailSchema>;
+export type StatusTypeReference = z.infer<typeof statusTypeReferenceSchema>;
+export type StatusTypeList = z.infer<typeof statusTypeListSchema>;
+export type PolicyCreatedResponse = z.infer<typeof policyCreatedResponseSchema>;
+export type PolicyVersionCreatedResponse = z.infer<
+  typeof policyVersionCreatedResponseSchema
 >;

@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
 import { ActivitySettings } from './AdminActivity.js';
+import { ScoringAdmin } from './AdminScoring.js';
 import { publicMediaUrl } from './api-client.js';
 import { EventParticipants, PeopleDirectory } from './AdminParticipants.js';
 import { EventStatistics } from './AdminReporting.js';
@@ -120,6 +121,7 @@ const AdminWorkspace = ({
     | 'staff'
     | 'access'
     | 'activity'
+    | 'scoring'
   >('events');
   const [selected, setSelected] = useState<EventResponse>();
   const [showArchived, setShowArchived] = useState(false);
@@ -216,6 +218,11 @@ const AdminWorkspace = ({
       />
     );
   }
+  if (view === 'scoring') {
+    return (
+      <ScoringAdmin role={session.user.role} onBack={() => setView('events')} />
+    );
+  }
 
   return (
     <main className="admin-shell">
@@ -241,6 +248,12 @@ const AdminWorkspace = ({
               onClick={() => setView('activity')}
             >
               Активность
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => setView('scoring')}
+            >
+              Скоринг v2
             </button>
             <button
               className="secondary-button"

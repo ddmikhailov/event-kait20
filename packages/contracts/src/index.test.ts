@@ -9,6 +9,7 @@ import {
   healthResponseSchema,
   passwordResetRequestSchema,
   participationConfirmRequestSchema,
+  policyVersionDetailSchema,
   publicProfileSchema,
   scannerOnsiteRegistrationRequestSchema,
   publicRegistrationRequestSchema,
@@ -266,6 +267,36 @@ describe('healthResponseSchema', () => {
         ...snapshot,
         eventStartAt: '2026-10-01T13:00:00+03:00',
       }),
+    ).toThrow();
+  });
+
+  it('parses a policy version detail with its components', () => {
+    const detail = policyVersionDetailSchema.parse({
+      id: '11111111-1111-4111-8111-111111111111',
+      scoringPolicyId: '22222222-2222-4222-8222-222222222222',
+      version: 1,
+      status: 'DRAFT',
+      effectiveFrom: null,
+      effectiveTo: null,
+      createdAt: '2026-01-01T00:00:00Z',
+      publishedAt: null,
+      retiredAt: null,
+      createdBy: '33333333-3333-4333-8333-333333333333',
+      roleBases: [
+        {
+          classifierId: '44444444-4444-4444-8444-444444444444',
+          value: '3.0000',
+        },
+      ],
+      levelMultipliers: [],
+      statusMultipliers: [],
+      newcomerTiers: [{ sequenceFrom: 1, sequenceTo: null, value: '1.5000' }],
+      resultBonuses: [],
+    });
+    expect(detail.status).toBe('DRAFT');
+    expect(detail.roleBases[0]?.value).toBe('3.0000');
+    expect(() =>
+      policyVersionDetailSchema.parse({ id: 'not-a-uuid' }),
     ).toThrow();
   });
 });
