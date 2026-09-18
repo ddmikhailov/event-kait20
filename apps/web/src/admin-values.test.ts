@@ -8,7 +8,7 @@ describe('admin form values', () => {
     form.set('title', 'День открытых дверей');
     form.set('slug', 'open-day');
     form.set('description', 'Описание');
-    form.set('coverObjectKey', '');
+    form.set('direction', 'Профориентация');
     form.set('startAt', '2026-09-10T10:00');
     form.set('endAt', '2026-09-10T13:00');
     form.set('registrationDeadline', '2026-09-10T09:00');
@@ -19,7 +19,7 @@ describe('admin form values', () => {
 
     const values = eventValues(form);
     expect(values.capacity).toBe(250);
-    expect(values.coverObjectKey).toBeNull();
+    expect(values.direction).toBe('Профориентация');
     expect(values.startAt).toBe('2026-09-10T07:00:00.000Z');
   });
 
@@ -32,6 +32,7 @@ describe('admin form values', () => {
     form.set('options', 'Разработка\n\n Дизайн ');
 
     expect(formFieldValues(form)).toEqual({
+      onsiteRequired: false,
       type: 'MULTI_CHOICE',
       label: 'Направления',
       sortOrder: 3,

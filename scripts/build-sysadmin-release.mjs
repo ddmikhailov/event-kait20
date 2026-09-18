@@ -104,6 +104,12 @@ await cp(join(root, 'apps/scanner/dist'), join(output, 'frontend/scanner'), {
 });
 const template = sourceBackend ? 'release/sysadmin-source' : 'release/sysadmin';
 await cp(join(root, template, 'README.txt'), join(output, 'README.txt'));
+if (!sourceBackend) {
+  await cp(
+    join(root, template, 'UPDATE-INSTRUCTIONS-RU.txt'),
+    join(output, 'UPDATE-INSTRUCTIONS-RU.txt'),
+  );
+}
 await cp(
   join(root, 'release/sysadmin/backend-requirements.txt'),
   join(output, 'backend/requirements.txt'),
@@ -160,10 +166,18 @@ const sourceRevision = spawnSync('git', ['rev-parse', 'HEAD'], {
   cwd: root,
   encoding: 'utf8',
 }).stdout.trim();
+const sourceTreeDirty = Boolean(
+  spawnSync('git', ['status', '--porcelain'], {
+    cwd: root,
+    encoding: 'utf8',
+  }).stdout.trim(),
+);
 const manifest = {
   product: 'Event Registration System',
   version: '1.0.0',
+  releaseRevision: 'r3',
   sourceRevision,
+  sourceTreeDirty,
   databaseTarget: 'MySQL 8.1.0',
   files: Object.fromEntries(
     await Promise.all(

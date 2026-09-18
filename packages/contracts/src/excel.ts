@@ -5,14 +5,15 @@ import { personTypeSchema } from './registrations.js';
 
 export const excelImportMappingSchema = z
   .object({
+    streamTitle: z.string().min(1).optional(),
     lastName: z.string().min(1),
     firstName: z.string().min(1),
     middleName: z.string().min(1).optional(),
-    birthDate: z.string().min(1),
-    personType: z.string().min(1),
+    birthDate: z.string().min(1).optional(),
+    personType: z.string().min(1).optional(),
     studyGroup: z.string().min(1).optional(),
     organization: z.string().min(1).optional(),
-    phone: z.string().min(1),
+    phone: z.string().min(1).optional(),
     email: z.string().min(1).optional(),
     customFields: z.record(uuidSchema, z.string().min(1)).default({}),
   })

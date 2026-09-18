@@ -64,9 +64,11 @@ def _seed_load_event(database: Database, capacity: int) -> tuple[str, str]:
         connection.execute(
             text(
                 """INSERT INTO staff_users
-                (id,email,email_normalized,password_hash,system_role,active,
+                (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,active,
                  password_changed_at,created_at,updated_at)
-                VALUES (:id,'load-admin@example.com','load-admin@example.com',:password,
+                VALUES (:id,'50000000-0000-4000-8000-000000000001',
+                        '51000000-0000-4000-8000-000000000001','load-admin@example.com',
+                        'load-admin@example.com',:password,
                         'SUPER_ADMIN',TRUE,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
             ),
             {"id": admin_id, "password": hash_password("load admin safe password")},
@@ -74,10 +76,11 @@ def _seed_load_event(database: Database, capacity: int) -> tuple[str, str]:
         connection.execute(
             text(
                 """INSERT INTO events
-                (id,title,slug,description,start_at,end_at,timezone,location,
+                (id,organization_id,title,slug,description,start_at,end_at,timezone,location,
                  registration_deadline,capacity,status,created_by,offline_data_version,
                  created_at,updated_at)
-                VALUES (:id,'Release load test','release-load',NULL,:start,:end,
+                VALUES (:id,'51000000-0000-4000-8000-000000000001',
+                        'Release load test','release-load',NULL,:start,:end,
                         'Europe/Moscow','Synthetic',:deadline,:capacity,
                         'REGISTRATION_OPEN',:admin,1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
             ),
@@ -270,6 +273,22 @@ def test_release_load_and_concurrency(client: TestClient) -> None:
         return identifier
 
     retry_processed = 0
+    while process_once(database, smtp_config, retry_sender):
+        retry_processed += 1
+    # A transient failure must schedule a future retry, not hot-loop the provider.
+    with database.transaction() as connection:
+        scheduled = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM email_deliveries WHERE status='QUEUED' AND next_attempt_at>UTC_TIMESTAMP(3)"
+            )
+        ).scalar_one()
+        assert scheduled == len(retry_ids)
+        connection.execute(
+            text(
+                "UPDATE email_deliveries SET next_attempt_at=UTC_TIMESTAMP(3) WHERE id IN :ids"
+            ).bindparams(bindparam("ids", expanding=True)),
+            {"ids": retry_ids},
+        )
     while process_once(database, smtp_config, retry_sender):
         retry_processed += 1
     email_seconds = time.perf_counter() - email_started

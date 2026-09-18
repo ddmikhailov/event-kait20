@@ -102,14 +102,16 @@ AUTH_LINK_SECRET=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
 QR_SIGNING_SECRET=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
 export AUTH_LINK_BASE_URL=http://localhost:5173/auth
 export PUBLIC_WEB_BASE_URL=http://localhost:5173
-export CONSENT_URL=http://localhost:5173/consent
+export CONSENT_URL=https://static.mskobr.ru/docs/soglasie_na_obrabotku_pnd.pdf
+export PRIVACY_POLICY_URL="https://st.educom.ru/eduoffices/gateways/get_file.php?id={C6751185-7D3C-F320-3D87-C704B3683104}&name=politika_v_otnoshenii_pd_rkait20.pdf"
 export CONSENT_VERSION=recovery-drill
 python -m event_api.migrate
 mysql --defaults-extra-file="$runtime/client.cnf" event_registration --execute="
   INSERT INTO staff_users
-    (id,email,email_normalized,password_hash,system_role,active,password_changed_at,created_at,updated_at)
+    (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,active,password_changed_at,created_at,updated_at)
   VALUES
-    ('00000000-0000-0000-0000-000000000001','recovery@example.invalid',
+    ('00000000-0000-0000-0000-000000000001','50000000-0000-4000-8000-000000000001',
+     '51000000-0000-4000-8000-000000000001','recovery@example.invalid',
      'recovery@example.invalid','synthetic-non-login-hash','SUPER_ADMIN',FALSE,
      UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));"
 

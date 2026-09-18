@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-import { uuidSchema } from './common.js';
+import { allowedPersonTypesSchema, uuidSchema } from './common.js';
+import { registrationFormConfigSchema, systemFieldsSchema } from './forms.js';
 
 export const eventStatusSchema = z.enum([
   'DRAFT',
@@ -12,6 +13,12 @@ export const eventStatusSchema = z.enum([
 ]);
 
 const eventValuesSchema = z.object({
+  seasonId: uuidSchema.nullable().optional(),
+  categoryId: uuidSchema.nullable().optional(),
+  levelId: uuidSchema.nullable().optional(),
+  formConfig: registrationFormConfigSchema.optional(),
+  isListed: z.boolean().optional(),
+  allowedPersonTypes: allowedPersonTypesSchema.optional(),
   title: z.string().trim().min(1).max(255),
   slug: z
     .string()
@@ -20,10 +27,11 @@ const eventValuesSchema = z.object({
     .max(255)
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   description: z.string().max(20_000).nullable().optional(),
-  coverObjectKey: z.string().max(1024).nullable().optional(),
+  direction: z.string().trim().max(80).nullable().optional(),
+  directionId: uuidSchema.nullable().optional(),
   startAt: z.iso.datetime({ offset: true }),
   endAt: z.iso.datetime({ offset: true }),
-  timezone: z.string().trim().min(1).max(64).default('Europe/Moscow'),
+  timezone: z.literal('Europe/Moscow').default('Europe/Moscow'),
   location: z.string().trim().min(1).max(500),
   registrationDeadline: z.iso.datetime({ offset: true }),
   capacity: z.number().int().positive(),
@@ -42,10 +50,21 @@ export const updateEventRequestSchema = eventValuesSchema
 export type UpdateEventRequest = z.infer<typeof updateEventRequestSchema>;
 
 export const eventResponseSchema = z.object({
+  effectiveStatus: eventStatusSchema.optional(),
+  formConfig: registrationFormConfigSchema.optional(),
+  streamsEnabled: z.boolean().optional(),
+  isListed: z.boolean().optional(),
+  allowedPersonTypes: allowedPersonTypesSchema.optional(),
+  seasonId: uuidSchema.nullable().optional(),
+  categoryId: uuidSchema.nullable().optional(),
+  levelId: uuidSchema.nullable().optional(),
   id: uuidSchema,
   title: z.string(),
   slug: z.string(),
   description: z.string().nullable(),
+  direction: z.string().nullable().optional(),
+  directionId: uuidSchema.nullable().optional(),
+  organizationId: uuidSchema,
   coverObjectKey: z.string().nullable(),
   startAt: z.iso.datetime({ offset: true }),
   endAt: z.iso.datetime({ offset: true }),
@@ -68,11 +87,42 @@ export const eventListResponseSchema = z.object({
 });
 export type EventListResponse = z.infer<typeof eventListResponseSchema>;
 
+export const publicEventSummarySchema = eventResponseSchema.pick({
+  effectiveStatus: true,
+  id: true,
+  title: true,
+  slug: true,
+  description: true,
+  direction: true,
+  directionId: true,
+  coverObjectKey: true,
+  startAt: true,
+  endAt: true,
+  timezone: true,
+  location: true,
+  registrationDeadline: true,
+});
+export type PublicEventSummary = z.infer<typeof publicEventSummarySchema>;
+
+export const publicEventListResponseSchema = z.object({
+  items: z.array(publicEventSummarySchema),
+});
+export type PublicEventListResponse = z.infer<
+  typeof publicEventListResponseSchema
+>;
+
+export const purgeEventRequestSchema = z
+  .object({ confirmationSlug: eventValuesSchema.shape.slug })
+  .strict();
+export type PurgeEventRequest = z.infer<typeof purgeEventRequestSchema>;
+
 export const scannerEventListResponseSchema = z.object({
   items: z.array(
     eventResponseSchema.pick({
       id: true,
       title: true,
+      allowedPersonTypes: true,
+      streamsEnabled: true,
       startAt: true,
       endAt: true,
       timezone: true,
@@ -94,6 +144,7 @@ export const formFieldTypeSchema = z.enum([
 ]);
 
 const formFieldValuesSchema = z.object({
+  onsiteRequired: z.boolean().default(false),
   type: formFieldTypeSchema,
   label: z.string().trim().min(1).max(255),
   required: z.boolean().default(false),
@@ -121,6 +172,7 @@ export type UpdateFormFieldRequest = z.infer<
 >;
 
 export const formFieldResponseSchema = z.object({
+  onsiteRequired: z.boolean().optional(),
   id: uuidSchema,
   eventId: uuidSchema,
   type: formFieldTypeSchema,
@@ -135,6 +187,33 @@ export const formFieldResponseSchema = z.object({
 export type FormFieldResponse = z.infer<typeof formFieldResponseSchema>;
 
 export const formFieldListResponseSchema = z.object({
+  systemFields: systemFieldsSchema.optional(),
+  allowedPersonTypes: allowedPersonTypesSchema.optional(),
   items: z.array(formFieldResponseSchema),
 });
 export type FormFieldListResponse = z.infer<typeof formFieldListResponseSchema>;
+
+export const streamValuesSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    startAt: z.iso.datetime({ offset: true }),
+    endAt: z.iso.datetime({ offset: true }),
+    capacity: z.number().int().min(1).max(1_000_000),
+    sortOrder: z.number().int().min(0).max(100_000).default(0),
+    active: z.boolean().default(true),
+  })
+  .strict();
+export type StreamValues = z.infer<typeof streamValuesSchema>;
+export const streamResponseSchema = streamValuesSchema.extend({
+  id: uuidSchema,
+  eventId: uuidSchema,
+  registered: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  ended: z.boolean(),
+});
+export type StreamResponse = z.infer<typeof streamResponseSchema>;
+export const streamListResponseSchema = z.object({
+  items: z.array(streamResponseSchema),
+  streamsEnabled: z.boolean().optional(),
+});
+export type StreamListResponse = z.infer<typeof streamListResponseSchema>;

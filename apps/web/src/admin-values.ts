@@ -8,12 +8,19 @@ import {
 } from '@event-registration/contracts';
 
 export const eventValues = (form: FormData): CreateEventRequest => {
-  const timezone = text(form, 'timezone');
+  const timezone = 'Europe/Moscow';
   return createEventRequestSchema.parse({
+    seasonId: optionalText(form, 'seasonId'),
+    categoryId: optionalText(form, 'categoryId'),
+    levelId: optionalText(form, 'levelId'),
+    isListed: form.has('visibilityConfigured') ? form.has('isListed') : true,
+    allowedPersonTypes: form.has('allowedPersonTypesConfigured')
+      ? form.getAll('allowedPersonTypes').map(String)
+      : null,
     title: text(form, 'title'),
     slug: text(form, 'slug'),
     description: optionalText(form, 'description'),
-    coverObjectKey: optionalText(form, 'coverObjectKey'),
+    direction: optionalText(form, 'direction'),
     startAt: zonedLocalToIso(text(form, 'startAt'), timezone),
     endAt: zonedLocalToIso(text(form, 'endAt'), timezone),
     timezone,
@@ -40,22 +47,28 @@ export const formFieldValues = (form: FormData): CreateFormFieldRequest => {
     type,
     label: text(form, 'label'),
     required: form.get('required') === 'on',
+    onsiteRequired: form.has('onsiteRequired'),
     sortOrder: Number(text(form, 'sortOrder')),
     options,
   });
 };
 
 export const eventDefaults = (event?: EventResponse) => ({
+  seasonId: event?.seasonId ?? '',
+  categoryId: event?.categoryId ?? '',
+  levelId: event?.levelId ?? '',
+  isListed: event?.isListed ?? true,
+  allowedPersonTypes: event?.allowedPersonTypes ?? null,
   title: event?.title ?? '',
   slug: event?.slug ?? '',
   description: event?.description ?? '',
-  coverObjectKey: event?.coverObjectKey ?? '',
-  startAt: event ? isoToZonedLocal(event.startAt, event.timezone) : '',
-  endAt: event ? isoToZonedLocal(event.endAt, event.timezone) : '',
-  timezone: event?.timezone ?? 'Europe/Moscow',
+  direction: event?.direction ?? '',
+  startAt: event ? isoToZonedLocal(event.startAt, 'Europe/Moscow') : '',
+  endAt: event ? isoToZonedLocal(event.endAt, 'Europe/Moscow') : '',
+  timezone: 'Europe/Moscow',
   location: event?.location ?? '',
   registrationDeadline: event
-    ? isoToZonedLocal(event.registrationDeadline, event.timezone)
+    ? isoToZonedLocal(event.registrationDeadline, 'Europe/Moscow')
     : '',
   capacity: event?.capacity ?? 1,
   status: event?.status ?? 'DRAFT',
@@ -65,6 +78,7 @@ export const formFieldDefaults = (field?: FormFieldResponse) => ({
   type: field?.type ?? 'SHORT_TEXT',
   label: field?.label ?? '',
   required: field?.required ?? false,
+  onsiteRequired: field?.onsiteRequired ?? field?.required ?? false,
   sortOrder: field?.sortOrder ?? 0,
   options: field?.options?.join('\n') ?? '',
 });

@@ -1,5 +1,7 @@
 import {
   attendanceSyncResponseSchema,
+  streamListResponseSchema,
+  type StreamListResponse,
   formFieldListResponseSchema,
   offlineBundleResponseSchema,
   onsiteRegistrationResponseSchema,
@@ -25,6 +27,7 @@ const apiBaseUrl = String(import.meta.env.VITE_API_BASE_URL ?? '').replace(
   /\/$/,
   '',
 );
+const requestTimeoutMs = 15_000;
 
 export class ApiClientError extends Error {
   public override readonly name = 'API_CLIENT_ERROR';
@@ -39,6 +42,13 @@ export class ApiClientError extends Error {
 }
 
 export class ScannerApiClient {
+  public streams(eventId: string): Promise<StreamListResponse> {
+    return this.request(
+      `/scanner/events/${encodeURIComponent(eventId)}/streams`,
+      { method: 'GET' },
+      streamListResponseSchema,
+    );
+  }
   private csrfToken: string | undefined;
 
   public async restoreSession(): Promise<SessionResponse | undefined> {
@@ -164,14 +174,22 @@ export class ScannerApiClient {
       headers.set('x-csrf-token', this.csrfToken);
     }
     let response: Response;
+    const controller = new AbortController();
+    const timeout = globalThis.setTimeout(
+      () => controller.abort(),
+      requestTimeoutMs,
+    );
     try {
       response = await fetch(`${apiBaseUrl}${path}`, {
         ...init,
         headers,
         credentials: 'include',
+        signal: init.signal ?? controller.signal,
       });
     } catch {
       throw new ApiClientError('NETWORK_ERROR', 0, 'Сервер недоступен');
+    } finally {
+      globalThis.clearTimeout(timeout);
     }
     const body = await response.json().catch(() => undefined);
     if (!response.ok) {

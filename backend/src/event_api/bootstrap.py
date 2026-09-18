@@ -10,6 +10,7 @@ from sqlalchemy import text
 from .config import Settings, get_settings
 from .database import Database
 from .security import auth_link_token, mysql_millis, token_hash
+from .tenant_scope import default_tenant_scope
 
 BOOTSTRAP_LOCK = "event-registration-super-admin-bootstrap"
 
@@ -33,6 +34,7 @@ def create_activation_token(email: str, database: Database, config: Settings) ->
             raise SystemExit("Could not acquire SUPER_ADMIN bootstrap lock")
         try:
             with connection.begin():
+                scope = default_tenant_scope(connection)
                 count = connection.execute(
                     text(
                         "SELECT COUNT(*) FROM staff_users WHERE system_role = 'SUPER_ADMIN'"
@@ -54,13 +56,15 @@ def create_activation_token(email: str, database: Database, config: Settings) ->
                 connection.execute(
                     text(
                         """INSERT INTO staff_invitations
-                           (id,email_normalized,token_hash,invited_by,event_id,role,
+                           (id,tenant_id,organization_id,email_normalized,token_hash,invited_by,event_id,role,
                             expires_at,created_at)
-                           VALUES (:id,:email,:hash,NULL,NULL,'SUPER_ADMIN',
+                           VALUES (:id,:tenant,:organization,:email,:hash,NULL,NULL,'SUPER_ADMIN',
                                    :expires,UTC_TIMESTAMP(3))"""
                     ),
                     {
                         "id": record_id,
+                        "tenant": scope.tenant_id,
+                        "organization": scope.organization_id,
                         "email": email,
                         "hash": token_hash(raw_token),
                         "expires": expires,

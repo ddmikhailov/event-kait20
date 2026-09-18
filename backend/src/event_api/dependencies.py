@@ -9,7 +9,7 @@ from .database import Database, execute, row
 from .errors import ApiError
 from .security import csrf_token, token_hash, verify_csrf
 
-Role = Literal["SUPER_ADMIN", "SCANNER"]
+Role = Literal["SUPER_ADMIN", "ORGANIZER", "SCANNER"]
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,8 @@ class Staff:
     id: str
     email: str
     role: Role
+    tenant_id: str
+    organization_id: str
     session_id: str
     expires_at: datetime
     raw_token: str
@@ -43,10 +45,13 @@ def current_staff(
         result = row(
             connection,
             """SELECT s.id AS session_id, s.expires_at, u.id, u.email,
-                      u.system_role, u.active
+                      u.system_role, u.active,u.tenant_id,u.organization_id
                FROM sessions s JOIN staff_users u ON u.id = s.user_id
+               JOIN tenants t ON t.id=u.tenant_id
+               JOIN organizations o ON o.id=u.organization_id AND o.tenant_id=t.id
                WHERE s.token_hash = :token_hash AND s.revoked_at IS NULL
-                 AND s.expires_at > UTC_TIMESTAMP(3) AND u.active = true""",
+                 AND s.expires_at > UTC_TIMESTAMP(3) AND u.active = true
+                 AND t.active=true AND o.active=true""",
             {"token_hash": token_hash(staff_session)},
         )
         if not result:
@@ -60,6 +65,8 @@ def current_staff(
         id=result["id"],
         email=result["email"],
         role=result["system_role"],
+        tenant_id=result["tenant_id"],
+        organization_id=result["organization_id"],
         session_id=result["session_id"],
         expires_at=result["expires_at"],
         raw_token=staff_session,
@@ -89,7 +96,19 @@ def super_admin(staff: Annotated[Staff, Depends(current_staff)]) -> Staff:
     return staff
 
 
+def administrator(staff: Annotated[Staff, Depends(current_staff)]) -> Staff:
+    if staff.role not in {"SUPER_ADMIN", "ORGANIZER"}:
+        raise ApiError(403, "FORBIDDEN", "Insufficient permission")
+    return staff
+
+
 def csrf_super_admin(staff: Annotated[Staff, Depends(csrf_staff)]) -> Staff:
     if staff.role != "SUPER_ADMIN":
+        raise ApiError(403, "FORBIDDEN", "Insufficient permission")
+    return staff
+
+
+def csrf_administrator(staff: Annotated[Staff, Depends(csrf_staff)]) -> Staff:
+    if staff.role not in {"SUPER_ADMIN", "ORGANIZER"}:
         raise ApiError(403, "FORBIDDEN", "Insufficient permission")
     return staff

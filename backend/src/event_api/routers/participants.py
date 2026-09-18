@@ -8,14 +8,14 @@ from ..config import Settings
 from ..database import Database, execute, row, rows
 from ..dependencies import (
     Staff,
-    csrf_super_admin,
+    administrator,
+    csrf_administrator,
     current_staff,
     database,
     settings,
-    super_admin,
 )
 from ..errors import ApiError
-from ..registration_service import ticket_url
+from ..registration_service import ticket_url, validate_participant_type
 from ..schemas import PersonUpdate
 from ..service_utils import audit, json_value, serial
 
@@ -71,17 +71,19 @@ def registration_response(item: RowMapping) -> dict[str, Any]:
 
 
 def assert_shape(data: dict[str, Any]) -> None:
-    if str(data["person_type"]).endswith("_STUDENT") and not data.get("study_group"):
-        raise ApiError(400, "VALIDATION_ERROR", "Study group is required")
-    if str(data["person_type"]).startswith("EXTERNAL_") and not data.get(
-        "organization"
-    ):
-        raise ApiError(400, "VALIDATION_ERROR", "Organization is required")
+    if any(not data.get(key) for key in ("first_name", "last_name", "person_type")):
+        raise ApiError(
+            400, "VALIDATION_ERROR", "Name and participant type cannot be empty"
+        )
+    if str(data["person_type"]) != "KAIT_STUDENT":
+        data["study_group"] = None
+    if not str(data["person_type"]).startswith(("KAIT_", "EXTERNAL_")):
+        data["organization"] = None
 
 
 @people.get("")
 def list_people(
-    _staff: Annotated[Staff, Depends(super_admin)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
     query: str = Query("", max_length=200),
     page: int = Query(1, ge=1),
@@ -92,8 +94,9 @@ def list_people(
         "search": search_pattern(query),
         "limit": page_size,
         "offset": (page - 1) * page_size,
+        "tenant": staff.tenant_id,
     }
-    where = """merged_into_id IS NULL AND (:query='' OR concat_ws(' ',last_name,first_name,middle_name) LIKE :search
+    where = """tenant_id=:tenant AND merged_into_id IS NULL AND (:query='' OR concat_ws(' ',last_name,first_name,middle_name) LIKE :search
         OR coalesce(email,'') LIKE :search OR coalesce(phone,'') LIKE :search OR coalesce(study_group,'') LIKE :search)"""
     with db.connect() as connection:
         items = rows(
@@ -115,14 +118,15 @@ def list_people(
 @people.get("/{person_id}")
 def get_person(
     person_id: UUID,
-    _staff: Annotated[Staff, Depends(super_admin)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
         item = row(
             connection,
-            "SELECT * FROM persons WHERE id=:id AND merged_into_id IS NULL",
-            {"id": str(person_id)},
+            """SELECT * FROM persons
+            WHERE id=:id AND tenant_id=:tenant AND merged_into_id IS NULL""",
+            {"id": str(person_id), "tenant": staff.tenant_id},
         )
         history = rows(
             connection,
@@ -155,15 +159,16 @@ def get_person(
 def update_person(
     person_id: UUID,
     values: PersonUpdate,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     target = str(person_id)
     with db.transaction() as connection:
         existing = row(
             connection,
-            "SELECT * FROM persons WHERE id=:id AND merged_into_id IS NULL FOR UPDATE",
-            {"id": target},
+            """SELECT * FROM persons
+            WHERE id=:id AND tenant_id=:tenant AND merged_into_id IS NULL FOR UPDATE""",
+            {"id": target, "tenant": staff.tenant_id},
         )
         if not existing:
             raise ApiError(404, "NOT_FOUND", "Person not found")
@@ -203,15 +208,20 @@ def update_person(
     return get_person(person_id, staff, db)
 
 
-def assert_event(connection: Any, event_id: str) -> None:
-    if not row(connection, "SELECT id FROM events WHERE id=:id", {"id": event_id}):
+def assert_event(connection: Any, event_id: str, tenant_id: str) -> None:
+    if not row(
+        connection,
+        """SELECT e.id FROM events e JOIN organizations o ON o.id=e.organization_id
+        WHERE e.id=:id AND o.tenant_id=:tenant""",
+        {"id": event_id, "tenant": tenant_id},
+    ):
         raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
 
 
 @registrations.get("/{event_id}/registrations")
 def list_registrations(
     event_id: UUID,
-    _staff: Annotated[Staff, Depends(super_admin)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
     query: str = Query("", max_length=200),
     status: str | None = Query(None, pattern="^(ACTIVE|ANNULLED)$"),
@@ -230,7 +240,7 @@ def list_registrations(
         concat_ws(' ',last_name,first_name,middle_name) LIKE :search OR coalesce(email,'') LIKE :search
         OR coalesce(phone,'') LIKE :search OR coalesce(study_group,'') LIKE :search)"""
     with db.connect() as connection:
-        assert_event(connection, str(event_id))
+        assert_event(connection, str(event_id), staff.tenant_id)
         items = rows(
             connection,
             f"SELECT * FROM registrations WHERE {where} ORDER BY registered_at DESC,id LIMIT :limit OFFSET :offset",
@@ -253,11 +263,12 @@ def list_registrations(
 def get_registration(
     event_id: UUID,
     registration_id: UUID,
-    _staff: Annotated[Staff, Depends(super_admin)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
+        assert_event(connection, str(event_id), staff.tenant_id)
         item = row(
             connection,
             "SELECT * FROM registrations WHERE id=:id AND event_id=:event",
@@ -290,12 +301,21 @@ def update_registration(
     event_id: UUID,
     registration_id: UUID,
     values: PersonUpdate,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, Any]:
     rid = str(registration_id)
     with db.transaction() as connection:
+        event = row(
+            connection,
+            """SELECT e.allowed_person_types FROM events e
+            JOIN organizations o ON o.id=e.organization_id
+            WHERE e.id=:id AND o.tenant_id=:tenant FOR UPDATE""",
+            {"id": str(event_id), "tenant": staff.tenant_id},
+        )
+        if not event:
+            raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
         existing = row(
             connection,
             "SELECT * FROM registrations WHERE id=:id AND event_id=:event FOR UPDATE",
@@ -306,6 +326,12 @@ def update_registration(
         if existing["status"] == "ANNULLED":
             raise ApiError(409, "REGISTRATION_ANNULLED", "Registration is annulled")
         changes = values.model_dump(exclude_unset=True)
+        if (
+            "person_type" in changes
+            and changes["person_type"] != existing["person_type"]
+            and event
+        ):
+            validate_participant_type(event, str(changes["person_type"]))
         data = {
             key: changes.get(key, existing[key])
             for key in (
@@ -352,10 +378,11 @@ def update_registration(
 def annul(
     event_id: UUID,
     registration_id: UUID,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     with db.transaction() as connection:
+        assert_event(connection, str(event_id), staff.tenant_id)
         item = row(
             connection,
             "SELECT status FROM registrations WHERE id=:id AND event_id=:event FOR UPDATE",
@@ -391,10 +418,11 @@ def annul(
 def resend(
     event_id: UUID,
     registration_id: UUID,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     with db.transaction() as connection:
+        assert_event(connection, str(event_id), staff.tenant_id)
         item = row(
             connection,
             "SELECT email,status FROM registrations WHERE id=:id AND event_id=:event FOR UPDATE",
@@ -449,7 +477,7 @@ def scanner_search(
     where = """event_id=:event AND status='ACTIVE' AND (:query='' OR concat_ws(' ',last_name,first_name,middle_name) LIKE :search
         OR coalesce(email,'') LIKE :search OR coalesce(phone,'') LIKE :search OR coalesce(study_group,'') LIKE :search)"""
     with db.connect() as connection:
-        assert_event(connection, str(event_id))
+        assert_event(connection, str(event_id), staff.tenant_id)
         if staff.role == "SCANNER" and not row(
             connection,
             "SELECT 1 FROM event_access WHERE event_id=:event AND user_id=:user",

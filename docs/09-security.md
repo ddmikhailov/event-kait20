@@ -20,9 +20,14 @@ Public registration requires explicit checkbox. Persist:
 - accepted=true;
 - timestamp;
 - consent URL;
+- privacy-policy URL;
 - consent version identifier.
 
-Final legal URL is an external project input still pending.
+The deployed configuration must use the approved KAIT №20 consent and privacy-policy documents. The public form receives these URLs from the API, and every new or refreshed Registration stores both URLs plus the shared legal-document version. Existing historical rows are not rewritten when a document version changes.
+
+### 3.1 Public repeat registration
+
+Knowledge of a participant's name, birth date, phone or email is not proof of ownership of an existing Registration. A public repeat must not change Person or Registration data and must not return the existing registration ID or signed ticket URL. Recovery email is addressed only to the contact already stored in the historical Registration. Without a stored email, correction and ticket recovery require an authorized organizer.
 
 ## 4. QR security/privacy
 
@@ -73,16 +78,23 @@ Release 1.0 uses exact `Origin` matching against validated Web/Scanner configura
 ## 7. Authorization
 
 Backend policy:
-- SUPER_ADMIN: full MVP administrative scope;
+- SUPER_ADMIN: full administrative scope, administrator-role management and Event purge;
+- ORGANIZER: global Event/data scope and SCANNER management, but no administrator-role management or Event purge;
 - SCANNER: assigned Event only;
 - public: no participant lists.
 
 Every protected handler has explicit permission guard. UI hiding is not authorization.
 
-SCANNER cannot overbook capacity. Administrative capacity override belongs to SUPER_ADMIN and is audited.
+An assigned SCANNER, SUPER_ADMIN or ORGANIZER may explicitly confirm onsite
+capacity override. EventAccess still applies; the actor and explicit override are
+audited. The public registration endpoint never accepts an override flag.
+
+Unlisted Events are discoverable to anyone with the direct registration link;
+isListed is catalogue visibility, not authentication or a confidentiality boundary.
+Stream identifiers are validated against their Event and reinforced by a composite FK.
 
 Participant-management implementation keeps global Person search and all
-Registration mutations SUPER_ADMIN-only. SCANNER search is restricted by
+Registration mutations administrator-only. SCANNER search is restricted by
 EventAccess and returns the documented minimum display snapshot; it does not
 return email or birth date. Audit metadata for participant edits stores changed
 field names and control flags, not before/after PII values.
@@ -164,7 +176,7 @@ Audit log records significant admin actions but should store field names/compact
 
 The MVP preview payload is private MySQL `longblob`, not an application log
 or aggregate result. It expires after at most 24 hours and is deleted
-immediately after commit. Only SUPER_ADMIN endpoints can preview, commit, or
+immediately after commit. Only SUPER_ADMIN/ORGANIZER endpoints can preview, commit, or
 export. `.xlsm`, multiple worksheets, merged cells and formula cells are not
 accepted by the MVP importer.
 
@@ -186,6 +198,10 @@ run outside development.
 
 Daily production DB backups. Backup retention and restore test are deployment decisions that must be documented before real PII launch. Backups receive same access discipline as primary DB.
 
+Permanent Event purge does not rewrite existing backups. Operators must communicate
+that purged Event data can remain in protected backup media until normal retention
+expires; restoring such a backup requires reapplying the purge before service return.
+
 ## 16. Production security gate
 
 Before first live Event, explicitly review/test:
@@ -200,3 +216,25 @@ Before first live Event, explicitly review/test:
 - secret rotation;
 - dependency/security scan;
 - PWA offline data cleanup/logout.
+
+## Activity profile privacy
+
+StudentProfile starts PRIVATE and is never published without an active,
+versioned ProfilePublicationConsent. Public routes resolve an opaque random slug,
+apply a response-field allowlist and never return Person ID, email, phone,
+internal score reasons or audit metadata. Withdrawing consent immediately hides
+the profile. Scanner has no Activity administration permission; manual score
+adjustment and global configuration remain SUPER_ADMIN-only.
+
+Consent is field-level: NAME and SCORES permit leaderboard identity/points only;
+participation and achievement counters require their own allowed fields and are
+omitted otherwise. A generated unique key enforces at most one non-withdrawn
+consent per Person. Public group/department aggregates include only PUBLIC profiles
+with active SCORES consent and historically attributed score transactions. They
+expose no Person IDs. Small aggregate cohorts currently have no k-anonymity
+suppression and must pass a separate privacy review before broad public launch.
+
+ScoringPolicy lifecycle, Season policy assignment and Person Status writes are
+SUPER_ADMIN-only and derive Organization from authenticated staff context.
+Client-supplied organization authority is not accepted. Preview is authenticated
+administration functionality; calculation snapshots are not public.

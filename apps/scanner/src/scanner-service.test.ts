@@ -44,7 +44,7 @@ const makeBundle = async (version = '1'): Promise<OfflineBundleResponse> => {
     eventId,
     version,
     generatedAt: '2026-08-31T09:00:00.000Z',
-    expiresAt: '2026-09-02T09:00:00.000Z',
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     serverTime: new Date().toISOString(),
     registrationCount: registrations.length,
     checksum: await sha256(JSON.stringify(registrations)),
@@ -62,6 +62,7 @@ afterEach(async () => {
 
 describe('scanner service', () => {
   it('revalidates, sends pending attendance, then refreshes the bundle', async () => {
+    await database.bindOwner('30000000-0000-4000-8000-000000000001');
     await database.replaceBundle(await makeBundle(), 0, event);
     const pending = await database.queueAttendance(
       eventId,
@@ -73,7 +74,9 @@ describe('scanner service', () => {
     const api = {
       restoreSession: vi.fn(() => {
         order.push('session');
-        return Promise.resolve({ authenticated: true });
+        return Promise.resolve({
+          user: { id: '30000000-0000-4000-8000-000000000001' },
+        });
       }),
       sync: vi.fn((_id: string, request: AttendanceSyncRequest) => {
         order.push('sync');

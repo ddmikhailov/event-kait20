@@ -142,6 +142,9 @@ importers:
 
   packages/ui:
     dependencies:
+      '@event-registration/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       react:
         specifier: 19.2.8
         version: 19.2.8

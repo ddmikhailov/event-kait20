@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { uuidSchema } from './common.js';
+import { personTypeSchema, uuidSchema } from './common.js';
 
 const uniqueRegistrationIds = z
   .array(uuidSchema)
@@ -37,6 +37,44 @@ export const sendTicketsResponseSchema = z.object({
 export type SendTicketsResponse = z.infer<typeof sendTicketsResponseSchema>;
 
 export const eventStatisticsResponseSchema = z.object({
+  confirmedParticipations: z.number().int().nonnegative().optional(),
+  participationsWithoutScoringRule: z.number().int().nonnegative().optional(),
+  scoreAwarded: z
+    .string()
+    .regex(/^-?\d+\.\d{4}$/)
+    .optional(),
+  byParticipationRole: z
+    .array(
+      z.object({
+        code: z.string(),
+        name: z.string(),
+        count: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
+  byStream: z
+    .array(
+      z.object({
+        id: uuidSchema,
+        title: z.string(),
+        capacity: z.number().int().positive(),
+        registered: z.number().int().nonnegative(),
+        attended: z.number().int().nonnegative(),
+        absent: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
+  overCapacity: z.number().int().nonnegative().optional(),
+  byPersonType: z
+    .array(
+      z.object({
+        personType: personTypeSchema,
+        registered: z.number().int().nonnegative(),
+        attended: z.number().int().nonnegative(),
+        absent: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
   eventId: uuidSchema,
   capacity: z.number().int().positive(),
   registered: z.number().int().nonnegative(),

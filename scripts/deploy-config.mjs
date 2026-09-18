@@ -3,6 +3,10 @@ import { isAbsolute, resolve } from 'node:path';
 
 const placeholderPattern =
   /(?:example\.(?:com|org|ru)|replace|change-?me|todo|<[^>]+>)/i;
+const approvedConsentUrl =
+  'https://static.mskobr.ru/docs/soglasie_na_obrabotku_pnd.pdf';
+const approvedPrivacyPolicyUrl =
+  'https://st.educom.ru/eduoffices/gateways/get_file.php?id={C6751185-7D3C-F320-3D87-C704B3683104}&name=politika_v_otnoshenii_pd_rkait20.pdf';
 
 export class DeploymentConfigError extends Error {}
 
@@ -25,6 +29,7 @@ const requiredKeys = [
   'QR_SIGNING_SECRET',
   'PUBLIC_WEB_BASE_URL',
   'CONSENT_URL',
+  'PRIVACY_POLICY_URL',
   'CONSENT_VERSION',
   'EMAIL_MAX_ATTEMPTS',
   'EMAIL_POLL_INTERVAL_MS',
@@ -65,7 +70,11 @@ export const parseEnvironment = (source) => {
   return values;
 };
 
-const secureUrl = (value, key, { originOnly = false } = {}) => {
+const secureUrl = (
+  value,
+  key,
+  { originOnly = false, allowQuery = false } = {},
+) => {
   let url;
   try {
     url = new URL(value);
@@ -74,7 +83,10 @@ const secureUrl = (value, key, { originOnly = false } = {}) => {
   }
   assert(url.protocol === 'https:', `${key} must use HTTPS`);
   assert(!url.username && !url.password, `${key} must not contain credentials`);
-  assert(!url.search && !url.hash, `${key} must not contain query or fragment`);
+  assert(
+    (allowQuery || !url.search) && !url.hash,
+    `${key} must not contain an unsupported query or fragment`,
+  );
   if (originOnly) {
     assert(url.pathname === '/', `${key} must be an origin without a path`);
   }
@@ -187,6 +199,17 @@ export const validateDeploymentConfig = (
     'AUTH_LINK_BASE_URL path must be /auth',
   );
   secureUrl(values.CONSENT_URL, 'CONSENT_URL');
+  secureUrl(values.PRIVACY_POLICY_URL, 'PRIVACY_POLICY_URL', {
+    allowQuery: true,
+  });
+  assert(
+    values.CONSENT_URL === approvedConsentUrl,
+    'CONSENT_URL must reference the approved consent document',
+  );
+  assert(
+    values.PRIVACY_POLICY_URL === approvedPrivacyPolicyUrl,
+    'PRIVACY_POLICY_URL must reference the approved privacy policy',
+  );
 
   const secrets = [
     values.SESSION_SECRET,

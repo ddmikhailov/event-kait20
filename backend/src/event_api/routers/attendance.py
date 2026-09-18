@@ -14,6 +14,7 @@ from ..errors import ApiError
 from ..registration_service import qr_hash
 from ..schemas import AttendanceItem, AttendanceSyncRequest, ResolveQrRequest
 from ..security import utc_iso, verify_registration
+from ..service_utils import naive_utc
 
 router = APIRouter(prefix="/scanner/events", tags=["attendance"])
 MAX_BUNDLE_ROWS = 5_000
@@ -40,6 +41,7 @@ def event_context(db: Database, event_id: str, staff: Staff) -> Any:
 def scanner_item(item: Any) -> dict[str, Any]:
     return {
         "registrationId": item["id"],
+        "streamTitle": item["stream_title"],
         "lastName": item["last_name"],
         "firstName": item["first_name"],
         "middleName": item["middle_name"],
@@ -65,7 +67,8 @@ def bundle(
         registrations = rows(
             connection,
             """SELECT id,public_id,last_name,first_name,middle_name,phone,study_group,
-            person_type,organization,first_attended_at FROM registrations
+            person_type,organization,first_attended_at,
+            (SELECT s.title FROM event_streams s WHERE s.id=registrations.stream_id) AS stream_title FROM registrations
             WHERE event_id=:event AND status='ACTIVE' ORDER BY last_name,first_name,middle_name,id LIMIT :limit""",
             {"event": str(event_id), "limit": MAX_BUNDLE_ROWS + 1},
         )
@@ -117,7 +120,7 @@ def resolve_qr(
     with db.connect() as connection:
         item = row(
             connection,
-            "SELECT * FROM registrations WHERE public_id=:public AND event_id=:event",
+            "SELECT registrations.*,(SELECT s.title FROM event_streams s WHERE s.id=registrations.stream_id) AS stream_title FROM registrations WHERE public_id=:public AND event_id=:event",
             {"public": public_id, "event": str(event_id)},
         )
     if not item:
@@ -135,6 +138,29 @@ def sync_result(item: AttendanceItem, status: str, first: Any = None) -> dict[st
     }
 
 
+def mysql_millisecond(value: Any) -> Any:
+    normalized = naive_utc(value)
+    return normalized.replace(microsecond=(normalized.microsecond // 1000) * 1000)
+
+
+def same_attendance_payload(
+    existing: Any, event: Any, item: AttendanceItem, device_id: str, staff: Staff
+) -> bool:
+    return all(
+        (
+            existing["event_id"] == event["id"],
+            existing["registration_id"] == str(item.registration_id),
+            existing["scanner_user_id"] == staff.id,
+            existing["device_id"] == device_id,
+            existing["mode"] == item.mode,
+            existing["source"] == item.source,
+            existing["device_scanned_at"] == mysql_millisecond(item.device_scanned_at),
+            existing["estimated_scanned_at"]
+            == mysql_millisecond(item.estimated_scanned_at),
+        )
+    )
+
+
 def process_item(
     db: Database, event: Any, item: AttendanceItem, device_id: str, staff: Staff
 ) -> dict[str, Any]:
@@ -143,14 +169,22 @@ def process_item(
         try:
             existing = row(
                 connection,
-                """SELECT r.first_attended_at FROM attendance_events a
-                JOIN registrations r ON r.id=a.registration_id WHERE a.client_event_id=:client AND a.event_id=:event""",
-                {"client": str(item.client_event_id), "event": event["id"]},
+                """SELECT a.event_id,a.registration_id,a.scanner_user_id,a.device_id,a.mode,a.source,
+                a.device_scanned_at,a.estimated_scanned_at,r.first_attended_at
+                FROM attendance_events a JOIN registrations r ON r.id=a.registration_id
+                WHERE a.client_event_id=:client""",
+                {"client": str(item.client_event_id)},
             )
             if existing:
                 transaction.commit()
                 return sync_result(
-                    item, "ALREADY_PROCESSED", existing["first_attended_at"]
+                    item,
+                    "ALREADY_PROCESSED"
+                    if same_attendance_payload(existing, event, item, device_id, staff)
+                    else "CLIENT_EVENT_CONFLICT",
+                    existing["first_attended_at"]
+                    if same_attendance_payload(existing, event, item, device_id, staff)
+                    else None,
                 )
             registration = row(
                 connection,
@@ -163,7 +197,7 @@ def process_item(
             if registration["status"] == "ANNULLED":
                 transaction.commit()
                 return sync_result(item, "REGISTRATION_ANNULLED")
-            estimated = item.estimated_scanned_at.replace(tzinfo=None)
+            estimated = mysql_millisecond(item.estimated_scanned_at)
             if estimated < event["start_at"] - timedelta(hours=24) or estimated > event[
                 "end_at"
             ] + timedelta(hours=24):
@@ -186,7 +220,7 @@ def process_item(
                     "device": device_id,
                     "mode": item.mode,
                     "source": item.source,
-                    "scanned": item.device_scanned_at.replace(tzinfo=None),
+                    "scanned": mysql_millisecond(item.device_scanned_at),
                     "estimated": estimated,
                     "duplicate": duplicate,
                 },
@@ -208,18 +242,25 @@ def process_item(
                 "REGISTRATION_ALREADY_ATTENDED" if duplicate else "ACCEPTED",
                 registration["first_attended_at"] or estimated,
             )
-        except IntegrityError:
+        except IntegrityError as error:
             transaction.rollback()
             existing = row(
                 connection,
-                """SELECT r.first_attended_at FROM attendance_events a
-                JOIN registrations r ON r.id=a.registration_id WHERE a.client_event_id=:client AND a.event_id=:event""",
-                {"client": str(item.client_event_id), "event": event["id"]},
+                """SELECT a.event_id,a.registration_id,a.scanner_user_id,a.device_id,a.mode,a.source,
+                a.device_scanned_at,a.estimated_scanned_at,r.first_attended_at
+                FROM attendance_events a JOIN registrations r ON r.id=a.registration_id
+                WHERE a.client_event_id=:client""",
+                {"client": str(item.client_event_id)},
             )
+            if not existing:
+                raise ApiError(
+                    409, "ATTENDANCE_CONFLICT", "Attendance could not be persisted"
+                ) from error
+            identical = same_attendance_payload(existing, event, item, device_id, staff)
             return sync_result(
                 item,
-                "ALREADY_PROCESSED",
-                existing["first_attended_at"] if existing else None,
+                "ALREADY_PROCESSED" if identical else "CLIENT_EVENT_CONFLICT",
+                existing["first_attended_at"] if identical else None,
             )
 
 

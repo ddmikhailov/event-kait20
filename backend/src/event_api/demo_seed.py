@@ -9,6 +9,7 @@ from sqlalchemy import text
 from .config import get_settings
 from .database import Database
 from .security import hash_password
+from .tenant_scope import default_tenant_scope
 
 
 def stable_id(name: str) -> str:
@@ -35,24 +36,33 @@ def main() -> None:
     admin_id = stable_id("admin")
     scanner_id = stable_id("scanner")
     event_id = stable_id("event")
-    field_id = stable_id("field")
+    season_id = stable_id("activity-season")
+    scoring_rule_id = stable_id("activity-participant-rule")
+    volunteer_rule_id = stable_id("activity-volunteer-rule")
+    winner_rule_id = stable_id("activity-winner-rule")
+    removed_field_id = stable_id("field")
     database = Database(get_settings())
     with database.transaction() as connection:
+        scope = default_tenant_scope(connection)
         connection.execute(
             text("""INSERT INTO staff_users
-            (id,email,email_normalized,password_hash,system_role,active,
+            (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,active,
              password_changed_at,created_at,updated_at)
-            VALUES (:id,:email,:email,:password,:role,TRUE,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
+            VALUES (:id,:tenant,:organization,:email,:email,:password,:role,TRUE,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
             ON DUPLICATE KEY UPDATE password_hash=VALUES(password_hash),active=TRUE,updated_at=UTC_TIMESTAMP(3)"""),
             [
                 {
                     "id": admin_id,
+                    "tenant": scope.tenant_id,
+                    "organization": scope.organization_id,
                     "email": admin_email,
                     "password": hash_password(admin_password),
                     "role": "SUPER_ADMIN",
                 },
                 {
                     "id": scanner_id,
+                    "tenant": scope.tenant_id,
+                    "organization": scope.organization_id,
                     "email": scanner_email,
                     "password": hash_password(scanner_password),
                     "role": "SCANNER",
@@ -60,31 +70,157 @@ def main() -> None:
             ],
         )
         connection.execute(
-            text("""INSERT INTO events
-            (id,title,slug,description,start_at,end_at,timezone,location,
-             registration_deadline,capacity,status,created_by,offline_data_version,created_at,updated_at)
-            VALUES (:id,'Демонстрационное мероприятие','demo-event',
-                    'Локальный контур со всеми возможностями MVP',:start,:end,
-                    'Europe/Moscow','КАИТ №20',:deadline,100,'REGISTRATION_OPEN',
-                    :admin,1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
-            ON DUPLICATE KEY UPDATE start_at=VALUES(start_at),end_at=VALUES(end_at),
-              registration_deadline=VALUES(registration_deadline),
-              status='REGISTRATION_OPEN',updated_at=UTC_TIMESTAMP(3)"""),
+            text(
+                "UPDATE seasons SET active=false,updated_at=UTC_TIMESTAMP(3) WHERE active=true AND id<>:id"
+            ),
+            {"id": season_id},
+        )
+        connection.execute(
+            text("""INSERT INTO seasons
+            (id,organization_id,code,name,starts_at,ends_at,active,created_at,updated_at)
+            VALUES (:id,:organization,'DEMO_SEASON','Демонстрационный сезон',:starts,:ends,true,
+                    UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
+            ON DUPLICATE KEY UPDATE name=VALUES(name),starts_at=VALUES(starts_at),
+              ends_at=VALUES(ends_at),active=true,updated_at=UTC_TIMESTAMP(3)"""),
             {
-                "id": event_id,
-                "start": now + timedelta(hours=1),
-                "end": now + timedelta(hours=5),
-                "deadline": now + timedelta(minutes=30),
-                "admin": admin_id,
+                "id": season_id,
+                "organization": scope.organization_id,
+                "starts": now - timedelta(days=30),
+                "ends": now + timedelta(days=365),
             },
         )
         connection.execute(
-            text("""INSERT INTO event_form_fields
-            (id,event_id,type,label,required,sort_order,options,active,created_at,updated_at)
-            VALUES (:id,:event,'SINGLE_CHOICE','Направление участия',TRUE,10,
-                    JSON_ARRAY('Участник','Организатор','Гость'),TRUE,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
-            ON DUPLICATE KEY UPDATE active=TRUE,updated_at=UTC_TIMESTAMP(3)"""),
-            {"id": field_id, "event": event_id},
+            text("""INSERT INTO events
+            (id,organization_id,title,slug,description,direction,start_at,end_at,timezone,location,
+             registration_deadline,capacity,status,created_by,offline_data_version,created_at,updated_at)
+            VALUES (:id,:organization,:title,:slug,:description,:direction,:start,:end,
+                    'Europe/Moscow',:location,:deadline,:capacity,'REGISTRATION_OPEN',
+                    :admin,1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
+            ON DUPLICATE KEY UPDATE title=VALUES(title),description=VALUES(description),
+              direction=VALUES(direction),location=VALUES(location),capacity=VALUES(capacity),
+              start_at=VALUES(start_at),end_at=VALUES(end_at),
+              registration_deadline=VALUES(registration_deadline),
+              status='REGISTRATION_OPEN',updated_at=UTC_TIMESTAMP(3)"""),
+            [
+                {
+                    "id": event_id,
+                    "organization": scope.organization_id,
+                    "title": "Демонстрационное мероприятие",
+                    "slug": "demo-event",
+                    "description": "Локальный контур со всеми возможностями MVP",
+                    "direction": "Знакомство с колледжем",
+                    "location": "КАИТ №20",
+                    "capacity": 100,
+                    "start": now + timedelta(hours=1),
+                    "end": now + timedelta(hours=5),
+                    "deadline": now + timedelta(minutes=30),
+                    "admin": admin_id,
+                },
+                {
+                    "id": stable_id("open-day"),
+                    "organization": scope.organization_id,
+                    "title": "День открытых дверей",
+                    "slug": "open-day",
+                    "description": "Экскурсия по колледжу, знакомство с программами и ответы на вопросы.",
+                    "direction": "Профориентация",
+                    "location": "Главный корпус",
+                    "capacity": 180,
+                    "start": now + timedelta(days=2),
+                    "end": now + timedelta(days=2, hours=4),
+                    "deadline": now + timedelta(days=1, hours=20),
+                    "admin": admin_id,
+                },
+                {
+                    "id": stable_id("web-workshop"),
+                    "organization": scope.organization_id,
+                    "title": "Мастер-класс по веб-разработке",
+                    "slug": "web-workshop",
+                    "description": "Практическое занятие для тех, кто хочет попробовать себя в разработке.",
+                    "direction": "Информационные технологии",
+                    "location": "IT-полигон",
+                    "capacity": 40,
+                    "start": now + timedelta(days=8),
+                    "end": now + timedelta(days=8, hours=2),
+                    "deadline": now + timedelta(days=7),
+                    "admin": admin_id,
+                },
+                {
+                    "id": stable_id("design-workshop"),
+                    "organization": scope.organization_id,
+                    "title": "Практикум по графическому дизайну",
+                    "slug": "design-workshop",
+                    "description": "Знакомство с композицией, типографикой и созданием визуальных материалов.",
+                    "direction": "Дизайн и медиа",
+                    "location": "Медиацентр",
+                    "capacity": 35,
+                    "start": now + timedelta(days=35),
+                    "end": now + timedelta(days=35, hours=2),
+                    "deadline": now + timedelta(days=34),
+                    "admin": admin_id,
+                },
+            ],
+        )
+        connection.execute(
+            text("DELETE FROM registration_answers WHERE field_id=:field"),
+            {"field": removed_field_id},
+        )
+        connection.execute(
+            text("DELETE FROM event_form_fields WHERE id=:field"),
+            {"field": removed_field_id},
+        )
+        connection.execute(
+            text("""UPDATE events SET season_id=:season,
+            category_id='10000000-0000-4000-8000-000000000001',
+            level_id='20000000-0000-4000-8000-000000000001'
+            WHERE id IN (:event,:open_day,:web_workshop,:design_workshop)"""),
+            {
+                "season": season_id,
+                "event": event_id,
+                "open_day": stable_id("open-day"),
+                "web_workshop": stable_id("web-workshop"),
+                "design_workshop": stable_id("design-workshop"),
+            },
+        )
+        connection.execute(
+            text("""INSERT INTO scoring_rules
+            (id,season_id,event_category_id,event_level_id,participation_role_id,
+             participation_result_id,points,priority,active,version,created_at,updated_at,
+             created_by,updated_by)
+            VALUES (:id,:season,'10000000-0000-4000-8000-000000000001',
+                    '20000000-0000-4000-8000-000000000001',
+                    :role,:result,:points,:priority,true,1,
+                    UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),:admin,:admin)
+            ON DUPLICATE KEY UPDATE points=VALUES(points),active=true,
+              updated_at=UTC_TIMESTAMP(3),updated_by=VALUES(updated_by)"""),
+            [
+                {
+                    "id": scoring_rule_id,
+                    "season": season_id,
+                    "role": "30000000-0000-4000-8000-000000000001",
+                    "result": None,
+                    "points": 10,
+                    "priority": 100,
+                    "admin": admin_id,
+                },
+                {
+                    "id": volunteer_rule_id,
+                    "season": season_id,
+                    "role": "30000000-0000-4000-8000-000000000003",
+                    "result": None,
+                    "points": 20,
+                    "priority": 100,
+                    "admin": admin_id,
+                },
+                {
+                    "id": winner_rule_id,
+                    "season": season_id,
+                    "role": "30000000-0000-4000-8000-000000000002",
+                    "result": "40000000-0000-4000-8000-000000000001",
+                    "points": 50,
+                    "priority": 200,
+                    "admin": admin_id,
+                },
+            ],
         )
         connection.execute(
             text("""INSERT INTO event_access(id,event_id,user_id,role,created_by,created_at)

@@ -38,6 +38,7 @@ Phone = Annotated[str, StringConstraints(min_length=10, max_length=32)]
 
 class StaffRole(StrEnum):
     SUPER_ADMIN = "SUPER_ADMIN"
+    ORGANIZER = "ORGANIZER"
     SCANNER = "SCANNER"
 
 
@@ -46,6 +47,8 @@ class PersonType(StrEnum):
     KAIT_TEACHER = "KAIT_TEACHER"
     EXTERNAL_STUDENT = "EXTERNAL_STUDENT"
     EXTERNAL_TEACHER = "EXTERNAL_TEACHER"
+    PARENT = "PARENT"
+    OTHER = "OTHER"
 
 
 class EventStatus(StrEnum):
@@ -83,7 +86,66 @@ class InvitationAcceptRequest(Contract):
     password: Password
 
 
+SystemFieldKey = Literal[
+    "middleName",
+    "birthDate",
+    "email",
+    "phone",
+    "personType",
+    "studyGroup",
+    "organization",
+]
+SYSTEM_FIELD_KEYS = (
+    "middleName",
+    "birthDate",
+    "email",
+    "phone",
+    "personType",
+    "studyGroup",
+    "organization",
+)
+
+
+class SystemFieldConfig(Contract):
+    key: SystemFieldKey
+    mode: Literal["HIDDEN", "OPTIONAL", "REQUIRED"] = "OPTIONAL"
+
+
+class RegistrationFormConfig(Contract):
+    public: list[SystemFieldConfig] = Field(min_length=7, max_length=7)
+    onsite: list[SystemFieldConfig] = Field(min_length=7, max_length=7)
+
+    @field_validator("public", "onsite")
+    @classmethod
+    def complete_keys(cls, values: list[SystemFieldConfig]) -> list[SystemFieldConfig]:
+        if {value.key for value in values} != set(SYSTEM_FIELD_KEYS):
+            raise ValueError("Each configurable field must appear exactly once")
+        return values
+
+
+def default_form_config() -> RegistrationFormConfig:
+    fields = [{"key": key, "mode": "OPTIONAL"} for key in SYSTEM_FIELD_KEYS]
+    return RegistrationFormConfig.model_validate({"public": fields, "onsite": fields})
+
+
 class EventValues(Contract):
+    season_id: UUID | None = None
+    category_id: UUID | None = None
+    level_id: UUID | None = None
+    direction_id: UUID | None = None
+    form_config: RegistrationFormConfig = Field(default_factory=default_form_config)
+    is_listed: bool = True
+    allowed_person_types: list[PersonType] | None = Field(
+        default=None, min_length=1, max_length=6
+    )
+
+    @field_validator("allowed_person_types")
+    @classmethod
+    def unique_types(cls, values: list[PersonType] | None) -> list[PersonType] | None:
+        if values is not None and len(values) != len(set(values)):
+            raise ValueError("Participant types must be unique")
+        return values
+
     title: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
     ]
@@ -97,12 +159,12 @@ class EventValues(Contract):
         ),
     ]
     description: Annotated[str, StringConstraints(max_length=20_000)] | None = None
-    cover_object_key: Annotated[str, StringConstraints(max_length=1024)] | None = None
+    direction: (
+        Annotated[str, StringConstraints(strip_whitespace=True, max_length=80)] | None
+    ) = None
     start_at: datetime
     end_at: datetime
-    timezone: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
-    ] = "Europe/Moscow"
+    timezone: Literal["Europe/Moscow"] = "Europe/Moscow"
     location: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
     ]
@@ -112,6 +174,23 @@ class EventValues(Contract):
 
 
 class UpdateEventRequest(Contract):
+    season_id: UUID | None = None
+    category_id: UUID | None = None
+    level_id: UUID | None = None
+    direction_id: UUID | None = None
+    form_config: RegistrationFormConfig | None = None
+    is_listed: bool | None = None
+    allowed_person_types: list[PersonType] | None = Field(
+        default=None, min_length=1, max_length=6
+    )
+
+    @field_validator("allowed_person_types")
+    @classmethod
+    def unique_types(cls, values: list[PersonType] | None) -> list[PersonType] | None:
+        if values is not None and len(values) != len(set(values)):
+            raise ValueError("Participant types must be unique")
+        return values
+
     title: (
         Annotated[
             str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
@@ -131,15 +210,12 @@ class UpdateEventRequest(Contract):
         | None
     ) = None
     description: Annotated[str, StringConstraints(max_length=20_000)] | None = None
-    cover_object_key: Annotated[str, StringConstraints(max_length=1024)] | None = None
+    direction: (
+        Annotated[str, StringConstraints(strip_whitespace=True, max_length=80)] | None
+    ) = None
     start_at: datetime | None = None
     end_at: datetime | None = None
-    timezone: (
-        Annotated[
-            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
-        ]
-        | None
-    ) = None
+    timezone: Literal["Europe/Moscow"] | None = None
     location: (
         Annotated[
             str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
@@ -154,10 +230,27 @@ class UpdateEventRequest(Contract):
     def non_empty(self) -> "UpdateEventRequest":
         if not self.model_fields_set:
             raise ValueError("At least one field is required")
+        nullable = {
+            "description",
+            "direction",
+            "allowed_person_types",
+            "season_id",
+            "category_id",
+            "level_id",
+            "direction_id",
+        }
+        invalid = sorted(
+            field
+            for field in self.model_fields_set - nullable
+            if getattr(self, field) is None
+        )
+        if invalid:
+            raise ValueError(f"Fields cannot be null: {', '.join(invalid)}")
         return self
 
 
 class FormFieldValues(Contract):
+    onsite_required: bool = False
     type: FormFieldType
     label: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
@@ -185,6 +278,7 @@ class FormFieldValues(Contract):
 
 
 class UpdateFormFieldRequest(Contract):
+    onsite_required: bool | None = None
     type: FormFieldType | None = None
     label: (
         Annotated[
@@ -208,28 +302,55 @@ class UpdateFormFieldRequest(Contract):
     def non_empty(self) -> "UpdateFormFieldRequest":
         if not self.model_fields_set:
             raise ValueError("At least one field is required")
+        invalid = sorted(
+            field
+            for field in self.model_fields_set - {"options"}
+            if getattr(self, field) is None
+        )
+        if invalid:
+            raise ValueError(f"Fields cannot be null: {', '.join(invalid)}")
         return self
 
 
 class RegistrationAnswer(Contract):
     field_id: UUID
-    value: str | bool | list[str]
+    value: (
+        Annotated[str, StringConstraints(max_length=20_000)]
+        | bool
+        | Annotated[
+            list[Annotated[str, StringConstraints(max_length=200)]],
+            Field(max_length=100),
+        ]
+    )
+
+
+class StreamValues(Contract):
+    title: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+    ]
+    start_at: datetime
+    end_at: datetime
+    capacity: int = Field(gt=0, le=1_000_000)
+    sort_order: int = Field(default=0, ge=0, le=100_000)
+    active: bool = True
 
 
 class ParticipantValues(Contract):
+    request_id: UUID | None = None
+    stream_id: UUID | None = None
     last_name: Name
     first_name: Name
     middle_name: Name | None = None
-    birth_date: date
+    birth_date: date | None = None
     email: EmailStr | None = None
-    phone: Phone
+    phone: Phone | None = None
     study_group: (
         Annotated[
             str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
         ]
         | None
     ) = None
-    person_type: PersonType
+    person_type: PersonType | None = None
     organization: (
         Annotated[
             str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
@@ -247,7 +368,9 @@ class ParticipantValues(Contract):
 
     @field_validator("phone")
     @classmethod
-    def normalize_phone(cls, value: str) -> str:
+    def normalize_phone(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         digits = re.sub(r"\D", "", value)
         if len(digits) == 10 and digits.startswith("9"):
             digits = "7" + digits
@@ -260,10 +383,6 @@ class ParticipantValues(Contract):
 
     @model_validator(mode="after")
     def conditional_fields(self) -> "ParticipantValues":
-        if str(self.person_type).endswith("_STUDENT") and not self.study_group:
-            raise ValueError("Study group is required for students")
-        if str(self.person_type).startswith("EXTERNAL_") and not self.organization:
-            raise ValueError("Organization is required for external participants")
         ids = [answer.field_id for answer in self.custom_answers]
         if len(ids) != len(set(ids)):
             raise ValueError("Each form field may be answered only once")
@@ -271,7 +390,6 @@ class ParticipantValues(Contract):
 
 
 class PublicRegistrationRequest(ParticipantValues):
-    email: EmailStr
     consent_accepted: Literal[True]
     consent_version: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
@@ -279,6 +397,7 @@ class PublicRegistrationRequest(ParticipantValues):
 
 
 class OnsiteRegistrationRequest(ParticipantValues):
+    consent_accepted: Literal[True]
     capacity_override: bool = False
 
 
@@ -312,11 +431,34 @@ class PersonUpdate(Contract):
 
 class StaffInvitationRequest(Contract):
     email: EmailStr
+    role: Literal["ORGANIZER", "SCANNER"] = "SCANNER"
     event_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def event_scope_matches_role(self) -> "StaffInvitationRequest":
+        if self.role == "ORGANIZER" and self.event_id is not None:
+            raise ValueError("Organizer invitations cannot be event-scoped")
+        return self
+
+
+class InvitationResendRequest(Contract):
+    request_id: UUID
 
 
 class EventAccessRequest(Contract):
     user_id: UUID
+
+
+class PurgeEventRequest(Contract):
+    confirmation_slug: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            min_length=2,
+            max_length=255,
+        ),
+    ]
 
 
 class ResolveQrRequest(Contract):
@@ -330,6 +472,13 @@ class AttendanceItem(Contract):
     source: Literal["ONLINE", "OFFLINE_SYNC"]
     device_scanned_at: datetime
     estimated_scanned_at: datetime
+
+    @field_validator("device_scanned_at", "estimated_scanned_at")
+    @classmethod
+    def timezone_required(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Attendance timestamps must include a UTC offset")
+        return value
 
 
 class AttendanceSyncRequest(Contract):
@@ -361,14 +510,15 @@ class SendTicketsRequest(Contract):
 
 
 class ExcelMapping(Contract):
+    stream_title: str | None = None
     last_name: str
     first_name: str
     middle_name: str | None = None
-    birth_date: str
-    person_type: str
+    birth_date: str | None = None
+    person_type: str | None = None
     study_group: str | None = None
     organization: str | None = None
-    phone: str
+    phone: str | None = None
     email: str | None = None
     custom_fields: dict[UUID, str] = Field(default_factory=dict)
 

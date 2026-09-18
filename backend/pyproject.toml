@@ -12,11 +12,13 @@ dependencies = [
   "pymysql==1.1.2",
   "python-multipart==0.0.31",
   "sqlalchemy==2.0.48",
+  "tzdata==2025.3",
   "uvicorn[standard]==0.42.0",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "hatchling==1.29.0",
   "httpx==0.28.1",
   "mypy==1.19.1",
   "pip-audit==2.10.1",
