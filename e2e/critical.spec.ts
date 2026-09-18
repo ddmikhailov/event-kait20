@@ -155,15 +155,21 @@ test.describe.serial('critical MVP browser journey', () => {
     await expect(page.getByText('Сохранено на устройстве')).toBeVisible();
     await expect(page.getByText('OFFLINE · 1 ожидают')).toBeVisible();
 
-    // R07: a cancelled confirmation must not lose the unsynced mark.
-    // A page.once() listener registered before the click is required here:
-    // a native confirm() blocks the page's main thread, so a click() promise
-    // wrapped together with waitForEvent('dialog') in Promise.all deadlocks
-    // (click() never settles until the dialog is handled, but nothing
-    // handles it until Promise.all resolves).
-    page.once('dialog', (dialog) => {
-      void dialog.dismiss();
+    // R07/R08: a single persistent listener (registered once, before either
+    // dialog can fire) avoids any race between two separate page.once()
+    // registrations racing the dialog event on a loaded CI runner. A native
+    // confirm() blocks the page's main thread, so a click() promise wrapped
+    // together with waitForEvent('dialog') in Promise.all would also
+    // deadlock - click() never settles until the dialog is handled, but
+    // nothing handles it until Promise.all resolves.
+    let dialogMessage = '';
+    let dialogAction: 'dismiss' | 'accept' = 'dismiss';
+    page.on('dialog', (dialog) => {
+      dialogMessage = dialog.message();
+      void (dialogAction === 'accept' ? dialog.accept() : dialog.dismiss());
     });
+
+    // R07: a cancelled confirmation must not lose the unsynced mark.
     await page.getByRole('button', { name: 'Выйти' }).click();
     await expect(
       page.getByRole('heading', { name: 'Демонстрационное мероприятие' }),
@@ -172,11 +178,7 @@ test.describe.serial('critical MVP browser journey', () => {
 
     // R08: a confirmed logout must not report success while the server
     // (still offline here) never actually revoked the session.
-    let dialogMessage = '';
-    page.once('dialog', (dialog) => {
-      dialogMessage = dialog.message();
-      void dialog.accept();
-    });
+    dialogAction = 'accept';
     await page.getByRole('button', { name: 'Выйти' }).click();
     await expect(page.getByText('Выход не завершён')).toBeVisible();
     expect(dialogMessage).toContain('1 несинхронизированных');
