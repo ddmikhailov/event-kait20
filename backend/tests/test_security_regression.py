@@ -128,9 +128,10 @@ def test_production_login_cookie_is_secure(
         connection.execute(
             text(
                 """INSERT INTO staff_users
-                   (id,email,email_normalized,password_hash,system_role,active,
+                   (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,active,
                     password_changed_at,created_at,updated_at)
-                   VALUES (:id,:email,:email,:password,'SUPER_ADMIN',TRUE,
+                   VALUES (:id,'50000000-0000-4000-8000-000000000001',
+                           '51000000-0000-4000-8000-000000000001',:email,:email,:password,'SUPER_ADMIN',TRUE,
                            UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
             ),
             {

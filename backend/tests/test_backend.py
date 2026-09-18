@@ -24,7 +24,7 @@ from event_api.errors import ApiError
 from event_api.registration_service import participant
 from event_api.routers.excel import _parse
 from event_api.schemas import ParticipantValues
-from event_api.security import RateLimiter, auth_link_token, token_hash
+from event_api.security import RateLimiter, auth_link_token, hash_password, token_hash
 
 ORIGIN = {"Origin": "http://localhost:5173"}
 
@@ -110,7 +110,10 @@ def test_health_and_security_foundation(client: TestClient) -> None:
     with database.connect() as connection:
         assert (
             connection.execute(
-                text("SELECT COUNT(*) FROM staff_users WHERE system_role='SUPER_ADMIN'")
+                text(
+                    "SELECT COUNT(*) FROM staff_users WHERE system_role='SUPER_ADMIN'"
+                    " AND email_normalized='admin@example.com'"
+                )
             ).scalar_one()
             == 1
         )
@@ -784,9 +787,10 @@ def test_excel_preview_commit_and_safe_export(client: TestClient) -> None:
         connection.execute(
             text(
                 """INSERT INTO persons
-                (id,last_name,first_name,middle_name,birth_date,email,email_normalized,phone,phone_normalized,
+                (id,tenant_id,last_name,first_name,middle_name,birth_date,email,email_normalized,phone,phone_normalized,
                  person_type,organization,study_group,dedup_review_required,created_at,updated_at)
-                VALUES (:id,'Петрова','Анна','Сергеевна','1990-01-10','excel@example.com','excel@example.com',
+                VALUES (:id,'50000000-0000-4000-8000-000000000001','Петрова','Анна','Сергеевна','1990-01-10',
+                        'excel@example.com','excel@example.com',
                         '+79997654321','+79997654321','KAIT_TEACHER','КАИТ №20',NULL,FALSE,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
             ),
             {"id": existing_person_id},
@@ -1674,6 +1678,16 @@ def test_password_reset_is_one_time_and_revokes_sessions(client: TestClient) -> 
             {"hash": token_hash(raw_session)},
         ).scalar_one()
     assert revoked is not None
+    # The shared session-scoped client fixture logs in as admin@example.com with
+    # "correct horse battery" for the rest of the suite; restore it since this test
+    # just changed it in the real database, not a per-test transaction.
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                "UPDATE staff_users SET password_hash=:password WHERE email_normalized='admin@example.com'"
+            ),
+            {"password": hash_password("correct horse battery")},
+        )
 
 
 def test_email_worker_sends_durable_intent_without_persisting_link(
