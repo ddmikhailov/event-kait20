@@ -154,6 +154,29 @@ test.describe.serial('critical MVP browser journey', () => {
     await page.getByRole('button', { name: 'Подтвердить посещение' }).click();
     await expect(page.getByText('Сохранено на устройстве')).toBeVisible();
     await expect(page.getByText('OFFLINE · 1 ожидают')).toBeVisible();
+
+    // R07: a cancelled confirmation must not lose the unsynced mark.
+    await page.getByRole('button', { name: 'Выйти' }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Демонстрационное мероприятие' }),
+    ).toBeVisible();
+    await expect(page.getByText('OFFLINE · 1 ожидают')).toBeVisible();
+
+    // R08: a confirmed logout must not report success while the server
+    // (still offline here) never actually revoked the session.
+    let dialogMessage = '';
+    page.once('dialog', (dialog) => {
+      dialogMessage = dialog.message();
+      void dialog.accept();
+    });
+    await page.getByRole('button', { name: 'Выйти' }).click();
+    await expect(page.getByText('Выход не завершён')).toBeVisible();
+    expect(dialogMessage).toContain('1 несинхронизированных');
+    await expect(page.getByText('OFFLINE · 1 ожидают')).toBeVisible();
+    await page
+      .getByRole('button', { name: 'Понятно, проверить и продолжить' })
+      .click();
+
     await page
       .getByRole('navigation', { name: 'Режим работы' })
       .getByRole('button', { name: 'Найти', exact: true })
