@@ -156,6 +156,14 @@ test.describe.serial('critical MVP browser journey', () => {
     await expect(page.getByText('OFFLINE · 1 ожидают')).toBeVisible();
 
     // R07: a cancelled confirmation must not lose the unsynced mark.
+    // A page.once() listener registered before the click is required here:
+    // a native confirm() blocks the page's main thread, so a click() promise
+    // wrapped together with waitForEvent('dialog') in Promise.all deadlocks
+    // (click() never settles until the dialog is handled, but nothing
+    // handles it until Promise.all resolves).
+    page.once('dialog', (dialog) => {
+      void dialog.dismiss();
+    });
     await page.getByRole('button', { name: 'Выйти' }).click();
     await expect(
       page.getByRole('heading', { name: 'Демонстрационное мероприятие' }),
