@@ -575,9 +575,7 @@ def commit(
                         dedup_review_required=True,
                     )
                 else:
-                    person_id = find_or_create_person(
-                        connection, data, staff.tenant_id
-                    )
+                    person_id = find_or_create_person(connection, data, staff.tenant_id)
             finally:
                 release_person_locks(connection, locks)
             existing = row(

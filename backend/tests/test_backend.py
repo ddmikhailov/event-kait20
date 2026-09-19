@@ -798,9 +798,7 @@ def test_purge_event_removes_cover_file(client: TestClient) -> None:
     )
     assert cover.status_code == 200, cover.text
     cover_key = cover.json()["coverObjectKey"]
-    assert (
-        client.get(f"/media/event-covers/{cover_key}").content.startswith(b"\x89PNG")
-    )
+    assert client.get(f"/media/event-covers/{cover_key}").content.startswith(b"\x89PNG")
     archived = client.post(f"/admin/events/{event_id}/archive", headers=headers)
     assert archived.status_code == 201, archived.text
     purged = client.post(
