@@ -1158,7 +1158,16 @@ def test_person_status_retirement_is_historical_and_overlap_safe(
     policy_id, version_id = create_policy(client, headers)
     season_id = create_season(client, headers)
     activate_policy(client, headers, season_id, policy_id, "2026-01-01T00:00:00Z")
-    event_id = create_event(client, headers, season_id, "2026-09-10T10:00:00Z")
+    # Dates are computed relative to the real run date rather than hardcoded,
+    # since retirement's "valid through today" boundary (see
+    # _status_retirement_boundary) is itself relative to whenever the test
+    # actually executes - a fixed literal eventually collides with "today".
+    today = date.today()
+    valid_from = today - timedelta(days=30)
+    valid_to = today + timedelta(days=180)
+    event_id = create_event(
+        client, headers, season_id, f"{valid_from.isoformat()}T10:00:00Z"
+    )
     registration_id, person_id = create_registration(database, event_id)
     participation_id = assign_participation(client, headers, event_id, registration_id)
     assignment = client.post(
@@ -1166,8 +1175,8 @@ def test_person_status_retirement_is_historical_and_overlap_safe(
         headers=headers,
         json={
             "statusTypeId": "62000000-0000-4000-8000-000000000001",
-            "validFrom": "2026-09-01",
-            "validTo": "2026-12-31",
+            "validFrom": valid_from.isoformat(),
+            "validTo": valid_to.isoformat(),
         },
     )
     assert assignment.status_code == 201, assignment.text
@@ -1176,6 +1185,7 @@ def test_person_status_retirement_is_historical_and_overlap_safe(
         headers=headers,
     )
     assert retired.status_code == 200, retired.text
+    retirement_boundary = _status_retirement_boundary(valid_from, valid_to, today)
 
     def preview_at(value: str) -> dict[str, object]:
         with database.transaction() as connection:
@@ -1193,7 +1203,7 @@ def test_person_status_retirement_is_historical_and_overlap_safe(
         assert response.status_code == 200, response.text
         return response.json()["calculation"]
 
-    before = preview_at("2026-09-10 10:00:00")
+    before = preview_at(f"{today.isoformat()} 10:00:00")
     confirmed = client.post(
         f"/admin/events/{event_id}/participations/confirm",
         headers=headers,
@@ -1218,7 +1228,7 @@ def test_person_status_retirement_is_historical_and_overlap_safe(
     assert [item["code"] for item in awarded_snapshot["statuses"]] == [
         "PROFESSION_AMBASSADOR"
     ]
-    after = preview_at("2026-09-20 10:00:00")
+    after = preview_at(f"{retirement_boundary.isoformat()} 10:00:00")
     assert [item["code"] for item in before["statuses"]] == ["PROFESSION_AMBASSADOR"]
     assert after["statuses"] == []
     overlap = client.post(
@@ -1226,8 +1236,8 @@ def test_person_status_retirement_is_historical_and_overlap_safe(
         headers=headers,
         json={
             "statusTypeId": "62000000-0000-4000-8000-000000000001",
-            "validFrom": "2026-09-10",
-            "validTo": "2026-09-25",
+            "validFrom": (today - timedelta(days=5)).isoformat(),
+            "validTo": (today + timedelta(days=10)).isoformat(),
         },
     )
     assert (overlap.status_code, overlap.json()["error"]["code"]) == (
@@ -1235,12 +1245,13 @@ def test_person_status_retirement_is_historical_and_overlap_safe(
         "PERSON_STATUS_PERIOD_CONFLICT",
     )
 
+    future_from = today + timedelta(days=60)
     future = client.post(
         f"/admin/activity/scoring-v2/people/{person_id}/statuses",
         headers=headers,
         json={
             "statusTypeId": "62000000-0000-4000-8000-000000000001",
-            "validFrom": "2026-12-01",
+            "validFrom": future_from.isoformat(),
             "validTo": None,
         },
     )
@@ -1250,8 +1261,8 @@ def test_person_status_retirement_is_historical_and_overlap_safe(
         headers=headers,
     )
     assert cancelled.status_code == 200, cancelled.text
-    december = preview_at("2026-12-02 10:00:00")
-    assert december["statuses"] == []
+    later = preview_at(f"{(future_from + timedelta(days=1)).isoformat()} 10:00:00")
+    assert later["statuses"] == []
     with database.connect() as connection:
         persisted_snapshot = connection.execute(
             text("""SELECT calculation_snapshot FROM score_transactions
