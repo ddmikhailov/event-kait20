@@ -30,6 +30,17 @@ from event_api.security import RateLimiter, auth_link_token, hash_password, toke
 ORIGIN = {"Origin": "http://localhost:5173"}
 
 
+def _tiny_png() -> bytes:
+    """A real, minimal, decodable PNG - media.py now fully decodes uploads."""
+    from io import BytesIO as _BytesIO
+
+    from PIL import Image as _Image
+
+    buffer = _BytesIO()
+    _Image.new("RGB", (2, 2), color=(120, 60, 180)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def test_excel_rejects_formula_and_merged_cells() -> None:
     workbook = Workbook()
     sheet = workbook.active
@@ -235,7 +246,7 @@ def test_domain_constraints_and_event_crud(client: TestClient) -> None:
     cover = client.post(
         f"/admin/events/{event_id}/cover",
         headers=headers,
-        files={"cover": ("cover.png", b"\x89PNG\r\n\x1a\nvalid-test", "image/png")},
+        files={"cover": ("cover.png", _tiny_png(), "image/png")},
     )
     assert cover.status_code == 200, cover.text
     cover_key = cover.json()["coverObjectKey"]
@@ -783,7 +794,7 @@ def test_purge_event_removes_cover_file(client: TestClient) -> None:
     cover = client.post(
         f"/admin/events/{event_id}/cover",
         headers=headers,
-        files={"cover": ("cover.png", b"\x89PNG\r\n\x1a\nvalid-test", "image/png")},
+        files={"cover": ("cover.png", _tiny_png(), "image/png")},
     )
     assert cover.status_code == 200, cover.text
     cover_key = cover.json()["coverObjectKey"]
