@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1162,7 +1163,9 @@ def test_person_status_retirement_is_historical_and_overlap_safe(
     # since retirement's "valid through today" boundary (see
     # _status_retirement_boundary) is itself relative to whenever the test
     # actually executes - a fixed literal eventually collides with "today".
-    today = date.today()
+    # retire_status() computes "today" in Europe/Moscow, not system/UTC local
+    # time, so this must match or the two disagree for part of every day.
+    today = datetime.now(ZoneInfo("Europe/Moscow")).date()
     valid_from = today - timedelta(days=30)
     valid_to = today + timedelta(days=180)
     event_id = create_event(
