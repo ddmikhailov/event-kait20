@@ -512,6 +512,7 @@ def purge_event(
     values: PurgeEventRequest,
     staff: Annotated[Staff, Depends(csrf_super_admin)],
     db: Annotated[Database, Depends(database)],
+    config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, str]:
     """Permanently remove one archived Event while preserving global Person rows."""
     event_id_s = str(event_id)
@@ -523,6 +524,7 @@ def purge_event(
                 "INVALID_EVENT_STATE",
                 "Event must be archived before permanent deletion",
             )
+        previous_key = existing["cover_object_key"]
         if values.confirmation_slug != existing["slug"]:
             raise ApiError(
                 400,
@@ -628,6 +630,7 @@ def purge_event(
             event_id_s,
             {"preservedPersonCount": int(preserved["count"] if preserved else 0)},
         )
+    remove_cover(config.media_root, previous_key)
     return {"status": "accepted"}
 
 

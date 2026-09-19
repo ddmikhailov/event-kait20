@@ -20,12 +20,14 @@ from ..dependencies import Staff, administrator, csrf_administrator, database, s
 from ..errors import ApiError
 from ..form_config import validate_system_fields
 from ..registration_service import (
+    acquire_person_locks,
     create_person,
     create_registration,
     find_or_create_person,
     form_fields,
     participant,
     persist_answers,
+    release_person_locks,
     validate_answers,
     validate_participant_type,
 )
@@ -552,26 +554,32 @@ def commit(
                 str(item["values"].stream_id) if item["values"].stream_id else None,
             )
             data = participant(item["values"])
-            if decision and decision.get("action") == "USE_PERSON":
-                person_id = str(decision["personId"])
-                candidate_ids = {
-                    str(candidate["personId"]) for candidate in item["candidates"]
-                }
-                if person_id not in candidate_ids:
-                    raise ApiError(
-                        409,
-                        "CONFLICT",
-                        "Selected Person is not a candidate for this import row",
+            locks = acquire_person_locks(connection, data, staff.tenant_id)
+            try:
+                if decision and decision.get("action") == "USE_PERSON":
+                    person_id = str(decision["personId"])
+                    candidate_ids = {
+                        str(candidate["personId"]) for candidate in item["candidates"]
+                    }
+                    if person_id not in candidate_ids:
+                        raise ApiError(
+                            409,
+                            "CONFLICT",
+                            "Selected Person is not a candidate for this import row",
+                        )
+                elif decision and decision.get("action") == "CREATE_NEW":
+                    person_id = create_person(
+                        connection,
+                        data,
+                        staff.tenant_id,
+                        dedup_review_required=True,
                     )
-            elif decision and decision.get("action") == "CREATE_NEW":
-                person_id = create_person(
-                    connection,
-                    data,
-                    staff.tenant_id,
-                    dedup_review_required=True,
-                )
-            else:
-                person_id = find_or_create_person(connection, data, staff.tenant_id)
+                else:
+                    person_id = find_or_create_person(
+                        connection, data, staff.tenant_id
+                    )
+            finally:
+                release_person_locks(connection, locks)
             existing = row(
                 connection,
                 "SELECT id FROM registrations WHERE event_id=:event AND person_id=:person AND status='ACTIVE'",

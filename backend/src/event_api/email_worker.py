@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import smtplib
 import ssl
 import time
@@ -286,10 +287,30 @@ def main() -> None:
     config = get_settings()
     if config.production and not config.smtp_host:
         raise RuntimeError("SMTP_HOST is required in production")
+    logger = logging.getLogger("event_api")
     database = Database(config)
+    consecutive_failures = 0
     try:
         while True:
-            if not process_once(database, config):
+            try:
+                processed = process_once(database, config)
+            except Exception:
+                consecutive_failures += 1
+                logger.exception(
+                    "Email worker iteration failed; retrying (attempt %d)",
+                    consecutive_failures,
+                )
+                time.sleep(
+                    min(
+                        config.email_poll_interval_ms
+                        / 1_000
+                        * 2 ** min(consecutive_failures - 1, 6),
+                        60,
+                    )
+                )
+                continue
+            consecutive_failures = 0
+            if not processed:
                 time.sleep(config.email_poll_interval_ms / 1_000)
     finally:
         database.dispose()

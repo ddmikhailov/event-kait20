@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from email.message import EmailMessage
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -760,6 +761,44 @@ def test_organizer_boundaries_archived_visibility_and_event_purge(
             ).scalar_one()
             == 1
         )
+
+
+def test_purge_event_removes_cover_file(client: TestClient) -> None:
+    headers, _ = _login(client)
+    payload = {
+        "title": "Удаляемое мероприятие с обложкой",
+        "slug": "purge-cover-test-event",
+        "description": "Проверка удаления обложки при purge",
+        "startAt": "2026-11-11T10:00:00Z",
+        "endAt": "2026-11-11T12:00:00Z",
+        "timezone": "Europe/Moscow",
+        "location": "КАИТ №20",
+        "registrationDeadline": "2026-11-10T10:00:00Z",
+        "capacity": 10,
+        "status": "DRAFT",
+    }
+    created = client.post("/admin/events", headers=headers, json=payload)
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    cover = client.post(
+        f"/admin/events/{event_id}/cover",
+        headers=headers,
+        files={"cover": ("cover.png", b"\x89PNG\r\n\x1a\nvalid-test", "image/png")},
+    )
+    assert cover.status_code == 200, cover.text
+    cover_key = cover.json()["coverObjectKey"]
+    assert (
+        client.get(f"/media/event-covers/{cover_key}").content.startswith(b"\x89PNG")
+    )
+    archived = client.post(f"/admin/events/{event_id}/archive", headers=headers)
+    assert archived.status_code == 201, archived.text
+    purged = client.post(
+        f"/admin/events/{event_id}/purge",
+        headers=headers,
+        json={"confirmationSlug": "purge-cover-test-event"},
+    )
+    assert purged.status_code == 200, purged.text
+    assert client.get(f"/media/event-covers/{cover_key}").status_code == 404
 
 
 def test_excel_preview_commit_and_safe_export(client: TestClient) -> None:
@@ -1690,6 +1729,48 @@ def test_password_reset_is_one_time_and_revokes_sessions(client: TestClient) -> 
         )
 
 
+def test_repeated_forgot_password_does_not_invalidate_pending_link(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client)
+    database: Database = client.app.state.database
+    first = client.post(
+        "/auth/password/forgot",
+        headers=headers,
+        json={"email": "admin@example.com"},
+    )
+    assert first.status_code == 202
+    with database.connect() as connection:
+        first_record = (
+            connection.execute(
+                text(
+                    "SELECT id,token_hash FROM password_reset_tokens ORDER BY created_at DESC LIMIT 1"
+                )
+            )
+            .mappings()
+            .one()
+        )
+    second = client.post(
+        "/auth/password/forgot",
+        headers=headers,
+        json={"email": "admin@example.com"},
+    )
+    assert second.status_code == 202
+    with database.connect() as connection:
+        second_record = (
+            connection.execute(
+                text(
+                    "SELECT id,token_hash,used_at FROM password_reset_tokens ORDER BY created_at DESC LIMIT 1"
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert second_record["id"] == first_record["id"]
+    assert second_record["token_hash"] == first_record["token_hash"]
+    assert second_record["used_at"] is None
+
+
 def test_email_worker_sends_durable_intent_without_persisting_link(
     client: TestClient,
 ) -> None:
@@ -1719,6 +1800,46 @@ def test_email_worker_sends_durable_intent_without_persisting_link(
             .one()
         )
     assert delivery == {"status": "SENT", "provider_message_id": "provider-test-id"}
+
+
+def test_email_worker_main_recovers_from_transient_failure(
+    client: TestClient,
+) -> None:
+    from event_api import email_worker
+
+    config = client.app.state.settings.model_copy(
+        update={
+            "smtp_host": "smtp.example.test",
+            "smtp_from_email": "noreply@example.test",
+        }
+    )
+
+    class StopWorker(BaseException):
+        """Escapes main()'s `except Exception` on purpose to end the test."""
+
+    calls = 0
+
+    def fake_process_once(_database: Database, _config: Settings) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("simulated transient database outage")
+        if calls == 2:
+            return 1
+        raise StopWorker
+
+    sleeps: list[float] = []
+
+    with (
+        patch.object(email_worker, "get_settings", return_value=config),
+        patch.object(email_worker, "process_once", side_effect=fake_process_once),
+        patch.object(email_worker.time, "sleep", side_effect=sleeps.append),
+        pytest.raises(StopWorker),
+    ):
+        email_worker.main()
+
+    assert calls == 3
+    assert sleeps, "worker must back off after a transient failure instead of dying"
 
 
 def test_parallel_email_workers_claim_each_delivery_once(client: TestClient) -> None:

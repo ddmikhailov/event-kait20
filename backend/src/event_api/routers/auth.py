@@ -30,6 +30,7 @@ from ..security import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 COOKIE = "staff_session"
+PASSWORD_RESET_COOLDOWN_SECONDS = 60
 
 
 def invalid_link() -> ApiError:
@@ -160,28 +161,40 @@ def forgot_password(
     db: Annotated[Database, Depends(database)],
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, str]:
-    limit(request, "password-forgot")
-    with db.connect() as connection:
+    email = str(values.email).lower()
+    limit(request, "password-forgot", email)
+    with db.transaction() as connection:
         user = row(
             connection,
             """SELECT u.id,u.email FROM staff_users u
             JOIN tenants t ON t.id=u.tenant_id
             JOIN organizations o ON o.id=u.organization_id AND o.tenant_id=t.id
             WHERE u.email_normalized=:email AND u.active=true
-              AND t.active=true AND o.active=true""",
-            {"email": str(values.email).lower()},
+              AND t.active=true AND o.active=true FOR UPDATE""",
+            {"email": email},
         )
-    if not user:
-        return {"status": "accepted"}
-    record_id = str(uuid4())
-    expires = mysql_millis(
-        datetime.now(UTC).replace(tzinfo=None)
-        + timedelta(seconds=config.password_reset_ttl_seconds)
-    )
-    token = auth_link_token(
-        "password-reset", record_id, expires, config.auth_link_secret
-    )
-    with db.transaction() as connection:
+        if not user:
+            return {"status": "accepted"}
+        recent = row(
+            connection,
+            """SELECT id FROM password_reset_tokens
+               WHERE user_id=:id AND used_at IS NULL AND expires_at>UTC_TIMESTAMP(3)
+                 AND created_at>DATE_SUB(UTC_TIMESTAMP(3), INTERVAL :cooldown SECOND)""",
+            {"id": user["id"], "cooldown": PASSWORD_RESET_COOLDOWN_SECONDS},
+        )
+        if recent:
+            # A still-valid link was already issued moments ago: coalesce
+            # instead of invalidating it, so a flood of repeat requests
+            # cannot perpetually deny the account owner their reset link.
+            return {"status": "accepted"}
+        record_id = str(uuid4())
+        expires = mysql_millis(
+            datetime.now(UTC).replace(tzinfo=None)
+            + timedelta(seconds=config.password_reset_ttl_seconds)
+        )
+        token = auth_link_token(
+            "password-reset", record_id, expires, config.auth_link_secret
+        )
         execute(
             connection,
             "UPDATE password_reset_tokens SET used_at=UTC_TIMESTAMP(3) WHERE user_id=:id AND used_at IS NULL",
