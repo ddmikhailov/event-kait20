@@ -4,9 +4,10 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Response
 
 from ..database import Database, execute, row, rows
-from ..dependencies import Staff, csrf_super_admin, database, super_admin
+from ..dependencies import Staff, administrator, csrf_administrator, database
 from ..errors import ApiError
 from ..schemas import SendTicketsRequest
+from ..scoring_v2 import decimal_string
 from ..service_utils import audit, utc_iso
 
 router = APIRouter(prefix="/admin/events", tags=["reporting"])
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/admin/events", tags=["reporting"])
 def statistics(
     event_id: UUID,
     response: Response,
-    _staff: Annotated[Staff, Depends(super_admin)],
+    _staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
@@ -39,6 +40,41 @@ def statistics(
             """SELECT FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(first_attended_at)/900)*900) AS bucket_start,
             count(*) AS count FROM registrations WHERE event_id=:event AND status='ACTIVE' AND first_attended_at IS NOT NULL
             GROUP BY bucket_start ORDER BY bucket_start""",
+            {"event": str(event_id)},
+        )
+        participant_types = rows(
+            connection,
+            """SELECT person_type,COUNT(*) AS registered,
+            SUM(first_attended_at IS NOT NULL) AS attended
+            FROM registrations WHERE event_id=:event AND status='ACTIVE'
+            GROUP BY person_type ORDER BY person_type""",
+            {"event": str(event_id)},
+        )
+        streams = rows(
+            connection,
+            """SELECT s.id,s.title,s.capacity,COUNT(r.id) AS registered,
+            COALESCE(SUM(r.first_attended_at IS NOT NULL),0) AS attended
+            FROM event_streams s LEFT JOIN registrations r ON r.stream_id=s.id AND r.status='ACTIVE'
+            WHERE s.event_id=:event GROUP BY s.id ORDER BY s.sort_order,s.start_at""",
+            {"event": str(event_id)},
+        )
+        participation_totals = row(
+            connection,
+            """SELECT
+            SUM(p.status='CONFIRMED') AS confirmed,
+            SUM(p.status='CONFIRMED' AND p.scoring_state='NO_RULE') AS without_rule,
+            COALESCE((SELECT SUM(st.points) FROM score_transactions st
+                      JOIN participations p2 ON p2.id=st.participation_id
+                      WHERE p2.event_id=:event),0) AS points
+            FROM participations p WHERE p.event_id=:event""",
+            {"event": str(event_id)},
+        )
+        participation_roles = rows(
+            connection,
+            """SELECT pr.code,pr.name,COUNT(*) AS total
+            FROM participations p JOIN participation_roles pr ON pr.id=p.role_id
+            WHERE p.event_id=:event AND p.status='CONFIRMED'
+            GROUP BY pr.id,pr.code,pr.name ORDER BY total DESC,pr.sort_order,pr.code""",
             {"event": str(event_id)},
         )
     registered = int(totals["registered"] if totals else 0)
@@ -66,6 +102,40 @@ def statistics(
         if registered == 0
         else round(attended / registered * 100, 1),
         "arrivalSeries": series,
+        "overCapacity": max(0, registered - event["capacity"]),
+        "confirmedParticipations": int(
+            participation_totals["confirmed"] or 0 if participation_totals else 0
+        ),
+        "participationsWithoutScoringRule": int(
+            participation_totals["without_rule"] or 0 if participation_totals else 0
+        ),
+        "scoreAwarded": decimal_string(
+            participation_totals["points"] or 0 if participation_totals else 0
+        ),
+        "byParticipationRole": [
+            {"code": item["code"], "name": item["name"], "count": int(item["total"])}
+            for item in participation_roles
+        ],
+        "byStream": [
+            {
+                "id": item["id"],
+                "title": item["title"],
+                "capacity": item["capacity"],
+                "registered": int(item["registered"]),
+                "attended": int(item["attended"]),
+                "absent": int(item["registered"]) - int(item["attended"]),
+            }
+            for item in streams
+        ],
+        "byPersonType": [
+            {
+                "personType": item["person_type"],
+                "registered": int(item["registered"]),
+                "attended": int(item["attended"] or 0),
+                "absent": int(item["registered"]) - int(item["attended"] or 0),
+            }
+            for item in participant_types
+        ],
     }
 
 
@@ -73,7 +143,7 @@ def statistics(
 def send_tickets(
     event_id: UUID,
     values: SendTicketsRequest,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     event_id_s = str(event_id)

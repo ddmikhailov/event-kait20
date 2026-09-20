@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@event-registration/contracts": "workspace:*",
     "react": "19.2.8"
   },
   "devDependencies": {

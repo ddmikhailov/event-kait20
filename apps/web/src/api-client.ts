@@ -1,9 +1,11 @@
 import {
   acceptedResponseSchema,
   publicEventResponseSchema,
+  publicEventListResponseSchema,
   publicRegistrationResponseSchema,
   ticketResponseSchema,
   type PublicEventResponse,
+  type PublicEventListResponse,
   type PublicRegistrationRequest,
   type PublicRegistrationResponse,
   type TicketResponse,
@@ -30,6 +32,14 @@ export class PublicApiError extends Error {
 }
 
 export class PublicApiClient {
+  public events(): Promise<PublicEventListResponse> {
+    return this.request(
+      '/public/events',
+      { method: 'GET' },
+      publicEventListResponseSchema,
+    );
+  }
+
   public event(slug: string): Promise<PublicEventResponse> {
     return this.request(
       `/public/events/${encodeURIComponent(slug)}`,
@@ -118,5 +128,8 @@ export class PublicApiClient {
     return schema.parse(body);
   }
 }
+
+export const publicMediaUrl = (key: string): string =>
+  `${apiBaseUrl}/media/event-covers/${encodeURIComponent(key)}`;
 
 export const publicApi = new PublicApiClient();

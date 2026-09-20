@@ -5,9 +5,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, Response
 
 from ..config import Settings
-from ..database import Database, row
+from ..database import Database, row, rows
 from ..dependencies import Staff, csrf_staff, database, settings
 from ..errors import ApiError
+from ..event_status import effective_status
+from ..form_config import event_form_config
 from ..registration_service import (
     acquire_person_locks,
     form_fields,
@@ -18,6 +20,7 @@ from ..registration_service import (
 from ..schemas import OnsiteRegistrationRequest, PublicRegistrationRequest
 from ..security import registration_qr, utc_iso, verify_registration
 from ..service_utils import json_value
+from ..streams import list_streams
 
 public = APIRouter(prefix="/public/events", tags=["public-registration"])
 tickets = APIRouter(prefix="/tickets", tags=["tickets"])
@@ -25,22 +28,62 @@ scanner = APIRouter(prefix="/scanner/events", tags=["scanner-registration"])
 admin = APIRouter(prefix="/admin/events", tags=["admin-registration"])
 
 
+@public.get("")
+def public_events(
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    now = datetime.now(UTC).replace(tzinfo=None)
+    with db.connect() as connection:
+        items = rows(
+            connection,
+            """SELECT id,title,slug,description,direction,cover_object_key,start_at,end_at,
+                      timezone,location,registration_deadline,status
+               FROM events
+               WHERE is_listed=true AND status IN ('REGISTRATION_OPEN','REGISTRATION_CLOSED','ACTIVE') AND end_at>:now
+               ORDER BY start_at ASC LIMIT 200""",
+            {"now": now},
+        )
+    return {
+        "items": [
+            {
+                "id": item["id"],
+                "effectiveStatus": effective_status(item, now),
+                "title": item["title"],
+                "slug": item["slug"],
+                "description": item["description"],
+                "direction": item["direction"],
+                "coverObjectKey": item["cover_object_key"],
+                "startAt": utc_iso(item["start_at"]),
+                "endAt": utc_iso(item["end_at"]),
+                "timezone": item["timezone"],
+                "location": item["location"],
+                "registrationDeadline": utc_iso(item["registration_deadline"]),
+            }
+            for item in items
+        ]
+    }
+
+
 @public.get("/{slug}")
 def public_event(
     slug: str,
+    response: Response,
     db: Annotated[Database, Depends(database)],
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
         event = row(
             connection,
-            """SELECT id,title,slug,description,cover_object_key,start_at,end_at,
-            timezone,location,registration_deadline,capacity,status FROM events WHERE slug=:slug""",
+            """SELECT id,title,slug,description,direction,cover_object_key,start_at,end_at,
+            timezone,form_config,allowed_person_types,is_listed,streams_enabled,location,registration_deadline,capacity,status FROM events WHERE slug=:slug""",
             {"slug": slug},
         )
-        if not event:
+        if not event or event["status"] in {"DRAFT", "ARCHIVED"}:
             raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
+        if not event["is_listed"]:
+            response.headers["X-Robots-Tag"] = "noindex, nofollow"
         fields = form_fields(connection, event["id"])
+        streams = list_streams(connection, event["id"], public=True)
         count = row(
             connection,
             "SELECT count(*) AS count FROM registrations WHERE event_id=:event AND status='ACTIVE'",
@@ -57,18 +100,32 @@ def public_event(
             else "OPEN"
         )
     )
+    if availability != "CLOSED" and event["streams_enabled"]:
+        availability = (
+            "OPEN"
+            if any(item["remaining"] > 0 and not item["ended"] for item in streams)
+            else "FULL"
+        )
     return {
         "id": event["id"],
         "title": event["title"],
         "slug": event["slug"],
         "description": event["description"],
+        "direction": event["direction"],
+        "allowedPersonTypes": json_value(event["allowed_person_types"]),
+        "systemFields": event_form_config(event)["public"],
+        "streamsEnabled": bool(event["streams_enabled"]),
+        "streams": streams,
         "coverObjectKey": event["cover_object_key"],
         "startAt": utc_iso(event["start_at"]),
         "endAt": utc_iso(event["end_at"]),
         "timezone": event["timezone"],
         "location": event["location"],
         "availability": availability,
+        "effectiveStatus": effective_status(event, now),
+        "registrationDeadline": utc_iso(event["registration_deadline"]),
         "consentUrl": str(config.consent_url),
+        "privacyPolicyUrl": str(config.privacy_policy_url),
         "consentVersion": config.consent_version,
         "formFields": [
             {
@@ -117,7 +174,16 @@ def public_register(
                 "registration_deadline"
             ] <= datetime.now(UTC).replace(tzinfo=None):
                 raise ApiError(409, "REGISTRATION_CLOSED", "Registration is closed")
-            locks = acquire_person_locks(connection, participant(values))
+            scope = row(
+                connection,
+                "SELECT tenant_id FROM organizations WHERE id=:id",
+                {"id": event["organization_id"]},
+            )
+            if not scope:
+                raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
+            locks = acquire_person_locks(
+                connection, participant(values), scope["tenant_id"]
+            )
             result = register(
                 connection, event, values, config, "PUBLIC_FORM", True, None, False
             )
@@ -138,16 +204,15 @@ def onsite(
     db: Database,
     config: Settings,
 ) -> dict[str, Any]:
-    if values.capacity_override and staff.role != "SUPER_ADMIN":
-        raise ApiError(403, "FORBIDDEN", "Capacity override is not permitted")
     with db.connect() as connection:
         transaction = connection.begin()
         locks: list[str] = []
         try:
             event = row(
                 connection,
-                "SELECT * FROM events WHERE id=:id FOR UPDATE",
-                {"id": event_id},
+                """SELECT e.* FROM events e JOIN organizations o ON o.id=e.organization_id
+                WHERE e.id=:id AND o.tenant_id=:tenant FOR UPDATE""",
+                {"id": event_id, "tenant": staff.tenant_id},
             )
             if not event:
                 raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
@@ -167,14 +232,16 @@ def onsite(
                 {"event": event_id, "user": staff.id},
             ):
                 raise ApiError(403, "FORBIDDEN", "Event access is required")
-            locks = acquire_person_locks(connection, participant(values))
+            locks = acquire_person_locks(
+                connection, participant(values), staff.tenant_id
+            )
             result = register(
                 connection,
                 event,
                 values,
                 config,
                 "ONSITE",
-                False,
+                True,
                 staff,
                 values.capacity_override,
             )
@@ -195,7 +262,7 @@ def admin_onsite(
     db: Annotated[Database, Depends(database)],
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, Any]:
-    if staff.role != "SUPER_ADMIN":
+    if staff.role == "SCANNER":
         raise ApiError(403, "FORBIDDEN", "Insufficient permission")
     return onsite(str(event_id), values, staff, db, config)
 
@@ -208,8 +275,6 @@ def scanner_onsite(
     db: Annotated[Database, Depends(database)],
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, Any]:
-    if staff.role == "SCANNER" and values.capacity_override:
-        raise ApiError(400, "VALIDATION_ERROR", "capacityOverride is not allowed")
     return onsite(str(event_id), values, staff, db, config)
 
 
@@ -229,8 +294,10 @@ def ticket(
     with db.connect() as connection:
         item = row(
             connection,
-            """SELECT e.title,e.start_at,e.end_at,e.timezone,e.location,
+            """SELECT e.title,COALESCE(s.start_at,e.start_at) AS start_at,
+            COALESCE(s.end_at,e.end_at) AS end_at,e.timezone,e.location,s.title AS stream_title,
             r.last_name,r.first_name,r.middle_name FROM registrations r JOIN events e ON e.id=r.event_id
+            LEFT JOIN event_streams s ON s.id=r.stream_id
             WHERE r.public_id=:public AND r.status='ACTIVE'""",
             {"public": str(public_id)},
         )
@@ -239,6 +306,7 @@ def ticket(
     return {
         "event": {
             "title": item["title"],
+            "streamTitle": item["stream_title"],
             "startAt": utc_iso(item["start_at"]),
             "endAt": utc_iso(item["end_at"]),
             "timezone": item["timezone"],

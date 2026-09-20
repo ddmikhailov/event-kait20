@@ -28,6 +28,7 @@ describe('staff administrator views', () => {
       <StaffList
         staff={[admin, scanner]}
         currentUserId={admin.id}
+        currentRole="SUPER_ADMIN"
         busy={false}
         onDeactivate={async () => undefined}
       />,
@@ -42,12 +43,32 @@ describe('staff administrator views', () => {
       <StaffList
         staff={[{ ...scanner, active: false }]}
         currentUserId={admin.id}
+        currentRole="SUPER_ADMIN"
         busy={false}
         onDeactivate={async () => undefined}
       />,
     );
     expect(markup).toContain('Отключён');
     expect(markup).not.toContain('Деактивировать');
+  });
+
+  it('allows an organizer to deactivate scanners but not administrators', () => {
+    const organizer: StaffListResponse['items'][number] = {
+      ...admin,
+      id: '30000000-0000-4000-8000-000000000001',
+      email: 'organizer@example.test',
+      role: 'ORGANIZER',
+    };
+    const markup = renderToStaticMarkup(
+      <StaffList
+        staff={[admin, organizer, scanner]}
+        currentUserId={organizer.id}
+        currentRole="ORGANIZER"
+        busy={false}
+        onDeactivate={async () => undefined}
+      />,
+    );
+    expect(markup.match(/Деактивировать/g)).toHaveLength(1);
   });
 
   it('renders explicit event access assignments', () => {

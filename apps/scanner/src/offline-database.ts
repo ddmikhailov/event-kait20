@@ -44,6 +44,7 @@ type SyncStateRecord = {
 };
 
 type DeviceRecord = { key: 'device'; deviceId: string };
+type OwnerRecord = { key: 'owner'; userId: string; accessValid: boolean };
 
 const confirmedStatuses = new Set([
   'ACCEPTED',
@@ -55,6 +56,10 @@ export class BundleIntegrityError extends Error {
   public override readonly name = 'BUNDLE_INTEGRITY_ERROR';
 }
 
+export class OfflineOwnerMismatchError extends Error {
+  public override readonly name = 'OFFLINE_OWNER_MISMATCH';
+}
+
 export class ScannerDatabase extends Dexie {
   public preparedEvents!: Table<PreparedEventRecord, string>;
   public offlineRegistrations!: Table<
@@ -64,6 +69,7 @@ export class ScannerDatabase extends Dexie {
   public pendingAttendance!: Table<PendingAttendanceRecord, string>;
   public syncState!: Table<SyncStateRecord, string>;
   public devices!: Table<DeviceRecord, string>;
+  public owners!: Table<OwnerRecord, string>;
 
   public constructor(name = 'event-registration-scanner') {
     super(name);
@@ -74,6 +80,15 @@ export class ScannerDatabase extends Dexie {
       pendingAttendance: '&clientEventId,eventId,status,createdAt',
       syncState: '&eventId',
       devices: '&key',
+    });
+    this.version(2).stores({
+      preparedEvents: '&eventId,expiresAt',
+      offlineRegistrations:
+        '&[eventId+registrationId],[eventId+qrPayloadHash],eventId,searchText',
+      pendingAttendance: '&clientEventId,eventId,status,createdAt',
+      syncState: '&eventId',
+      devices: '&key',
+      owners: '&key',
     });
   }
 
@@ -223,6 +238,87 @@ export class ScannerDatabase extends Dexie {
     return collection.filter((item) => item.status !== 'REJECTED').count();
   }
 
+  public unresolvedCount(): Promise<number> {
+    return this.pendingAttendance.count();
+  }
+
+  public async pendingEventIds(): Promise<string[]> {
+    const items = await this.pendingAttendance
+      .filter((item) => item.status !== 'REJECTED')
+      .toArray();
+    return [...new Set(items.map((item) => item.eventId))];
+  }
+
+  public async bindOwner(userId: string): Promise<void> {
+    const current = await this.owners.get('owner');
+    if (current?.userId === userId) {
+      if (!current.accessValid) {
+        await this.owners.put({ ...current, accessValid: true });
+      }
+      return;
+    }
+    if (!current) {
+      await this.transaction(
+        'rw',
+        this.preparedEvents,
+        this.offlineRegistrations,
+        this.syncState,
+        this.owners,
+        async () => {
+          await Promise.all([
+            this.preparedEvents.clear(),
+            this.offlineRegistrations.clear(),
+            this.syncState.clear(),
+          ]);
+          await this.owners.put({ key: 'owner', userId, accessValid: true });
+        },
+      );
+      return;
+    }
+    if (current && (await this.unresolvedCount()) > 0) {
+      throw new OfflineOwnerMismatchError(
+        'На устройстве есть несинхронизированные отметки другого пользователя',
+      );
+    }
+    await this.transaction(
+      'rw',
+      this.preparedEvents,
+      this.offlineRegistrations,
+      this.pendingAttendance,
+      this.syncState,
+      this.owners,
+      async () => {
+        await this.clearCachedBusinessData();
+        await this.owners.put({ key: 'owner', userId, accessValid: true });
+      },
+    );
+  }
+
+  public async revokeOfflineAccess(): Promise<void> {
+    const current = await this.owners.get('owner');
+    await this.transaction(
+      'rw',
+      this.preparedEvents,
+      this.offlineRegistrations,
+      this.syncState,
+      this.owners,
+      async () => {
+        await Promise.all([
+          this.preparedEvents.clear(),
+          this.offlineRegistrations.clear(),
+          this.syncState.clear(),
+        ]);
+        if (current) {
+          await this.owners.put({ ...current, accessValid: false });
+        }
+      },
+    );
+  }
+
+  public async offlineAccessAllowed(): Promise<boolean> {
+    return (await this.owners.get('owner'))?.accessValid === true;
+  }
+
   public rejectedForEvent(eventId: string): Promise<PendingAttendanceRecord[]> {
     return this.pendingAttendance
       .where('eventId')
@@ -321,13 +417,10 @@ export class ScannerDatabase extends Dexie {
       this.offlineRegistrations,
       this.pendingAttendance,
       this.syncState,
+      this.owners,
       async () => {
-        await Promise.all([
-          this.preparedEvents.clear(),
-          this.offlineRegistrations.clear(),
-          this.pendingAttendance.clear(),
-          this.syncState.clear(),
-        ]);
+        await this.clearCachedBusinessData();
+        await this.owners.clear();
       },
     );
   }
@@ -349,6 +442,15 @@ export class ScannerDatabase extends Dexie {
         await this.pendingAttendance.update(clientEventId, { status });
       }
     });
+  }
+
+  private async clearCachedBusinessData(): Promise<void> {
+    await Promise.all([
+      this.preparedEvents.clear(),
+      this.offlineRegistrations.clear(),
+      this.pendingAttendance.clear(),
+      this.syncState.clear(),
+    ]);
   }
 }
 

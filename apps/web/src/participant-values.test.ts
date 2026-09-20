@@ -84,10 +84,18 @@ describe('participant administration values', () => {
       ]),
     ).toThrow(ParticipantFormError);
   });
+
+  it('clears a stale study group when participant type is changed to employee', () => {
+    const form = participantForm();
+    form.set('personType', 'KAIT_TEACHER');
+
+    expect(personUpdateValues(form).studyGroup).toBeNull();
+  });
 });
 
 const participantForm = (): FormData => {
   const form = new FormData();
+  form.set('consentAccepted', 'on');
   form.set('lastName', 'Иванов');
   form.set('firstName', 'Иван');
   form.set('middleName', '');

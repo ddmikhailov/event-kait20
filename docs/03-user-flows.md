@@ -64,18 +64,18 @@
 
 ## Flow G — регистрация на месте
 
-1. SCANNER/SUPER_ADMIN нажимает «Добавить участника».
+1. SCANNER/SUPER_ADMIN/ORGANIZER нажимает «Добавить участника».
 2. Этот flow требует online-доступа к API.
 3. Заполняются основные поля; email допускается пустым.
 4. Backend выполняет deduplication и проверяет capacity.
 5. SCANNER при заполненном capacity получает `CAPACITY_FULL` и не может его обойти.
-6. SUPER_ADMIN может предварительно увеличить capacity либо выполнить явный administrative override.
+6. SUPER_ADMIN/ORGANIZER может предварительно увеличить capacity либо выполнить явный administrative override.
 7. Система создаёт Person/Registration.
 8. Можно сразу отметить присутствие.
 
 ## Flow H — Excel import
 
-1. SUPER_ADMIN выбирает мероприятие.
+1. SUPER_ADMIN/ORGANIZER выбирает мероприятие.
 2. Загружает `.xlsx`.
 3. Система разбирает строки и предлагает mapping колонок.
 4. Показывает preview: новые, существующие, сомнительные, ошибки.

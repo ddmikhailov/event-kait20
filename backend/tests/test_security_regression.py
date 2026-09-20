@@ -128,9 +128,10 @@ def test_production_login_cookie_is_secure(
         connection.execute(
             text(
                 """INSERT INTO staff_users
-                   (id,email,email_normalized,password_hash,system_role,active,
+                   (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,active,
                     password_changed_at,created_at,updated_at)
-                   VALUES (:id,:email,:email,:password,'SUPER_ADMIN',TRUE,
+                   VALUES (:id,'50000000-0000-4000-8000-000000000001',
+                           '51000000-0000-4000-8000-000000000001',:email,:email,:password,'SUPER_ADMIN',TRUE,
                            UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
             ),
             {
@@ -151,7 +152,8 @@ def test_production_login_cookie_is_secure(
         auth_link_base_url="https://events.example.org/auth",
         qr_signing_secret="q" * 43,
         public_web_base_url="https://events.example.org",
-        consent_url="https://legal.example.org/privacy",
+        consent_url="https://static.mskobr.ru/docs/soglasie_na_obrabotku_pnd.pdf",
+        privacy_policy_url="https://st.educom.ru/eduoffices/gateways/get_file.php?id={C6751185-7D3C-F320-3D87-C704B3683104}&name=politika_v_otnoshenii_pd_rkait20.pdf",
         consent_version="release-cookie-test",
     )
     with TestClient(create_app(config)) as production:
@@ -187,7 +189,8 @@ def test_login_route_enforces_shared_rate_limit_without_storing_email(
         auth_rate_limit_window_seconds=60,
         qr_signing_secret="q" * 43,
         public_web_base_url="http://localhost:5173",
-        consent_url="http://localhost:5173/privacy",
+        consent_url="https://static.mskobr.ru/docs/soglasie_na_obrabotku_pnd.pdf",
+        privacy_policy_url="https://st.educom.ru/eduoffices/gateways/get_file.php?id={C6751185-7D3C-F320-3D87-C704B3683104}&name=politika_v_otnoshenii_pd_rkait20.pdf",
         consent_version="rate-limit-test",
     )
     with TestClient(create_app(config)) as limited:

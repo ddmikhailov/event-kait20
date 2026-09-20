@@ -6,9 +6,10 @@
 ## Состав релиза
 
 - Python 3.12 / FastAPI API и MySQL 8.1.0 persistence;
-- SUPER_ADMIN и SCANNER, Argon2id, server-side sessions, invitations и reset;
+- SUPER_ADMIN, ORGANIZER и SCANNER, Argon2id, server-side sessions, invitations и reset;
 - распределённый между API-процессами MySQL rate limit для auth;
 - Event, form fields, EventAccess, участники, tickets и onsite registration;
+- скрытый по умолчанию архив и SUPER_ADMIN-only Event purge с сохранением Person;
 - Scanner PWA, offline bundle, idempotent attendance sync;
 - безопасный XLSX preview/commit/export;
 - статистика, audit log и ticket batches;
@@ -56,3 +57,13 @@ security updates. База не публикуется в Интернет; до
 
 Версия 2.0: массовые произвольные сообщения участникам выбранного Event.
 В 1.0 реализована только отправка билетов и служебных auth-писем.
+
+## Локальное обновление r3
+
+Включает потоки, видимость по ссылке, ограничения категорий, конструктор форм,
+автоматические временные статусы, мобильный сканер и повторные попытки писем.
+Переход с r2: только недостающие миграции 007–011, новый backend и обе frontend-сборки;
+точный порядок — release/sysadmin/UPDATE-INSTRUCTIONS-RU.txt. Старые миграции 001–006
+побайтово проверены по установленному архиву r2. GitHub не обновляется.
+Результаты локальных тестов не подтверждают доставку через production SMTP или
+настройки внешнего HTTPS proxy; организация проверяет их после обновления.

@@ -1,14 +1,19 @@
 import { z } from 'zod';
 
-import { emailSchema, uuidSchema } from './common.js';
-import { formFieldTypeSchema } from './events.js';
+import {
+  allowedPersonTypesSchema,
+  emailSchema,
+  personTypeSchema,
+  uuidSchema,
+} from './common.js';
+import {
+  eventStatusSchema,
+  formFieldTypeSchema,
+  streamResponseSchema,
+} from './events.js';
+import { systemFieldsSchema } from './forms.js';
 
-export const personTypeSchema = z.enum([
-  'KAIT_STUDENT',
-  'KAIT_TEACHER',
-  'EXTERNAL_STUDENT',
-  'EXTERNAL_TEACHER',
-]);
+export { personTypeSchema } from './common.js';
 
 export const participantNameSchema = z
   .string()
@@ -43,14 +48,16 @@ export const registrationAnswerRequestSchema = z
 
 export const publicRegistrationRequestSchema = z
   .object({
+    streamId: uuidSchema.nullable().optional(),
+    requestId: uuidSchema.optional(),
     lastName: participantNameSchema,
     firstName: participantNameSchema,
     middleName: participantNameSchema.nullable().optional(),
-    birthDate: z.iso.date(),
-    email: emailSchema,
-    phone: russianPhoneSchema,
+    birthDate: z.iso.date().nullable().optional(),
+    email: emailSchema.nullable().optional(),
+    phone: russianPhoneSchema.nullable().optional(),
     studyGroup: z.string().trim().min(1).max(100).nullable().optional(),
-    personType: personTypeSchema,
+    personType: personTypeSchema.nullable().optional(),
     organization: z.string().trim().min(1).max(255).nullable().optional(),
     consentAccepted: z.literal(true),
     consentVersion: z.string().trim().min(1).max(255),
@@ -61,22 +68,6 @@ export const publicRegistrationRequestSchema = z
   })
   .strict()
   .superRefine((value, context) => {
-    const student = value.personType.endsWith('_STUDENT');
-    const external = value.personType.startsWith('EXTERNAL_');
-    if (student && !value.studyGroup) {
-      context.addIssue({
-        code: 'custom',
-        path: ['studyGroup'],
-        message: 'Study group is required for students',
-      });
-    }
-    if (external && !value.organization) {
-      context.addIssue({
-        code: 'custom',
-        path: ['organization'],
-        message: 'Organization is required for external participants',
-      });
-    }
     if (
       new Set(value.customAnswers.map((answer) => answer.fieldId)).size !==
       value.customAnswers.length
@@ -103,10 +94,17 @@ const publicFormFieldSchema = z.object({
 });
 
 export const publicEventResponseSchema = z.object({
+  effectiveStatus: eventStatusSchema.optional(),
+  registrationDeadline: z.iso.datetime({ offset: true }).optional(),
+  systemFields: systemFieldsSchema.optional(),
+  streamsEnabled: z.boolean().optional(),
+  streams: z.array(streamResponseSchema).optional(),
+  allowedPersonTypes: allowedPersonTypesSchema.optional(),
   id: uuidSchema,
   title: z.string(),
   slug: z.string(),
   description: z.string().nullable(),
+  direction: z.string().nullable().optional(),
   coverObjectKey: z.string().nullable(),
   startAt: z.iso.datetime({ offset: true }),
   endAt: z.iso.datetime({ offset: true }),
@@ -114,22 +112,36 @@ export const publicEventResponseSchema = z.object({
   location: z.string(),
   availability: z.enum(['OPEN', 'CLOSED', 'FULL']),
   consentUrl: z.url(),
+  privacyPolicyUrl: z.url(),
   consentVersion: z.string(),
   formFields: z.array(publicFormFieldSchema),
 });
 export type PublicEventResponse = z.infer<typeof publicEventResponseSchema>;
 
-export const publicRegistrationResponseSchema = z.object({
-  status: z.enum(['REGISTERED', 'ALREADY_REGISTERED']),
-  registrationId: uuidSchema,
-  ticketUrl: z.url(),
-});
+const registrationTicketResponseSchema = z
+  .object({
+    status: z.literal('REGISTERED'),
+    registrationId: uuidSchema,
+    ticketUrl: z.url(),
+  })
+  .strict();
+
+export const publicRegistrationResponseSchema = z.discriminatedUnion('status', [
+  registrationTicketResponseSchema,
+  z
+    .object({
+      status: z.literal('ALREADY_REGISTERED'),
+      recoveryQueued: z.boolean(),
+    })
+    .strict(),
+]);
 export type PublicRegistrationResponse = z.infer<
   typeof publicRegistrationResponseSchema
 >;
 
 export const ticketResponseSchema = z.object({
   event: z.object({
+    streamTitle: z.string().nullable().optional(),
     title: z.string(),
     startAt: z.iso.datetime({ offset: true }),
     endAt: z.iso.datetime({ offset: true }),
@@ -146,14 +158,17 @@ export const ticketResponseSchema = z.object({
 export type TicketResponse = z.infer<typeof ticketResponseSchema>;
 
 const onsiteRegistrationValuesSchema = z.object({
+  consentAccepted: z.literal(true),
+  streamId: uuidSchema.nullable().optional(),
+  requestId: uuidSchema.optional(),
   lastName: participantNameSchema,
   firstName: participantNameSchema,
   middleName: participantNameSchema.nullable().optional(),
-  birthDate: z.iso.date(),
+  birthDate: z.iso.date().nullable().optional(),
   email: emailSchema.nullable().optional(),
-  phone: russianPhoneSchema,
+  phone: russianPhoneSchema.nullable().optional(),
   studyGroup: z.string().trim().min(1).max(100).nullable().optional(),
-  personType: personTypeSchema,
+  personType: personTypeSchema.nullable().optional(),
   organization: z.string().trim().min(1).max(255).nullable().optional(),
   customAnswers: z.array(registrationAnswerRequestSchema).max(100).default([]),
 });
@@ -162,20 +177,6 @@ const refineOnsiteRegistration = (
   value: z.infer<typeof onsiteRegistrationValuesSchema>,
   context: z.RefinementCtx,
 ) => {
-  if (value.personType.endsWith('_STUDENT') && !value.studyGroup) {
-    context.addIssue({
-      code: 'custom',
-      path: ['studyGroup'],
-      message: 'Study group is required for students',
-    });
-  }
-  if (value.personType.startsWith('EXTERNAL_') && !value.organization) {
-    context.addIssue({
-      code: 'custom',
-      path: ['organization'],
-      message: 'Organization is required for external participants',
-    });
-  }
   if (
     new Set(value.customAnswers.map((answer) => answer.fieldId)).size !==
     value.customAnswers.length
@@ -189,7 +190,10 @@ const refineOnsiteRegistration = (
 };
 
 export const scannerOnsiteRegistrationRequestSchema =
-  onsiteRegistrationValuesSchema.strict().superRefine(refineOnsiteRegistration);
+  onsiteRegistrationValuesSchema
+    .extend({ capacityOverride: z.boolean().optional() })
+    .strict()
+    .superRefine(refineOnsiteRegistration);
 export type ScannerOnsiteRegistrationRequest = z.infer<
   typeof scannerOnsiteRegistrationRequestSchema
 >;
@@ -203,6 +207,13 @@ export type AdminOnsiteRegistrationRequest = z.infer<
   typeof adminOnsiteRegistrationRequestSchema
 >;
 
-export const onsiteRegistrationResponseSchema =
-  publicRegistrationResponseSchema;
-export type OnsiteRegistrationResponse = PublicRegistrationResponse;
+export const onsiteRegistrationResponseSchema = z
+  .object({
+    status: z.enum(['REGISTERED', 'ALREADY_REGISTERED']),
+    registrationId: uuidSchema,
+    ticketUrl: z.url(),
+  })
+  .strict();
+export type OnsiteRegistrationResponse = z.infer<
+  typeof onsiteRegistrationResponseSchema
+>;

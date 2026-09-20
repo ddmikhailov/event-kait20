@@ -4,10 +4,12 @@ import type {
   AttendanceSyncResponse,
   OfflineBundleResponse,
 } from '@event-registration/contracts';
+import { offlineBundleResponseSchema } from '@event-registration/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   BundleIntegrityError,
+  OfflineOwnerMismatchError,
   ScannerDatabase,
   sha256,
 } from './offline-database.js';
@@ -64,6 +66,25 @@ afterEach(async () => {
 });
 
 describe('offline scanner database', () => {
+  it('preserves server checksum and stream name through contract parsing', async () => {
+    const legacy = await bundle();
+    const registrations = legacy.registrations.map(
+      ({ registrationId: id, ...rest }) => ({
+        registrationId: id,
+        streamTitle: 'Утренний поток',
+        ...rest,
+      }),
+    );
+    const parsed = offlineBundleResponseSchema.parse({
+      ...legacy,
+      registrations,
+      checksum: await sha256(JSON.stringify(registrations)),
+    });
+    await database.replaceBundle(parsed, 0, eventSummary);
+    await expect(database.lookupQr(eventId, qrPayload)).resolves.toMatchObject({
+      streamTitle: 'Утренний поток',
+    });
+  });
   it('installs a verified bundle and supports QR lookup and local search', async () => {
     await database.replaceBundle(await bundle(), 250, eventSummary);
 
@@ -137,12 +158,51 @@ describe('offline scanner database', () => {
     await database.applySyncResults(eventId, response);
 
     await expect(database.pendingCount(eventId)).resolves.toBe(0);
+    await expect(database.unresolvedCount()).resolves.toBe(1);
     await expect(database.rejectedForEvent(eventId)).resolves.toMatchObject([
       { clientEventId: rejected.clientEventId, status: 'REJECTED' },
     ]);
     await expect(
       database.offlineRegistrations.get([eventId, registrationId]),
     ).resolves.toMatchObject({ firstAttendedAt: '2026-09-01T07:05:00.000Z' });
+  });
+
+  it('counts pending, syncing and rejected records before destructive logout', async () => {
+    await database.replaceBundle(await bundle(), 0, eventSummary);
+    const pending = await database.queueAttendance(
+      eventId,
+      registrationId,
+      'FAST_SCAN',
+      'OFFLINE_SYNC',
+    );
+    const syncing = await database.queueAttendance(
+      eventId,
+      registrationId,
+      'MANUAL_CONFIRM',
+      'OFFLINE_SYNC',
+    );
+    const rejected = await database.queueAttendance(
+      eventId,
+      registrationId,
+      'MANUAL_SEARCH',
+      'OFFLINE_SYNC',
+    );
+    await database.markSyncing([syncing.clientEventId]);
+    await database.applySyncResults(eventId, {
+      offlineDataVersion: '2',
+      results: [
+        {
+          clientEventId: rejected.clientEventId,
+          status: 'INVALID_TIMESTAMP',
+          firstAttendedAt: null,
+        },
+      ],
+    });
+
+    await expect(database.unresolvedCount()).resolves.toBe(3);
+    await expect(
+      database.pendingAttendance.get(pending.clientEventId),
+    ).resolves.toMatchObject({ status: 'PENDING' });
   });
 
   it('expires cached PII without deleting pending attendance', async () => {
@@ -181,6 +241,73 @@ describe('offline scanner database', () => {
 
     await expect(database.preparedEvents.count()).resolves.toBe(0);
     await expect(database.pendingAttendance.count()).resolves.toBe(0);
+    await expect(database.owners.count()).resolves.toBe(0);
     await expect(database.deviceId()).resolves.toBe(deviceId);
+  });
+
+  it('isolates cached data between scanner accounts', async () => {
+    await database.bindOwner('scanner-one');
+    await database.replaceBundle(await bundle(), 0, eventSummary);
+    const pending = await database.queueAttendance(
+      eventId,
+      registrationId,
+      'FAST_SCAN',
+      'OFFLINE_SYNC',
+    );
+
+    await expect(database.bindOwner('scanner-two')).rejects.toBeInstanceOf(
+      OfflineOwnerMismatchError,
+    );
+    await expect(
+      database.pendingAttendance.get(pending.clientEventId),
+    ).resolves.toBeDefined();
+    await expect(database.offlineRegistrations.count()).resolves.toBe(1);
+
+    await database.pendingAttendance.clear();
+    await database.bindOwner('scanner-two');
+
+    await expect(database.offlineRegistrations.count()).resolves.toBe(0);
+    await expect(database.owners.get('owner')).resolves.toMatchObject({
+      userId: 'scanner-two',
+      accessValid: true,
+    });
+  });
+
+  it('keeps legacy pending attendance but removes unowned cached PII', async () => {
+    await database.replaceBundle(await bundle(), 0, eventSummary);
+    const pending = await database.queueAttendance(
+      eventId,
+      registrationId,
+      'FAST_SCAN',
+      'OFFLINE_SYNC',
+    );
+
+    await database.bindOwner('scanner-one');
+
+    await expect(database.offlineRegistrations.count()).resolves.toBe(0);
+    await expect(
+      database.pendingAttendance.get(pending.clientEventId),
+    ).resolves.toBeDefined();
+  });
+
+  it('blocks revoked offline access without deleting unresolved attendance', async () => {
+    await database.bindOwner('scanner-one');
+    await database.replaceBundle(await bundle(), 0, eventSummary);
+    const pending = await database.queueAttendance(
+      eventId,
+      registrationId,
+      'FAST_SCAN',
+      'OFFLINE_SYNC',
+    );
+
+    await database.revokeOfflineAccess();
+
+    await expect(database.offlineAccessAllowed()).resolves.toBe(false);
+    await expect(database.offlineRegistrations.count()).resolves.toBe(0);
+    await expect(
+      database.pendingAttendance.get(pending.clientEventId),
+    ).resolves.toBeDefined();
+    await database.bindOwner('scanner-one');
+    await expect(database.offlineAccessAllowed()).resolves.toBe(true);
   });
 });

@@ -27,7 +27,7 @@ export default defineConfig({
   webServer: {
     command: 'pnpm demo:up',
     url: 'http://127.0.0.1:5173/events/demo-event',
-    reuseExistingServer: false,
+    reuseExistingServer: process.env.E2E_REUSE_SERVER === 'true',
     timeout: 120_000,
     gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
     env: { DEMO_PRINT_CREDENTIALS: 'false' },

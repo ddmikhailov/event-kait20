@@ -181,7 +181,10 @@ export class ScannerService {
           })),
         });
         await this.database.applySyncResults(eventId, response);
-        lastResponse = response;
+        lastResponse = {
+          ...response,
+          results: [...(lastResponse?.results ?? []), ...response.results],
+        };
       } catch (error) {
         await this.database.resetPending(ids);
         await this.database.recordSyncError(eventId, errorCode(error));
@@ -199,6 +202,7 @@ export class ScannerService {
         'Требуется повторный вход',
       );
     }
+    await this.database.bindOwner(session.user.id);
   }
 
   private async downloadAndReplace(
@@ -218,6 +222,7 @@ const scannerResponse = (
   registration: OfflineRegistrationRecord,
 ): ResolveQrResponse => ({
   registrationId: registration.registrationId,
+  streamTitle: registration.streamTitle,
   lastName: registration.lastName,
   firstName: registration.firstName,
   middleName: registration.middleName,

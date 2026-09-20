@@ -1,5 +1,6 @@
 import { BrowserQRCodeReader, type IScannerControls } from '@zxing/browser';
 import { useEffect, useRef, useState } from 'react';
+import { acceptQrRead } from './qr-repeat-guard.js';
 
 type QrCameraProps = {
   active: boolean;
@@ -9,6 +10,7 @@ type QrCameraProps = {
 export const QrCamera = ({ active, onDecode }: QrCameraProps) => {
   const video = useRef<HTMLVideoElement>(null);
   const callback = useRef(onDecode);
+  const lastRead = useRef({ value: '', lastSeenAt: 0 });
   const [error, setError] = useState<string>();
 
   callback.current = onDecode;
@@ -17,8 +19,7 @@ export const QrCamera = ({ active, onDecode }: QrCameraProps) => {
     if (!active || !video.current) return undefined;
     let controls: IScannerControls | undefined;
     let cancelled = false;
-    let lastValue = '';
-    let lastDecodedAt = 0;
+    lastRead.current.lastSeenAt = Date.now();
     const reader = new BrowserQRCodeReader(undefined, {
       delayBetweenScanAttempts: 150,
       delayBetweenScanSuccess: 700,
@@ -31,18 +32,16 @@ export const QrCamera = ({ active, onDecode }: QrCameraProps) => {
         },
         video.current,
         (result) => {
-          if (!result || cancelled) return;
-          const value = result.getText();
-          const now = Date.now();
-          if (value === lastValue && now - lastDecodedAt < 2_000) return;
-          lastValue = value;
-          lastDecodedAt = now;
-          callback.current(value);
+          if (cancelled) return;
+          const value = result?.getText();
+          if (acceptQrRead(lastRead.current, value, Date.now()) && value)
+            callback.current(value);
         },
       )
       .then((scannerControls) => {
         controls = scannerControls;
         if (cancelled) controls.stop();
+        else setError(undefined);
       })
       .catch(() => {
         if (!cancelled) {
