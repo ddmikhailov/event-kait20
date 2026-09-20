@@ -1441,6 +1441,98 @@ def test_stream_title_is_visible_in_admin_list_detail_and_scanner_search(
     assert searched_item["streamTitle"] == "Утренний поток"
 
 
+def test_answer_snapshot_survives_a_later_question_relabel(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client)
+    created = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Снимок ответа",
+            "slug": "answer-snapshot",
+            "location": "Колледж",
+            "startAt": "2027-11-12T07:00:00Z",
+            "endAt": "2027-11-12T17:00:00Z",
+            "registrationDeadline": "2027-11-11T07:00:00Z",
+            "capacity": 100,
+            "status": "REGISTRATION_OPEN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    field = client.post(
+        f"/admin/events/{event_id}/form-fields",
+        headers=headers,
+        json={
+            "label": "Исходная формулировка",
+            "type": "BOOLEAN",
+            "required": False,
+            "onsiteRequired": False,
+            "sortOrder": 0,
+        },
+    ).json()
+    payload = {
+        "lastName": "Снимков",
+        "firstName": "Стабильный",
+        "birthDate": "1991-03-03",
+        "email": "answer-snapshot@example.com",
+        "phone": "+79991112233",
+        "personType": "PARENT",
+        "consentAccepted": True,
+        "customAnswers": [{"fieldId": field["id"], "value": True}],
+    }
+    first = client.post(
+        f"/admin/events/{event_id}/registrations/onsite", headers=headers, json=payload
+    )
+    assert first.status_code == 201, first.text
+    with client.app.state.database.connect() as connection:
+        before = (
+            connection.execute(
+                text(
+                    """SELECT field_label_snapshot,field_type_snapshot,answer
+                FROM registration_answers WHERE field_id=:field"""
+                ),
+                {"field": field["id"]},
+            )
+            .mappings()
+            .one()
+        )
+    assert before["field_label_snapshot"] == "Исходная формулировка"
+    assert json.loads(before["answer"]) is True
+
+    relabelled = client.patch(
+        f"/admin/events/{event_id}/form-fields/{field['id']}",
+        headers=headers,
+        json={"label": "Переформулированный вопрос", "type": "BOOLEAN"},
+    )
+    assert relabelled.status_code == 200, relabelled.text
+
+    second = client.post(
+        f"/admin/events/{event_id}/registrations/onsite",
+        headers=headers,
+        json={**payload, "customAnswers": [{"fieldId": field["id"], "value": False}]},
+    )
+    assert second.status_code == 201, second.text
+    with client.app.state.database.connect() as connection:
+        after = (
+            connection.execute(
+                text(
+                    """SELECT field_label_snapshot,field_type_snapshot,answer
+                FROM registration_answers WHERE field_id=:field"""
+                ),
+                {"field": field["id"]},
+            )
+            .mappings()
+            .one()
+        )
+    # The answer value updates with the repeat submission, but the snapshot
+    # of what the question looked like when it was first answered must not
+    # be silently rewritten to reflect the later relabel.
+    assert after["field_label_snapshot"] == "Исходная формулировка"
+    assert json.loads(after["answer"]) is False
+
+
 def test_invitation_resend_status_and_idempotency(client: TestClient) -> None:
     headers, _ = _login(client)
     response = client.post(
