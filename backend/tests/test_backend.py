@@ -4,6 +4,7 @@ import json
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from email.message import EmailMessage
 from io import BytesIO
 from pathlib import Path
@@ -23,7 +24,7 @@ from event_api.demo_seed import main as seed_demo
 from event_api.email_worker import process_once
 from event_api.errors import ApiError
 from event_api.registration_service import participant
-from event_api.routers.excel import _parse
+from event_api.routers.excel import _custom_headers, _parse
 from event_api.schemas import ParticipantValues
 from event_api.security import RateLimiter, auth_link_token, hash_password, token_hash
 
@@ -39,6 +40,18 @@ def _tiny_png() -> bytes:
     buffer = _BytesIO()
     _Image.new("RGB", (2, 2), color=(120, 60, 180)).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def test_custom_headers_deduplicates_labels_that_collide_with_generated_suffixes() -> (
+    None
+):
+    # A literal label that already looks like a generated "(N)" suffix must
+    # not silently collide with the header that suffix generation produces
+    # for an earlier duplicate.
+    fields = [{"label": "A"}, {"label": "A"}, {"label": "A (2)"}]
+    headers = _custom_headers(fields)
+    assert headers == ["Поле: A", "Поле: A (2)", "Поле: A (2) (2)"]
+    assert len(set(headers)) == len(headers)
 
 
 def test_excel_rejects_formula_and_merged_cells() -> None:
@@ -1051,6 +1064,15 @@ def test_excel_preview_commit_and_safe_export(client: TestClient) -> None:
             ).scalar_one()
             == 0
         )
+        stored_registered_at = connection.execute(
+            text("SELECT registered_at FROM registrations WHERE id=:id"),
+            {"id": registration_id},
+        ).scalar_one()
+    # R30: exported timestamps are shifted to Moscow time and the header says
+    # so, matching the already-shifted stream-start column.
+    assert exported_row["Регистрация (МСК UTC+3)"] == stored_registered_at + timedelta(
+        hours=3
+    )
     archived = client.post(f"/admin/events/{event_id}/archive", headers=headers)
     assert archived.status_code == 201, archived.text
     assert client.get(f"/admin/events/{event_id}/export.xlsx").status_code == 200
