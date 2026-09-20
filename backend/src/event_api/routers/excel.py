@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import struct
+import zipfile
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any
@@ -38,6 +40,29 @@ from ..streams import selected_stream
 router = APIRouter(prefix="/admin/events", tags=["excel"])
 MAX_FILE = 5 * 1024 * 1024
 MAX_ROWS = 5_000
+# Grounded against real openpyxl output, not chosen arbitrarily: a single-sheet
+# workbook always has 9 ZIP entries; a realistically wide legitimate import
+# (9 fixed columns + dozens of custom questions, 5000 rows) measured ~50 MB
+# uncompressed, and the widest workbook that can still fit under MAX_FILE's
+# 5 MiB compressed cap (200 columns) measured ~130 MB uncompressed. `_parse`
+# uses `load_workbook(read_only=False)` (see the comment above `_parse` for
+# why read-only mode isn't compatible), which materializes every cell as a
+# Python object rather than streaming — measured empirically at roughly a
+# 2.5x-4x memory blow-up over the declared uncompressed XML size for that
+# mode. The limits below stay above the 200-column extreme (so nothing
+# already legitimate under MAX_FILE is newly rejected) while being tighter
+# than a size grounded on XML bytes alone would suggest, to keep the
+# amplified worst-case actual process memory in the ~1 GiB range rather than
+# ~2 GiB. See docs in CLAUDE_REVIEW.md's "XLSX memory model" section.
+MAX_ARCHIVE_ENTRIES = 100
+MAX_TOTAL_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+MAX_SINGLE_ENTRY_UNCOMPRESSED_BYTES = 192 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 300
+# Every entry in a real openpyxl-generated XLSX is ZIP_DEFLATED (a handful of
+# tiny parts may legitimately be ZIP_STORED). BZIP2/LZMA/other ZIP
+# compression methods are never produced by any legitimate XLSX writer this
+# app needs to accept and cost more CPU per byte to decompress.
+ACCEPTED_ZIP_COMPRESSION_METHODS = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 HEADERS = {
     "streamTitle": "Поток",
@@ -169,6 +194,210 @@ def _answer_value(field: Any, value: Any) -> str | bool | list[str] | None:
     return str(value).strip()
 
 
+_EOCD_SIGNATURE = b"PK\x05\x06"
+_EOCD_FIXED_SIZE = 22
+_EOCD_MAX_COMMENT = 0xFFFF
+_ZIP64_SENTINEL_16 = 0xFFFF
+_ZIP64_SENTINEL_32 = 0xFFFFFFFF
+_CENTRAL_DIRECTORY_SIGNATURE = b"PK\x01\x02"
+_CENTRAL_DIRECTORY_FIXED_SIZE = 46
+
+
+def _size_limit_error() -> ApiError:
+    return ApiError(400, "VALIDATION_ERROR", "XLSX workbook exceeds safe size limits")
+
+
+def _unreadable_error() -> ApiError:
+    return ApiError(400, "VALIDATION_ERROR", "XLSX workbook could not be read")
+
+
+def _locate_eocd(source: bytes) -> tuple[int, int, int, int]:
+    """Find and validate the ZIP End Of Central Directory record.
+
+    Returns `(total_entries, cd_size, cd_offset, eocd_position)` exactly as
+    declared — `total_entries` is untrusted metadata (see
+    `_preflight_declared_entry_count`) and is not checked against any limit
+    here; this function's only job is finding a genuine EOCD record and
+    rejecting structurally invalid ones.
+
+    A ZIP's EOCD sits at the very end of the file, optionally followed by a
+    comment of up to 65535 bytes. Since the 4-byte EOCD signature could in
+    principle also appear inside that comment (or inside preceding file data)
+    by coincidence, this mirrors the approach CPython's own `zipfile` module
+    uses: scan backward for the signature, and for each candidate verify that
+    `position + 22 + declared_comment_length` lands exactly on the end of the
+    file — the only signature occurrence that satisfies that invariant is a
+    real EOCD record.
+    """
+    if len(source) < _EOCD_FIXED_SIZE:
+        raise _unreadable_error()
+    window_start = max(0, len(source) - _EOCD_FIXED_SIZE - _EOCD_MAX_COMMENT)
+    tail = source[window_start:]
+    positions: list[int] = []
+    cursor = 0
+    while True:
+        found = tail.find(_EOCD_SIGNATURE, cursor)
+        if found == -1:
+            break
+        positions.append(found)
+        cursor = found + 1
+    for position in reversed(positions):
+        candidate = tail[position : position + _EOCD_FIXED_SIZE]
+        if len(candidate) != _EOCD_FIXED_SIZE:
+            continue
+        (
+            _signature,
+            disk_number,
+            disk_with_cd,
+            entries_on_disk,
+            total_entries,
+            cd_size,
+            cd_offset,
+            comment_length,
+        ) = struct.unpack("<IHHHHIIH", candidate)
+        eocd_position = window_start + position
+        if eocd_position + _EOCD_FIXED_SIZE + comment_length != len(source):
+            continue
+        if disk_number != 0 or disk_with_cd != 0 or entries_on_disk != total_entries:
+            raise _unreadable_error()
+        if (
+            total_entries == _ZIP64_SENTINEL_16
+            or cd_size == _ZIP64_SENTINEL_32
+            or cd_offset == _ZIP64_SENTINEL_32
+        ):
+            # ZIP64 escape values. A single-sheet XLSX under MAX_FILE never
+            # needs ZIP64 (confirmed empirically against real generated
+            # workbooks: total_entries/cd_size/cd_offset are always small,
+            # ordinary values); implementing the ZIP64 EOCD locator/record
+            # format is unnecessary complexity for an upload this small, so
+            # this fails closed instead.
+            raise _unreadable_error()
+        if cd_offset + cd_size != eocd_position:
+            # No gap and no overlap: the central directory must end exactly
+            # where the EOCD begins. Confirmed empirically against several
+            # real openpyxl-generated workbooks (different sheet/row/column
+            # shapes) — this always holds for a normal, non-multi-part
+            # archive, so any gap is treated as a structural anomaly rather
+            # than silently tolerated.
+            raise _unreadable_error()
+        return int(total_entries), int(cd_size), int(cd_offset), eocd_position
+    raise _unreadable_error()
+
+
+def _count_central_directory_records(
+    source: bytes, cd_offset: int, cd_size: int
+) -> int:
+    """Manually walk the declared central directory and count real records,
+    bailing out the moment the count exceeds MAX_ARCHIVE_ENTRIES.
+
+    The EOCD's `total_entries` field is metadata the archive author chose —
+    `zipfile.ZipFile` itself doesn't trust it either: it parses central
+    directory records by walking `cd_size` bytes, not by stopping after
+    `total_entries` records. An EOCD declaring `total_entries=1` while the
+    central directory bytes actually contain thousands of well-formed records
+    would sail through a check that only reads the EOCD, and `ZipFile` would
+    still materialize every one of those thousands of `ZipInfo` objects. This
+    walks the same bytes `ZipFile` would, but stops the instant there are too
+    many — at most `MAX_ARCHIVE_ENTRIES + 1` fixed-size headers are ever
+    read, regardless of how large a malicious `cd_size` claims to be (already
+    bounded by `MAX_FILE` via the caller, but this never relies on that
+    alone). No `ZipInfo` list is built; only a running count is kept.
+    """
+    end = cd_offset + cd_size
+    cursor = cd_offset
+    count = 0
+    while cursor < end:
+        if cursor + _CENTRAL_DIRECTORY_FIXED_SIZE > end:
+            raise _unreadable_error()
+        header = source[cursor : cursor + _CENTRAL_DIRECTORY_FIXED_SIZE]
+        if header[:4] != _CENTRAL_DIRECTORY_SIGNATURE:
+            raise _unreadable_error()
+        filename_length, extra_length, comment_length = struct.unpack(
+            "<HHH", header[28:34]
+        )
+        record_size = (
+            _CENTRAL_DIRECTORY_FIXED_SIZE
+            + filename_length
+            + extra_length
+            + comment_length
+        )
+        if cursor + record_size > end:
+            raise _unreadable_error()
+        cursor += record_size
+        count += 1
+        if count > MAX_ARCHIVE_ENTRIES:
+            raise _size_limit_error()
+    if cursor != end:
+        raise _unreadable_error()
+    return count
+
+
+def _preflight_declared_entry_count(source: bytes) -> int:
+    """Reject a ZIP member-count bomb before `zipfile.ZipFile` ever
+    materializes a `ZipInfo`, without trusting the EOCD's own entry count.
+
+    `zipfile.ZipFile(...)` builds a `ZipInfo` object per central directory
+    record before any application-level check can run, so an archive that
+    stays under MAX_FILE could still declare (or actually contain) far more
+    entries than `MAX_ARCHIVE_ENTRIES` and pay that materialization cost
+    first. The EOCD's own declared `total_entries` is not a safe guard on its
+    own — it's attacker-controlled metadata that need not match the real
+    number of central directory records `ZipFile` would actually parse — so
+    this locates the EOCD, then manually walks the *declared* central
+    directory bytes (`_count_central_directory_records`, bounded to at most
+    `MAX_ARCHIVE_ENTRIES + 1` header reads) to get the real count, and
+    rejects if that real count disagrees with what the EOCD claimed.
+    """
+    total_entries, cd_size, cd_offset, _eocd_position = _locate_eocd(source)
+    actual_count = _count_central_directory_records(source, cd_offset, cd_size)
+    if actual_count != total_entries:
+        raise _unreadable_error()
+    return actual_count
+
+
+def _validate_xlsx_archive(source: bytes) -> None:
+    """Reject an oversized or malformed XLSX archive before any workbook parser
+    decompresses it.
+
+    XLSX is a ZIP container carrying untrusted user content. This inspects only
+    ZIP metadata — the EOCD record, the central directory's entry count, each
+    entry's *declared* compressed/uncompressed size, compression method, and
+    the per-entry encryption flag — and never decompresses, reads, or extracts
+    a single byte of entry content. `MAX_FILE` already bounds the compressed
+    upload; the limits here bound what that upload could expand into once a
+    parser inflates it. Order matters: the raw EOCD preflight runs first and
+    can reject a member-count bomb before `zipfile.ZipFile` ever builds a
+    `ZipInfo` list; only an archive that survives it is handed to `ZipFile`.
+    """
+    _preflight_declared_entry_count(source)
+    try:
+        with zipfile.ZipFile(io.BytesIO(source)) as archive:
+            infos = archive.infolist()
+    except (zipfile.BadZipFile, OSError) as error:
+        raise _unreadable_error() from error
+    if len(infos) > MAX_ARCHIVE_ENTRIES:
+        raise _size_limit_error()
+    if any(info.flag_bits & 0x1 for info in infos):
+        # An encrypted member can't be safely inspected or decompressed without
+        # a password, which this endpoint never asks for.
+        raise _unreadable_error()
+    total_uncompressed = 0
+    for info in infos:
+        if info.compress_type not in ACCEPTED_ZIP_COMPRESSION_METHODS:
+            raise _unreadable_error()
+        if info.file_size > MAX_SINGLE_ENTRY_UNCOMPRESSED_BYTES:
+            raise _size_limit_error()
+        # compress_size is floored at 1 so a declared-zero-compressed entry
+        # can't divide by zero or hide behind an undefined ratio; a genuinely
+        # empty entry (file_size == 0 too) still yields ratio 0 and passes.
+        ratio = info.file_size / max(info.compress_size, 1)
+        if ratio > MAX_COMPRESSION_RATIO:
+            raise _size_limit_error()
+        total_uncompressed += info.file_size
+    if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES:
+        raise _size_limit_error()
+
+
 def _parse(
     source: bytes,
     supplied_mapping: str | None = None,
@@ -176,92 +405,98 @@ def _parse(
 ) -> tuple[list[str], dict[str, Any], list[dict[str, Any]]]:
     if not source or len(source) > MAX_FILE or not source.startswith(b"PK"):
         raise ApiError(400, "VALIDATION_ERROR", "A valid XLSX up to 5 MiB is required")
+    _validate_xlsx_archive(source)
     try:
         workbook = load_workbook(io.BytesIO(source), data_only=False, read_only=False)
     except Exception as error:
         raise ApiError(
             400, "VALIDATION_ERROR", "XLSX workbook could not be read"
         ) from error
-    sheets = [sheet for sheet in workbook.worksheets if sheet.max_row > 0]
-    if len(sheets) != 1 or sheets[0].merged_cells.ranges:
-        raise ApiError(
-            400, "VALIDATION_ERROR", "Workbook must contain one unmerged worksheet"
-        )
-    sheet = sheets[0]
-    headers = [str(cell.value or "").strip() for cell in sheet[1]]
-    if (
-        not headers
-        or any(not item for item in headers)
-        or len(set(item.casefold() for item in headers)) != len(headers)
-    ):
-        raise ApiError(
-            400, "VALIDATION_ERROR", "Header names must be non-empty and unique"
-        )
-    mapping = _mapping(headers, supplied_mapping, fields)
-    fields_by_id = {str(field["id"]): field for field in fields}
-    parsed: list[dict[str, Any]] = []
-    for number, values in enumerate(
-        sheet.iter_rows(min_row=2, values_only=False), start=2
-    ):
-        if all(cell.value in (None, "") for cell in values):
-            continue
-        if len(parsed) >= MAX_ROWS:
+    try:
+        sheets = [sheet for sheet in workbook.worksheets if sheet.max_row > 0]
+        if len(sheets) != 1 or sheets[0].merged_cells.ranges:
             raise ApiError(
-                400, "VALIDATION_ERROR", "Workbook contains more than 5000 rows"
+                400, "VALIDATION_ERROR", "Workbook must contain one unmerged worksheet"
             )
-        by_header = dict(zip(headers, values, strict=False))
-        errors = [
-            f"Формула не разрешена: {header}"
-            for header, cell in by_header.items()
-            if cell.data_type == "f"
-        ]
-
-        raw = {
-            "lastName": _cell_text(by_header, mapping, "lastName"),
-            "firstName": _cell_text(by_header, mapping, "firstName"),
-            "middleName": _cell_text(by_header, mapping, "middleName") or None,
-            "birthDate": _date(by_header[mapping["birthDate"]].value)
-            if mapping.get("birthDate")
-            else None,
-            "personType": _person_type(_cell_text(by_header, mapping, "personType")),
-            "studyGroup": _cell_text(by_header, mapping, "studyGroup") or None,
-            "organization": _cell_text(by_header, mapping, "organization") or None,
-            "phone": _cell_text(by_header, mapping, "phone") or None,
-            "email": _cell_text(by_header, mapping, "email") or None,
-        }
-        custom_answers: list[dict[str, Any]] = []
-        for field_id, header in mapping["customFields"].items():
-            field = fields_by_id.get(str(field_id))
-            if not field:
-                errors.append(f"Неизвестное дополнительное поле: {field_id}")
+        sheet = sheets[0]
+        headers = [str(cell.value or "").strip() for cell in sheet[1]]
+        if (
+            not headers
+            or any(not item for item in headers)
+            or len(set(item.casefold() for item in headers)) != len(headers)
+        ):
+            raise ApiError(
+                400, "VALIDATION_ERROR", "Header names must be non-empty and unique"
+            )
+        mapping = _mapping(headers, supplied_mapping, fields)
+        fields_by_id = {str(field["id"]): field for field in fields}
+        parsed: list[dict[str, Any]] = []
+        for number, values in enumerate(
+            sheet.iter_rows(min_row=2, values_only=False), start=2
+        ):
+            if all(cell.value in (None, "") for cell in values):
                 continue
-            try:
-                answer = _answer_value(field, by_header[header].value)
-                if answer is not None:
-                    custom_answers.append({"fieldId": field_id, "value": answer})
-            except ValueError:
-                errors.append(
-                    f"Поле «{field['label']}» содержит значение неверного типа"
+            if len(parsed) >= MAX_ROWS:
+                raise ApiError(
+                    400, "VALIDATION_ERROR", "Workbook contains more than 5000 rows"
                 )
-        try:
-            values_model = ParticipantValues.model_validate(
-                {**raw, "customAnswers": custom_answers}
-            )
-        except Exception:
-            values_model = None
-            errors.append("Данные участника не прошли проверку")
-        parsed.append(
-            {
-                "rowNumber": number,
-                "streamTitle": _cell_text(by_header, mapping, "streamTitle"),
-                "participant": raw,
-                "values": values_model,
-                "errors": errors,
+            by_header = dict(zip(headers, values, strict=False))
+            errors = [
+                f"Формула не разрешена: {header}"
+                for header, cell in by_header.items()
+                if cell.data_type == "f"
+            ]
+
+            raw = {
+                "lastName": _cell_text(by_header, mapping, "lastName"),
+                "firstName": _cell_text(by_header, mapping, "firstName"),
+                "middleName": _cell_text(by_header, mapping, "middleName") or None,
+                "birthDate": _date(by_header[mapping["birthDate"]].value)
+                if mapping.get("birthDate")
+                else None,
+                "personType": _person_type(
+                    _cell_text(by_header, mapping, "personType")
+                ),
+                "studyGroup": _cell_text(by_header, mapping, "studyGroup") or None,
+                "organization": _cell_text(by_header, mapping, "organization") or None,
+                "phone": _cell_text(by_header, mapping, "phone") or None,
+                "email": _cell_text(by_header, mapping, "email") or None,
             }
-        )
-    if not parsed:
-        raise ApiError(400, "VALIDATION_ERROR", "Workbook has no data rows")
-    return headers, mapping, parsed
+            custom_answers: list[dict[str, Any]] = []
+            for field_id, header in mapping["customFields"].items():
+                field = fields_by_id.get(str(field_id))
+                if not field:
+                    errors.append(f"Неизвестное дополнительное поле: {field_id}")
+                    continue
+                try:
+                    answer = _answer_value(field, by_header[header].value)
+                    if answer is not None:
+                        custom_answers.append({"fieldId": field_id, "value": answer})
+                except ValueError:
+                    errors.append(
+                        f"Поле «{field['label']}» содержит значение неверного типа"
+                    )
+            try:
+                values_model = ParticipantValues.model_validate(
+                    {**raw, "customAnswers": custom_answers}
+                )
+            except Exception:
+                values_model = None
+                errors.append("Данные участника не прошли проверку")
+            parsed.append(
+                {
+                    "rowNumber": number,
+                    "streamTitle": _cell_text(by_header, mapping, "streamTitle"),
+                    "participant": raw,
+                    "values": values_model,
+                    "errors": errors,
+                }
+            )
+        if not parsed:
+            raise ApiError(400, "VALIDATION_ERROR", "Workbook has no data rows")
+        return headers, mapping, parsed
+    finally:
+        workbook.close()
 
 
 def _event(
