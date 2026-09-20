@@ -1367,6 +1367,80 @@ def test_stream_race_scanner_override_and_report(client: TestClient) -> None:
     )
 
 
+def test_stream_title_is_visible_in_admin_list_detail_and_scanner_search(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client)
+    created = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Поток в карточках",
+            "slug": "stream-visibility",
+            "location": "Колледж",
+            "startAt": "2027-11-11T07:00:00Z",
+            "endAt": "2027-11-11T17:00:00Z",
+            "registrationDeadline": "2027-11-10T07:00:00Z",
+            "capacity": 100,
+            "status": "REGISTRATION_OPEN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    stream = client.post(
+        f"/admin/events/{event_id}/streams",
+        headers=headers,
+        json={
+            "title": "Утренний поток",
+            "startAt": "2027-11-11T07:00:00Z",
+            "endAt": "2027-11-11T08:00:00Z",
+            "capacity": 10,
+        },
+    ).json()["id"]
+    client.cookies.clear()
+    registered = client.post(
+        "/public/events/stream-visibility/register",
+        headers=ORIGIN,
+        json={
+            "streamId": stream,
+            "lastName": "Потоков",
+            "firstName": "Видим",
+            "birthDate": "1990-01-01",
+            "email": "stream-visibility@example.com",
+            "phone": "+79997776655",
+            "personType": "PARENT",
+            "consentAccepted": True,
+            "consentVersion": "test-v1",
+        },
+    )
+    assert registered.status_code == 201, registered.text
+    registration_id = registered.json()["registrationId"]
+    headers, _ = _login(client)
+
+    listed = client.get(f"/admin/events/{event_id}/registrations", headers=headers)
+    assert listed.status_code == 200, listed.text
+    listed_item = next(
+        item for item in listed.json()["items"] if item["id"] == registration_id
+    )
+    assert listed_item["streamTitle"] == "Утренний поток"
+
+    detail = client.get(
+        f"/admin/events/{event_id}/registrations/{registration_id}", headers=headers
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["streamTitle"] == "Утренний поток"
+
+    searched = client.get(
+        f"/scanner/events/{event_id}/registrations/search?query=Потоков",
+        headers=headers,
+    )
+    assert searched.status_code == 200, searched.text
+    searched_item = next(
+        item for item in searched.json()["items"] if item["id"] == registration_id
+    )
+    assert searched_item["streamTitle"] == "Утренний поток"
+
+
 def test_invitation_resend_status_and_idempotency(client: TestClient) -> None:
     headers, _ = _login(client)
     response = client.post(
