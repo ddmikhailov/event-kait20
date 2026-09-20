@@ -80,13 +80,17 @@ def _export_answer(value: Any) -> Any:
 
 
 def _custom_headers(fields: Sequence[Any]) -> list[str]:
-    seen: dict[str, int] = {}
+    used: set[str] = set()
     result = []
     for field in fields:
         base = f"Поле: {field['label']}"
-        key = base.casefold()
-        seen[key] = seen.get(key, 0) + 1
-        result.append(base if seen[key] == 1 else f"{base} ({seen[key]})")
+        candidate = base
+        suffix = 1
+        while candidate.casefold() in used:
+            suffix += 1
+            candidate = f"{base} ({suffix})"
+        used.add(candidate.casefold())
+        result.append(candidate)
     return result
 
 
@@ -716,9 +720,9 @@ def export(
         "Email",
         "Статус",
         "Источник регистрации",
-        "Регистрация",
+        "Регистрация (МСК UTC+3)",
         "Посетил мероприятие",
-        "Первое посещение",
+        "Первое посещение (МСК UTC+3)",
         "Поток",
         "Начало потока (МСК UTC+3)",
         "Статус участия",
@@ -744,9 +748,11 @@ def export(
                     item["email"],
                     item["status"],
                     item["source"],
-                    item["registered_at"],
+                    item["registered_at"] + timedelta(hours=3),
                     "Да" if item["first_attended_at"] else "Нет",
-                    item["first_attended_at"],
+                    item["first_attended_at"] + timedelta(hours=3)
+                    if item["first_attended_at"]
+                    else None,
                     item["stream_title"],
                     item["stream_start"] + timedelta(hours=3)
                     if item["stream_start"]

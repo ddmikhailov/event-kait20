@@ -91,6 +91,7 @@ export class ScannerService {
           studyGroup: item.studyGroup,
           personType: item.personType,
           organization: item.organization,
+          streamTitle: item.streamTitle ?? null,
           firstAttendedAt: item.firstAttendedAt,
           offline: false,
         }));

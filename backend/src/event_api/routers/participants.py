@@ -62,6 +62,7 @@ def registration_response(item: RowMapping) -> dict[str, Any]:
         "studyGroup": item["study_group"],
         "personType": item["person_type"],
         "organization": item["organization"],
+        "streamTitle": item["stream_title"],
         "registeredAt": serial(item["registered_at"]),
         "firstAttendedAt": serial(item["first_attended_at"])
         if item["first_attended_at"]
@@ -243,7 +244,9 @@ def list_registrations(
         assert_event(connection, str(event_id), staff.tenant_id)
         items = rows(
             connection,
-            f"SELECT * FROM registrations WHERE {where} ORDER BY registered_at DESC,id LIMIT :limit OFFSET :offset",
+            f"""SELECT registrations.*,
+                (SELECT s.title FROM event_streams s WHERE s.id=registrations.stream_id) AS stream_title
+                FROM registrations WHERE {where} ORDER BY registered_at DESC,id LIMIT :limit OFFSET :offset""",
             params,
         )
         count = row(
@@ -271,7 +274,9 @@ def get_registration(
         assert_event(connection, str(event_id), staff.tenant_id)
         item = row(
             connection,
-            "SELECT * FROM registrations WHERE id=:id AND event_id=:event",
+            """SELECT registrations.*,
+                (SELECT s.title FROM event_streams s WHERE s.id=registrations.stream_id) AS stream_title
+                FROM registrations WHERE id=:id AND event_id=:event""",
             {"id": str(registration_id), "event": str(event_id)},
         )
         answers = rows(
@@ -486,7 +491,9 @@ def scanner_search(
             raise ApiError(403, "FORBIDDEN", "Event access is required")
         items = rows(
             connection,
-            f"SELECT * FROM registrations WHERE {where} ORDER BY last_name,first_name,middle_name,id LIMIT :limit OFFSET :offset",
+            f"""SELECT registrations.*,
+                (SELECT s.title FROM event_streams s WHERE s.id=registrations.stream_id) AS stream_title
+                FROM registrations WHERE {where} ORDER BY last_name,first_name,middle_name,id LIMIT :limit OFFSET :offset""",
             params,
         )
         count = row(
@@ -505,6 +512,7 @@ def scanner_search(
                 "studyGroup": item["study_group"],
                 "personType": item["person_type"],
                 "organization": item["organization"],
+                "streamTitle": item["stream_title"],
                 "firstAttendedAt": serial(item["first_attended_at"])
                 if item["first_attended_at"]
                 else None,

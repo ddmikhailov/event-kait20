@@ -329,6 +329,7 @@ export const RegistrationTable = ({
           <th>Участник</th>
           <th>Контакты</th>
           <th>Группа / организация</th>
+          <th>Поток</th>
           <th>Источник</th>
           <th>Статус</th>
           <th />
@@ -346,6 +347,7 @@ export const RegistrationTable = ({
               <span>{item.phone ?? 'Телефон не указан'}</span>
             </td>
             <td>{item.studyGroup ?? item.organization ?? '—'}</td>
+            <td>{item.streamTitle ?? '—'}</td>
             <td>{sourceLabel(item.source)}</td>
             <td>
               <RegistrationBadge status={item.status} />
@@ -453,6 +455,9 @@ const RegistrationDetail = ({
               <p className="eyebrow">Регистрация</p>
               <h1>{fullName(registration)}</h1>
               <p className="muted">{event.title}</p>
+              {registration.streamTitle && (
+                <p className="muted">Поток: {registration.streamTitle}</p>
+              )}
             </div>
           </div>
           {notice && <ParticipantNotice notice={notice} />}

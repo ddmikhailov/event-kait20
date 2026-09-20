@@ -283,8 +283,7 @@ def persist_answers(
             """INSERT INTO registration_answers
             (id,registration_id,field_id,field_label_snapshot,field_type_snapshot,answer,created_at,updated_at)
             VALUES (:id,:registration,:field,:label,:type,:answer,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
-            ON DUPLICATE KEY UPDATE field_label_snapshot=VALUES(field_label_snapshot),
-            field_type_snapshot=VALUES(field_type_snapshot),answer=VALUES(answer),updated_at=UTC_TIMESTAMP(3)""",
+            ON DUPLICATE KEY UPDATE answer=VALUES(answer),updated_at=UTC_TIMESTAMP(3)""",
             {
                 "id": str(uuid4()),
                 "registration": registration_id,

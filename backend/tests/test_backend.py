@@ -4,6 +4,7 @@ import json
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from email.message import EmailMessage
 from io import BytesIO
 from pathlib import Path
@@ -23,7 +24,7 @@ from event_api.demo_seed import main as seed_demo
 from event_api.email_worker import process_once
 from event_api.errors import ApiError
 from event_api.registration_service import participant
-from event_api.routers.excel import _parse
+from event_api.routers.excel import _custom_headers, _parse
 from event_api.schemas import ParticipantValues
 from event_api.security import RateLimiter, auth_link_token, hash_password, token_hash
 
@@ -39,6 +40,18 @@ def _tiny_png() -> bytes:
     buffer = _BytesIO()
     _Image.new("RGB", (2, 2), color=(120, 60, 180)).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def test_custom_headers_deduplicates_labels_that_collide_with_generated_suffixes() -> (
+    None
+):
+    # A literal label that already looks like a generated "(N)" suffix must
+    # not silently collide with the header that suffix generation produces
+    # for an earlier duplicate.
+    fields = [{"label": "A"}, {"label": "A"}, {"label": "A (2)"}]
+    headers = _custom_headers(fields)
+    assert headers == ["Поле: A", "Поле: A (2)", "Поле: A (2) (2)"]
+    assert len(set(headers)) == len(headers)
 
 
 def test_excel_rejects_formula_and_merged_cells() -> None:
@@ -1051,6 +1064,15 @@ def test_excel_preview_commit_and_safe_export(client: TestClient) -> None:
             ).scalar_one()
             == 0
         )
+        stored_registered_at = connection.execute(
+            text("SELECT registered_at FROM registrations WHERE id=:id"),
+            {"id": registration_id},
+        ).scalar_one()
+    # R30: exported timestamps are shifted to Moscow time and the header says
+    # so, matching the already-shifted stream-start column.
+    assert exported_row["Регистрация (МСК UTC+3)"] == stored_registered_at + timedelta(
+        hours=3
+    )
     archived = client.post(f"/admin/events/{event_id}/archive", headers=headers)
     assert archived.status_code == 201, archived.text
     assert client.get(f"/admin/events/{event_id}/export.xlsx").status_code == 200
@@ -1365,6 +1387,172 @@ def test_stream_race_scanner_override_and_report(client: TestClient) -> None:
         ).status_code
         == 403
     )
+
+
+def test_stream_title_is_visible_in_admin_list_detail_and_scanner_search(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client)
+    created = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Поток в карточках",
+            "slug": "stream-visibility",
+            "location": "Колледж",
+            "startAt": "2027-11-11T07:00:00Z",
+            "endAt": "2027-11-11T17:00:00Z",
+            "registrationDeadline": "2027-11-10T07:00:00Z",
+            "capacity": 100,
+            "status": "REGISTRATION_OPEN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    stream = client.post(
+        f"/admin/events/{event_id}/streams",
+        headers=headers,
+        json={
+            "title": "Утренний поток",
+            "startAt": "2027-11-11T07:00:00Z",
+            "endAt": "2027-11-11T08:00:00Z",
+            "capacity": 10,
+        },
+    ).json()["id"]
+    client.cookies.clear()
+    registered = client.post(
+        "/public/events/stream-visibility/register",
+        headers=ORIGIN,
+        json={
+            "streamId": stream,
+            "lastName": "Потоков",
+            "firstName": "Видим",
+            "birthDate": "1990-01-01",
+            "email": "stream-visibility@example.com",
+            "phone": "+79997776655",
+            "personType": "PARENT",
+            "consentAccepted": True,
+            "consentVersion": "test-v1",
+        },
+    )
+    assert registered.status_code == 201, registered.text
+    registration_id = registered.json()["registrationId"]
+    headers, _ = _login(client)
+
+    listed = client.get(f"/admin/events/{event_id}/registrations", headers=headers)
+    assert listed.status_code == 200, listed.text
+    listed_item = next(
+        item for item in listed.json()["items"] if item["id"] == registration_id
+    )
+    assert listed_item["streamTitle"] == "Утренний поток"
+
+    detail = client.get(
+        f"/admin/events/{event_id}/registrations/{registration_id}", headers=headers
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["streamTitle"] == "Утренний поток"
+
+    searched = client.get(
+        f"/scanner/events/{event_id}/registrations/search?query=Потоков",
+        headers=headers,
+    )
+    assert searched.status_code == 200, searched.text
+    searched_item = next(
+        item for item in searched.json()["items"] if item["id"] == registration_id
+    )
+    assert searched_item["streamTitle"] == "Утренний поток"
+
+
+def test_answer_snapshot_survives_a_later_question_relabel(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client)
+    created = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Снимок ответа",
+            "slug": "answer-snapshot",
+            "location": "Колледж",
+            "startAt": "2027-11-12T07:00:00Z",
+            "endAt": "2027-11-12T17:00:00Z",
+            "registrationDeadline": "2027-11-11T07:00:00Z",
+            "capacity": 100,
+            "status": "REGISTRATION_OPEN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    field = client.post(
+        f"/admin/events/{event_id}/form-fields",
+        headers=headers,
+        json={
+            "label": "Исходная формулировка",
+            "type": "BOOLEAN",
+            "required": False,
+            "onsiteRequired": False,
+            "sortOrder": 0,
+        },
+    ).json()
+    payload = {
+        "lastName": "Снимков",
+        "firstName": "Стабильный",
+        "birthDate": "1991-03-03",
+        "email": "answer-snapshot@example.com",
+        "phone": "+79991112233",
+        "personType": "PARENT",
+        "consentAccepted": True,
+        "customAnswers": [{"fieldId": field["id"], "value": True}],
+    }
+    first = client.post(
+        f"/admin/events/{event_id}/registrations/onsite", headers=headers, json=payload
+    )
+    assert first.status_code == 201, first.text
+    with client.app.state.database.connect() as connection:
+        before = (
+            connection.execute(
+                text(
+                    """SELECT field_label_snapshot,field_type_snapshot,answer
+                FROM registration_answers WHERE field_id=:field"""
+                ),
+                {"field": field["id"]},
+            )
+            .mappings()
+            .one()
+        )
+    assert before["field_label_snapshot"] == "Исходная формулировка"
+    assert json.loads(before["answer"]) is True
+
+    relabelled = client.patch(
+        f"/admin/events/{event_id}/form-fields/{field['id']}",
+        headers=headers,
+        json={"label": "Переформулированный вопрос", "type": "BOOLEAN"},
+    )
+    assert relabelled.status_code == 200, relabelled.text
+
+    second = client.post(
+        f"/admin/events/{event_id}/registrations/onsite",
+        headers=headers,
+        json={**payload, "customAnswers": [{"fieldId": field["id"], "value": False}]},
+    )
+    assert second.status_code == 201, second.text
+    with client.app.state.database.connect() as connection:
+        after = (
+            connection.execute(
+                text(
+                    """SELECT field_label_snapshot,field_type_snapshot,answer
+                FROM registration_answers WHERE field_id=:field"""
+                ),
+                {"field": field["id"]},
+            )
+            .mappings()
+            .one()
+        )
+    # The answer value updates with the repeat submission, but the snapshot
+    # of what the question looked like when it was first answered must not
+    # be silently rewritten to reflect the later relabel.
+    assert after["field_label_snapshot"] == "Исходная формулировка"
+    assert json.loads(after["answer"]) is False
 
 
 def test_invitation_resend_status_and_idempotency(client: TestClient) -> None:
