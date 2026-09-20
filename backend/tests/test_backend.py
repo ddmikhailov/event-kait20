@@ -4,6 +4,7 @@ import json
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from io import BytesIO
 from pathlib import Path
@@ -1909,3 +1910,399 @@ def test_parallel_email_workers_claim_each_delivery_once(client: TestClient) -> 
 
     for delivery_id in delivery_ids:
         assert sent[f"<{delivery_id}@event-registration>"] == 1
+
+
+def _smtp_config(client: TestClient) -> Settings:
+    return client.app.state.settings.model_copy(
+        update={
+            "smtp_host": "smtp.example.test",
+            "smtp_from_email": "noreply@example.test",
+        }
+    )
+
+
+def test_a_worker_sends_a_still_current_password_reset(client: TestClient) -> None:
+    database: Database = client.app.state.database
+    with database.connect() as connection:
+        admin_id = connection.execute(
+            text(
+                "SELECT id FROM staff_users WHERE email_normalized='admin@example.com'"
+            )
+        ).scalar_one()
+    reset_id, delivery_id = str(uuid4()), str(uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO password_reset_tokens (id,user_id,token_hash,expires_at,created_at)
+                   VALUES (:id,:user,:hash,:expires,UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": reset_id,
+                "user": admin_id,
+                "hash": f"hash-{reset_id}",
+                "expires": datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=1),
+            },
+        )
+        connection.execute(
+            text(
+                """INSERT INTO email_deliveries
+                   (id,idempotency_key,type,recipient_email,staff_user_id,password_reset_token_id,
+                    status,attempts,queued_at,created_at,updated_at)
+                   VALUES (:id,:key,'PASSWORD_RESET',:email,:user,:reset,'QUEUED',0,
+                           UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": delivery_id,
+                "key": f"test-valid-reset:{delivery_id}",
+                "email": "admin@example.com",
+                "user": admin_id,
+                "reset": reset_id,
+            },
+        )
+    target_message_id = f"<{delivery_id}@event-registration>"
+    calls: list[str] = []
+
+    def sender(message: EmailMessage, _config: Settings) -> str:
+        # The shared session-scoped queue can still hold older, unrelated
+        # rows left QUEUED by earlier tests; only count/verify the target.
+        calls.append(str(message["Message-ID"]))
+        return "provider-id"
+
+    for _ in range(50):
+        with database.connect() as connection:
+            attempts = connection.execute(
+                text("SELECT attempts FROM email_deliveries WHERE id=:id"),
+                {"id": delivery_id},
+            ).scalar_one()
+        if attempts > 0:
+            break
+        if not process_once(database, _smtp_config(client), sender):
+            pytest.fail("target delivery was never claimed")
+    assert target_message_id in calls
+    with database.connect() as connection:
+        outcome = (
+            connection.execute(
+                text(
+                    "SELECT status,last_error_code FROM email_deliveries WHERE id=:id"
+                ),
+                {"id": delivery_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert outcome == {"status": "SENT", "last_error_code": None}
+
+
+def test_worker_cancels_an_already_used_reset_token_without_calling_smtp(
+    client: TestClient,
+) -> None:
+    """Backstop path: the row is still QUEUED (as if the worker discovered
+    this independently of any proactive router-side cancellation) and its
+    token has genuinely been used by the account owner, with no newer token
+    superseding it."""
+    database: Database = client.app.state.database
+    with database.connect() as connection:
+        admin_id = connection.execute(
+            text(
+                "SELECT id FROM staff_users WHERE email_normalized='admin@example.com'"
+            )
+        ).scalar_one()
+    reset_id, delivery_id = str(uuid4()), str(uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO password_reset_tokens (id,user_id,token_hash,expires_at,used_at,created_at)
+                   VALUES (:id,:user,:hash,:expires,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": reset_id,
+                "user": admin_id,
+                "hash": f"hash-{reset_id}",
+                "expires": datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=1),
+            },
+        )
+        connection.execute(
+            text(
+                """INSERT INTO email_deliveries
+                   (id,idempotency_key,type,recipient_email,staff_user_id,password_reset_token_id,
+                    status,attempts,queued_at,created_at,updated_at)
+                   VALUES (:id,:key,'PASSWORD_RESET',:email,:user,:reset,'QUEUED',0,
+                           UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": delivery_id,
+                "key": f"test-used-reset:{delivery_id}",
+                "email": "admin@example.com",
+                "user": admin_id,
+                "reset": reset_id,
+            },
+        )
+    target_message_id = f"<{delivery_id}@event-registration>"
+    calls: list[str] = []
+
+    def sender(message: EmailMessage, _config: Settings) -> str:
+        # Recording every call (not just the target's) is the point: if the
+        # invalidated intent's message ever reaches here, that is the bug
+        # this test exists to catch.
+        calls.append(str(message["Message-ID"]))
+        return "drained-unrelated-delivery"
+
+    for _ in range(50):
+        with database.connect() as connection:
+            attempts = connection.execute(
+                text("SELECT attempts FROM email_deliveries WHERE id=:id"),
+                {"id": delivery_id},
+            ).scalar_one()
+        if attempts > 0:
+            break
+        if not process_once(database, _smtp_config(client), sender):
+            pytest.fail("target delivery was never claimed")
+    assert target_message_id not in calls, (
+        "SMTP must not be invoked for an invalidated intent"
+    )
+    with database.connect() as connection:
+        outcome = (
+            connection.execute(
+                text(
+                    "SELECT status,last_error_code,next_attempt_at,attempts FROM email_deliveries WHERE id=:id"
+                ),
+                {"id": delivery_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert outcome["status"] == "CANCELLED"
+    assert outcome["last_error_code"] == "RESET_TOKEN_USED"
+    assert outcome["next_attempt_at"] is None, "a cancelled row must not be retried"
+    # F: a further poll must not rediscover or re-process the cancelled row —
+    # its own attempts/status must stay exactly as they are, regardless of
+    # whether process_once finds and drains some unrelated queued row.
+    process_once(database, _smtp_config(client), sender)
+    with database.connect() as connection:
+        unchanged = (
+            connection.execute(
+                text("SELECT status,attempts FROM email_deliveries WHERE id=:id"),
+                {"id": delivery_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert unchanged == {"status": "CANCELLED", "attempts": outcome["attempts"]}
+    assert target_message_id not in calls
+
+
+def test_b_forgot_password_proactively_cancels_the_superseded_reset_email(
+    client: TestClient,
+) -> None:
+    """Router-side path: a second forgot-password request outside the
+    coalescing cooldown supersedes the first token; the first token's still
+    queued email must be cancelled in the same transaction, without waiting
+    for the worker."""
+    headers, _ = _login(client)
+    database: Database = client.app.state.database
+    with database.connect() as connection:
+        admin_id = connection.execute(
+            text(
+                "SELECT id FROM staff_users WHERE email_normalized='admin@example.com'"
+            )
+        ).scalar_one()
+    old_reset_id, old_delivery_id = str(uuid4()), str(uuid4())
+    with database.transaction() as connection:
+        # Clear any unused token left over from another test sharing this
+        # same bootstrapped admin user — otherwise forgot_password's own
+        # cooldown-coalesce could find that one "recent" and return early
+        # without ever reaching the supersede path this test targets.
+        connection.execute(
+            text(
+                "UPDATE password_reset_tokens SET used_at=UTC_TIMESTAMP(3) WHERE user_id=:id AND used_at IS NULL"
+            ),
+            {"id": admin_id},
+        )
+        connection.execute(
+            text(
+                """INSERT INTO password_reset_tokens (id,user_id,token_hash,expires_at,created_at)
+                   VALUES (:id,:user,:hash,:expires,:created)"""
+            ),
+            {
+                "id": old_reset_id,
+                "user": admin_id,
+                "hash": f"hash-{old_reset_id}",
+                "expires": datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=1),
+                # Backdated past PASSWORD_RESET_COOLDOWN_SECONDS so the next
+                # request below genuinely supersedes it instead of coalescing.
+                "created": datetime.now(UTC).replace(tzinfo=None)
+                - timedelta(minutes=5),
+            },
+        )
+        connection.execute(
+            text(
+                """INSERT INTO email_deliveries
+                   (id,idempotency_key,type,recipient_email,staff_user_id,password_reset_token_id,
+                    status,attempts,queued_at,created_at,updated_at)
+                   VALUES (:id,:key,'PASSWORD_RESET',:email,:user,:reset,'QUEUED',0,
+                           UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": old_delivery_id,
+                "key": f"test-supersede:{old_delivery_id}",
+                "email": "admin@example.com",
+                "user": admin_id,
+                "reset": old_reset_id,
+            },
+        )
+    response = client.post(
+        "/auth/password/forgot",
+        headers=headers,
+        json={"email": "admin@example.com"},
+    )
+    assert response.status_code == 202
+    with database.connect() as connection:
+        outcome = (
+            connection.execute(
+                text(
+                    "SELECT status,last_error_code FROM email_deliveries WHERE id=:id"
+                ),
+                {"id": old_delivery_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert outcome == {
+        "status": "CANCELLED",
+        "last_error_code": "RESET_TOKEN_SUPERSEDED",
+    }
+
+
+def test_h_annulling_a_registration_proactively_cancels_its_queued_ticket_email(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client)
+    database: Database = client.app.state.database
+    with database.connect() as connection:
+        registration = (
+            connection.execute(
+                text(
+                    """SELECT id,event_id,email FROM registrations
+                       WHERE status='ACTIVE' AND email IS NOT NULL LIMIT 1"""
+                )
+            )
+            .mappings()
+            .one()
+        )
+    delivery_id = str(uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO email_deliveries
+                   (id,idempotency_key,type,recipient_email,event_id,registration_id,
+                    status,attempts,queued_at,created_at,updated_at)
+                   VALUES (:id,:key,'REGISTRATION_TICKET',:email,:event,:registration,'QUEUED',0,
+                           UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": delivery_id,
+                "key": f"test-annul-cancel:{delivery_id}",
+                "email": registration["email"],
+                "event": registration["event_id"],
+                "registration": registration["id"],
+            },
+        )
+    response = client.post(
+        f"/admin/events/{registration['event_id']}/registrations/{registration['id']}/annul",
+        headers=headers,
+    )
+    assert response.status_code == 201
+    with database.connect() as connection:
+        outcome = (
+            connection.execute(
+                text(
+                    "SELECT status,last_error_code FROM email_deliveries WHERE id=:id"
+                ),
+                {"id": delivery_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert outcome == {
+        "status": "CANCELLED",
+        "last_error_code": "REGISTRATION_CANCELLED",
+    }
+
+
+def test_e_transient_smtp_failure_for_a_valid_intent_still_retries(
+    client: TestClient,
+) -> None:
+    database: Database = client.app.state.database
+    with database.connect() as connection:
+        admin_id = connection.execute(
+            text(
+                "SELECT id FROM staff_users WHERE email_normalized='admin@example.com'"
+            )
+        ).scalar_one()
+    reset_id, delivery_id = str(uuid4()), str(uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO password_reset_tokens (id,user_id,token_hash,expires_at,created_at)
+                   VALUES (:id,:user,:hash,:expires,UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": reset_id,
+                "user": admin_id,
+                "hash": f"hash-{reset_id}",
+                "expires": datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=1),
+            },
+        )
+        connection.execute(
+            text(
+                """INSERT INTO email_deliveries
+                   (id,idempotency_key,type,recipient_email,staff_user_id,password_reset_token_id,
+                    status,attempts,queued_at,created_at,updated_at)
+                   VALUES (:id,:key,'PASSWORD_RESET',:email,:user,:reset,'QUEUED',0,
+                           UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": delivery_id,
+                "key": f"test-transient-failure:{delivery_id}",
+                "email": "admin@example.com",
+                "user": admin_id,
+                "reset": reset_id,
+            },
+        )
+
+    target_message_id = f"<{delivery_id}@event-registration>"
+
+    def selective_failing_sender(message: EmailMessage, _config: Settings) -> str:
+        # The shared session-scoped queue can hold older, unrelated rows
+        # left QUEUED by earlier tests; _claim's FIFO order might hand this
+        # call one of those instead of the row this test just inserted. Only
+        # the target delivery should fail — anything else is drained
+        # harmlessly so the loop below reliably reaches it.
+        if str(message["Message-ID"]) == target_message_id:
+            raise TimeoutError("simulated transient SMTP outage")
+        return "drained-unrelated-delivery"
+
+    for _ in range(50):
+        with database.connect() as connection:
+            attempts = connection.execute(
+                text("SELECT attempts FROM email_deliveries WHERE id=:id"),
+                {"id": delivery_id},
+            ).scalar_one()
+        if attempts > 0:
+            break
+        if not process_once(database, _smtp_config(client), selective_failing_sender):
+            pytest.fail("target delivery was never claimed")
+    with database.connect() as connection:
+        outcome = (
+            connection.execute(
+                text(
+                    "SELECT status,last_error_code,next_attempt_at FROM email_deliveries WHERE id=:id"
+                ),
+                {"id": delivery_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert outcome["status"] == "QUEUED"
+    assert outcome["last_error_code"] == "TIMEOUTERROR"
+    assert outcome["next_attempt_at"] is not None, "a transient failure must be retried"

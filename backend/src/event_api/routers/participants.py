@@ -14,6 +14,7 @@ from ..dependencies import (
     database,
     settings,
 )
+from ..email_worker import REGISTRATION_CANCELLED
 from ..errors import ApiError
 from ..registration_service import ticket_url, validate_participant_type
 from ..schemas import PersonUpdate
@@ -396,6 +397,14 @@ def annul(
             connection,
             "UPDATE registrations SET status='ANNULLED',annulled_at=UTC_TIMESTAMP(3),annulled_by=:actor,updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
             {"id": str(registration_id), "actor": staff.id},
+        )
+        # A still-queued ticket/confirmation email for this registration
+        # must not go out with a QR that no longer represents active access.
+        execute(
+            connection,
+            """UPDATE email_deliveries SET status='CANCELLED',last_error_code=:code,updated_at=UTC_TIMESTAMP(3)
+               WHERE registration_id=:id AND status='QUEUED'""",
+            {"id": str(registration_id), "code": REGISTRATION_CANCELLED},
         )
         execute(
             connection,

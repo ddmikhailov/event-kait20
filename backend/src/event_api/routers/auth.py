@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from ..config import Settings
 from ..database import Database, execute, row
 from ..dependencies import Staff, csrf_staff, current_staff, database, settings
+from ..email_worker import INVITATION_ACCEPTED, RESET_TOKEN_SUPERSEDED, RESET_TOKEN_USED
 from ..errors import ApiError
 from ..schemas import (
     InvitationAcceptRequest,
@@ -200,6 +201,20 @@ def forgot_password(
             "UPDATE password_reset_tokens SET used_at=UTC_TIMESTAMP(3) WHERE user_id=:id AND used_at IS NULL",
             {"id": user["id"]},
         )
+        # The tokens just marked used_at above are superseded, not actually
+        # used — cancel any still-queued reset email for them now, rather
+        # than waiting for the worker to discover this later. This is the
+        # same reason the worker's own revalidation would compute for these
+        # rows (RESET_TOKEN_SUPERSEDED, since a newer token now exists once
+        # the insert below commits), just applied immediately.
+        execute(
+            connection,
+            """UPDATE email_deliveries d JOIN password_reset_tokens p
+                   ON p.id=d.password_reset_token_id
+               SET d.status='CANCELLED',d.last_error_code=:code,d.updated_at=UTC_TIMESTAMP(3)
+               WHERE p.user_id=:id AND p.used_at IS NOT NULL AND d.status='QUEUED'""",
+            {"id": user["id"], "code": RESET_TOKEN_SUPERSEDED},
+        )
         execute(
             connection,
             """INSERT INTO password_reset_tokens
@@ -277,6 +292,15 @@ def reset_password(
             connection,
             "UPDATE password_reset_tokens SET used_at=UTC_TIMESTAMP(3) WHERE id=:id",
             {"id": record_id},
+        )
+        # This exact token was just genuinely consumed — if its email is
+        # still queued (e.g. the user reset their password faster than the
+        # worker got to it), it must never go out.
+        execute(
+            connection,
+            """UPDATE email_deliveries SET status='CANCELLED',last_error_code=:code,updated_at=UTC_TIMESTAMP(3)
+               WHERE password_reset_token_id=:id AND status='QUEUED'""",
+            {"id": record_id, "code": RESET_TOKEN_USED},
         )
         execute(
             connection,
@@ -404,5 +428,14 @@ def accept_invitation(
             connection,
             "UPDATE staff_invitations SET accepted_at=UTC_TIMESTAMP(3) WHERE id=:id",
             {"id": record_id},
+        )
+        # The account now exists — a still-queued invitation email for the
+        # same invitation would only tell an already-onboarded user to
+        # activate an account they already have.
+        execute(
+            connection,
+            """UPDATE email_deliveries SET status='CANCELLED',last_error_code=:code,updated_at=UTC_TIMESTAMP(3)
+               WHERE staff_invitation_id=:id AND status='QUEUED'""",
+            {"id": record_id, "code": INVITATION_ACCEPTED},
         )
     return {"status": "accepted", "role": invitation["role"]}

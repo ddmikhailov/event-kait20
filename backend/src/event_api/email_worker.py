@@ -18,6 +18,22 @@ from .database import Database
 from .registration_service import ticket_url
 from .security import AuthPurpose, auth_link_token
 
+# Terminal cancellation reasons for a queued message whose underlying intent
+# is no longer current. Shared with the routers that proactively cancel a
+# still-queued message the moment its intent is invalidated (forgot_password,
+# reset_password, accept_invitation, registration annul) so both sides use
+# the exact same vocabulary. Never derived from or containing token/secret
+# material — these are fixed, machine-readable strings only.
+RESET_TOKEN_SUPERSEDED = "RESET_TOKEN_SUPERSEDED"  # noqa: S105 - reason code, not a secret
+RESET_TOKEN_USED = "RESET_TOKEN_USED"  # noqa: S105 - reason code, not a secret
+RESET_TOKEN_EXPIRED = "RESET_TOKEN_EXPIRED"  # noqa: S105 - reason code, not a secret
+RESET_TOKEN_MISSING = "RESET_TOKEN_MISSING"  # noqa: S105 - reason code, not a secret
+INVITATION_ACCEPTED = "INVITATION_ACCEPTED"
+INVITATION_EXPIRED = "INVITATION_EXPIRED"
+INVITATION_MISSING = "INVITATION_MISSING"
+REGISTRATION_CANCELLED = "REGISTRATION_CANCELLED"
+REGISTRATION_MISSING = "REGISTRATION_MISSING"
+
 
 @dataclass(frozen=True)
 class Delivery:
@@ -29,11 +45,15 @@ class Delivery:
     event_start: datetime | None
     event_location: str | None
     public_id: str | None
+    registration_status: str | None
     participant_name: str | None
     invitation_id: str | None
     invitation_expires: datetime | None
+    invitation_accepted_at: datetime | None
     reset_id: str | None
     reset_expires: datetime | None
+    reset_used_at: datetime | None
+    reset_superseded: bool
     invitation_role: str | None = None
 
 
@@ -47,10 +67,14 @@ def _load_delivery(database: Database, delivery_id: str, attempts: int) -> Deliv
                     """SELECT d.id,d.type,d.recipient_email,
                               CASE WHEN s.id IS NULL THEN e.title ELSE CONCAT(e.title,' — ',s.title) END AS event_title,
                               COALESCE(s.start_at,e.start_at) AS event_start,
-                              e.location AS event_location,r.public_id,
+                              e.location AS event_location,r.public_id,r.status AS registration_status,
                               CONCAT_WS(' ',r.last_name,r.first_name,r.middle_name) AS participant_name,
                               i.id AS invitation_id,i.expires_at AS invitation_expires,i.role AS invitation_role,
-                              p.id AS reset_id,p.expires_at AS reset_expires
+                              i.accepted_at AS invitation_accepted_at,
+                              p.id AS reset_id,p.expires_at AS reset_expires,p.used_at AS reset_used_at,
+                              EXISTS(SELECT 1 FROM password_reset_tokens newer
+                                     WHERE newer.user_id=p.user_id AND newer.created_at>p.created_at
+                              ) AS reset_superseded
                        FROM email_deliveries d
                        LEFT JOIN events e ON e.id=d.event_id
                        LEFT JOIN registrations r ON r.id=d.registration_id
@@ -73,13 +97,61 @@ def _load_delivery(database: Database, delivery_id: str, attempts: int) -> Deliv
         event_start=item["event_start"],
         event_location=item["event_location"],
         public_id=item["public_id"],
+        registration_status=item["registration_status"],
         participant_name=item["participant_name"],
         invitation_id=item["invitation_id"],
         invitation_expires=item["invitation_expires"],
+        invitation_accepted_at=item["invitation_accepted_at"],
         reset_id=item["reset_id"],
         reset_expires=item["reset_expires"],
+        reset_used_at=item["reset_used_at"],
+        reset_superseded=bool(item["reset_superseded"]),
         invitation_role=item["invitation_role"],
     )
+
+
+def intent_cancellation_reason(delivery: Delivery) -> str | None:
+    """Return a machine-readable reason if `delivery`'s underlying intent is
+    no longer current and it must not reach SMTP, or None if it's still safe
+    to send.
+
+    This is the single place SEND-vs-CANCEL is decided, from live domain
+    state joined fresh in `_load_delivery` — never from what was true when
+    the message was queued. Only the three intent-bound types this codebase
+    currently has (REGISTRATION_TICKET, STAFF_INVITATION, PASSWORD_RESET)
+    have a source intent to revalidate; any other `type` — there is no
+    generic/snapshot type implemented today, but if one is added later — has
+    none and always returns None, since a snapshot message is correct as
+    queued regardless of later, unrelated domain changes.
+    """
+    now = datetime.now(UTC).replace(tzinfo=None)
+    if delivery.type == "PASSWORD_RESET":
+        if delivery.reset_id is None:
+            return RESET_TOKEN_MISSING
+        if delivery.reset_used_at is not None:
+            return (
+                RESET_TOKEN_SUPERSEDED
+                if delivery.reset_superseded
+                else RESET_TOKEN_USED
+            )
+        if delivery.reset_expires is None or delivery.reset_expires <= now:
+            return RESET_TOKEN_EXPIRED
+        return None
+    if delivery.type == "STAFF_INVITATION":
+        if delivery.invitation_id is None:
+            return INVITATION_MISSING
+        if delivery.invitation_accepted_at is not None:
+            return INVITATION_ACCEPTED
+        if delivery.invitation_expires is None or delivery.invitation_expires <= now:
+            return INVITATION_EXPIRED
+        return None
+    if delivery.type == "REGISTRATION_TICKET":
+        if delivery.public_id is None:
+            return REGISTRATION_MISSING
+        if delivery.registration_status == "ANNULLED":
+            return REGISTRATION_CANCELLED
+        return None
+    return None
 
 
 def _claim(database: Database) -> Delivery | None:
@@ -246,37 +318,58 @@ def process_once(
             database.dispose()
         return 0
     try:
-        provider_id = sender(_message(delivery, config), config)
-    except Exception as error:
-        code = type(error).__name__.upper()[:64]
-        if isinstance(error, smtplib.SMTPResponseException):
-            code = f"SMTP_{error.smtp_code}"
-        status = (
-            "FAILED" if delivery.attempts >= config.email_max_attempts else "QUEUED"
-        )
-        retry_at = (
-            datetime.now(UTC).replace(tzinfo=None)
-            + timedelta(seconds=min(60 * 2 ** min(delivery.attempts - 1, 6), 3600))
-            if status == "QUEUED"
-            else None
-        )
-        with database.transaction() as connection:
-            connection.execute(
-                text(
-                    """UPDATE email_deliveries SET status=:status,last_error_code=:code,next_attempt_at=:retry,
-                       updated_at=UTC_TIMESTAMP(3) WHERE id=:id"""
-                ),
-                {"status": status, "code": code, "id": delivery.id, "retry": retry_at},
+        # Revalidated with the same live-joined fields `_load_delivery` just
+        # fetched (see intent_cancellation_reason's docstring) — as close to
+        # the SMTP call as this synchronous path allows, since nothing else
+        # touches the database between the claim above and here.
+        cancellation_reason = intent_cancellation_reason(delivery)
+        if cancellation_reason is not None:
+            with database.transaction() as connection:
+                connection.execute(
+                    text(
+                        """UPDATE email_deliveries SET status='CANCELLED',last_error_code=:code,
+                           updated_at=UTC_TIMESTAMP(3) WHERE id=:id"""
+                    ),
+                    {"code": cancellation_reason, "id": delivery.id},
+                )
+            return 1
+        try:
+            provider_id = sender(_message(delivery, config), config)
+        except Exception as error:
+            code = type(error).__name__.upper()[:64]
+            if isinstance(error, smtplib.SMTPResponseException):
+                code = f"SMTP_{error.smtp_code}"
+            status = (
+                "FAILED" if delivery.attempts >= config.email_max_attempts else "QUEUED"
             )
-    else:
-        with database.transaction() as connection:
-            connection.execute(
-                text(
-                    """UPDATE email_deliveries SET status='SENT',provider_message_id=:provider,
-                       sent_at=UTC_TIMESTAMP(3),updated_at=UTC_TIMESTAMP(3) WHERE id=:id"""
-                ),
-                {"provider": provider_id[:255], "id": delivery.id},
+            retry_at = (
+                datetime.now(UTC).replace(tzinfo=None)
+                + timedelta(seconds=min(60 * 2 ** min(delivery.attempts - 1, 6), 3600))
+                if status == "QUEUED"
+                else None
             )
+            with database.transaction() as connection:
+                connection.execute(
+                    text(
+                        """UPDATE email_deliveries SET status=:status,last_error_code=:code,next_attempt_at=:retry,
+                           updated_at=UTC_TIMESTAMP(3) WHERE id=:id"""
+                    ),
+                    {
+                        "status": status,
+                        "code": code,
+                        "id": delivery.id,
+                        "retry": retry_at,
+                    },
+                )
+        else:
+            with database.transaction() as connection:
+                connection.execute(
+                    text(
+                        """UPDATE email_deliveries SET status='SENT',provider_message_id=:provider,
+                           sent_at=UTC_TIMESTAMP(3),updated_at=UTC_TIMESTAMP(3) WHERE id=:id"""
+                    ),
+                    {"provider": provider_id[:255], "id": delivery.id},
+                )
     finally:
         if owned:
             database.dispose()
