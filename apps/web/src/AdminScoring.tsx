@@ -548,9 +548,8 @@ export const SeasonScoringPanel = ({
                     <td colSpan={canManage ? 5 : 4}>
                       {publishablePolicyIds.size === 0 ? (
                         <p className="admin-notice">
-                          Нет опубликованных систем начисления баллов.
-                          Сначала опубликуйте версию в разделе «Политики»
-                          слева.
+                          Нет опубликованных систем начисления баллов. Сначала
+                          опубликуйте версию в разделе «Политики» слева.
                         </p>
                       ) : (
                         <form
@@ -616,9 +615,9 @@ export const ScoringAdmin = ({
   const [results, setResults] = useState<ActivityReference[]>([]);
   const [statusTypes, setStatusTypes] = useState<StatusTypeReference[]>([]);
   const [seasons, setSeasons] = useState<Season[]>([]);
-  const [publishablePolicyIds, setPublishablePolicyIds] = useState<
-    Set<string>
-  >(new Set());
+  const [publishablePolicyIds, setPublishablePolicyIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [selectedPolicy, setSelectedPolicy] = useState<ScoringPolicy>();
   const [versions, setVersions] = useState<PolicyVersion[]>([]);
   const [editing, setEditing] = useState<{
@@ -630,15 +629,21 @@ export const ScoringAdmin = ({
 
   const loadReferences = useCallback(async () => {
     try {
-      const [policyList, roleList, levelList, resultList, statusList, seasonList] =
-        await Promise.all([
-          adminApi.scoringPolicies(),
-          adminApi.activityRoles(),
-          adminApi.activityLevels(),
-          adminApi.activityResults(),
-          adminApi.scoringStatusTypes(),
-          adminApi.seasons(),
-        ]);
+      const [
+        policyList,
+        roleList,
+        levelList,
+        resultList,
+        statusList,
+        seasonList,
+      ] = await Promise.all([
+        adminApi.scoringPolicies(),
+        adminApi.activityRoles(),
+        adminApi.activityLevels(),
+        adminApi.activityResults(),
+        adminApi.scoringStatusTypes(),
+        adminApi.seasons(),
+      ]);
       setPolicies(policyList.items);
       setRoles(roleList.items);
       setLevels(levelList.items);
