@@ -83,7 +83,7 @@ export const formFieldDefaults = (field?: FormFieldResponse) => ({
   options: field?.options?.join('\n') ?? '',
 });
 
-const zonedLocalToIso = (value: string, timezone: string): string => {
+export const zonedLocalToIso = (value: string, timezone: string): string => {
   const [datePart, timePart] = value.split('T');
   const [year, month, day] = (datePart ?? '').split('-').map(Number);
   const [hour, minute] = (timePart ?? '').split(':').map(Number);

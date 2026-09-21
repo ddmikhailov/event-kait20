@@ -15,6 +15,19 @@ import { Button } from '@event-registration/ui';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
+import { zonedLocalToIso } from './admin-values.js';
+
+const MOSCOW_TIMEZONE = 'Europe/Moscow';
+
+const formatMoscow = (isoInstant: string): string =>
+  `${new Intl.DateTimeFormat('ru-RU', {
+    timeZone: MOSCOW_TIMEZONE,
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(isoInstant))} (МСК)`;
 
 type Notice = { kind: 'error' | 'success'; text: string };
 
@@ -572,7 +585,7 @@ export const SeasonScoringPanel = ({
                             </select>
                           </label>
                           <label>
-                            <span>Действует с</span>
+                            <span>Действует с (МСК)</span>
                             <input
                               name="effectiveFrom"
                               type="datetime-local"
@@ -627,7 +640,15 @@ export const ScoringAdmin = ({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
 
-  const loadReferences = useCallback(async () => {
+  // Returns whether the refresh actually landed. Every fetch (including the
+  // per-policy version lookups) must succeed before ANY state is committed —
+  // otherwise a failure partway through could leave e.g. seasons updated
+  // while publishablePolicyIds is stale, a partially-refreshed UI that looks
+  // consistent but isn't. Callers that follow a mutation (e.g. assigning a
+  // Season's policy) must check this return value: the mutation itself may
+  // have already committed on the backend even if this refresh then fails,
+  // so a `false` here is not the same thing as the mutation failing.
+  const loadReferences = useCallback(async (): Promise<boolean> => {
     try {
       const [
         policyList,
@@ -644,12 +665,6 @@ export const ScoringAdmin = ({
         adminApi.scoringStatusTypes(),
         adminApi.seasons(),
       ]);
-      setPolicies(policyList.items);
-      setRoles(roleList.items);
-      setLevels(levelList.items);
-      setResults(resultList.items);
-      setStatusTypes(statusList.items);
-      setSeasons(seasonList.items);
       // A policy is offered for Season activation only once it has at least
       // one published version — matches what assign_policy actually accepts
       // (it still authoritatively re-checks the chosen effective date
@@ -664,11 +679,19 @@ export const ScoringAdmin = ({
             : undefined;
         }),
       );
+      setPolicies(policyList.items);
+      setRoles(roleList.items);
+      setLevels(levelList.items);
+      setResults(resultList.items);
+      setStatusTypes(statusList.items);
+      setSeasons(seasonList.items);
       setPublishablePolicyIds(
         new Set(publishableIds.filter((id): id is string => id !== undefined)),
       );
+      return true;
     } catch (error) {
       setNotice(scoringAdminError(error));
+      return false;
     }
   }, []);
 
@@ -737,7 +760,10 @@ export const ScoringAdmin = ({
     if (!scoringPolicyId || !effectiveFromRaw) return;
     const policy = policies.find((item) => item.id === scoringPolicyId);
     if (!policy) return;
-    const effectiveFrom = new Date(effectiveFromRaw).toISOString();
+    // The admin enters a Moscow wall-clock time regardless of the browser's
+    // own timezone — zonedLocalToIso resolves it against the Europe/Moscow
+    // IANA zone (DST-correct), never the machine's local offset.
+    const effectiveFrom = zonedLocalToIso(effectiveFromRaw, MOSCOW_TIMEZONE);
     if (season.scoringPolicyId) {
       const current = policies.find(
         (item) => item.id === season.scoringPolicyId,
@@ -746,7 +772,7 @@ export const ScoringAdmin = ({
         `Сменить систему начисления баллов для сезона «${season.name}»?\n\n` +
           `Было: ${current?.name ?? 'не назначена'}\n` +
           `Станет: ${policy.name}\n` +
-          `Действует с: ${new Date(effectiveFrom).toLocaleString('ru-RU')}`,
+          `Действует с: ${formatMoscow(effectiveFrom)}`,
       );
       if (!confirmed) return;
     }
@@ -756,11 +782,22 @@ export const ScoringAdmin = ({
     try {
       await adminApi.assignSeasonScoringPolicy(season.id, values);
       setAssigningSeasonId(undefined);
-      await loadReferences();
-      setNotice({
-        kind: 'success',
-        text: `Система начисления баллов назначена сезону «${season.name}».`,
-      });
+      // The assignment is already committed on the backend at this point.
+      // A failed refresh here is a display problem, not an assignment
+      // failure — it must not be reported (or silently swallowed) as either
+      // "assignment failed" or an unqualified "assignment succeeded".
+      const refreshed = await loadReferences();
+      setNotice(
+        refreshed
+          ? {
+              kind: 'success',
+              text: `Система начисления баллов назначена сезону «${season.name}».`,
+            }
+          : {
+              kind: 'error',
+              text: 'Система назначена, но не удалось обновить данные на экране. Обновите страницу.',
+            },
+      );
     } catch (error) {
       setNotice(scoringAdminError(error));
     } finally {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { eventValues, formFieldValues } from './admin-values.js';
+import {
+  eventValues,
+  formFieldValues,
+  zonedLocalToIso,
+} from './admin-values.js';
 
 describe('admin form values', () => {
   it('builds a contract-valid event payload', () => {
@@ -49,5 +53,22 @@ describe('admin form values', () => {
     form.set('options', 'not applicable');
 
     expect(formFieldValues(form).options).toBeNull();
+  });
+});
+
+describe('zonedLocalToIso', () => {
+  it('resolves a Moscow wall-clock time to its UTC instant, independent of the host machine timezone', () => {
+    expect(zonedLocalToIso('2026-09-21T12:00', 'Europe/Moscow')).toBe(
+      '2026-09-21T09:00:00.000Z',
+    );
+  });
+
+  it('is genuinely timezone-aware rather than a hardcoded +3 offset', () => {
+    // Same wall-clock string, a different IANA zone: this must resolve to a
+    // different instant, proving the conversion reads the `timezone`
+    // argument (via Intl.DateTimeFormat) instead of assuming Moscow always.
+    expect(zonedLocalToIso('2026-09-21T12:00', 'America/New_York')).toBe(
+      '2026-09-21T16:00:00.000Z',
+    );
   });
 });
