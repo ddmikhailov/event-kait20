@@ -2,9 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import type {
+  PersonActivityParticipation,
   PersonStatusAssignment,
   PersonSummary,
   ScoringPolicy,
+  ScoringPreviewResponse,
   Season,
   StatusTypeReference,
 } from '@event-registration/contracts';
@@ -13,6 +15,7 @@ import {
   PersonStatusPanel,
   ScoringAdmin,
   SeasonScoringPanel,
+  SimulatorPanel,
   statusState,
 } from './AdminScoring.js';
 
@@ -519,5 +522,242 @@ describe('statusState boundary semantics', () => {
     expect(
       statusState(personStatus({ validFrom: '2026-09-22' }), today),
     ).toBeNull();
+  });
+});
+
+const participation = (
+  overrides: Partial<PersonActivityParticipation> = {},
+): PersonActivityParticipation => ({
+  id: '80000000-0000-4000-8000-000000000001',
+  eventId: '10000000-0000-4000-8000-000000000001',
+  eventTitle: 'День открытых дверей',
+  eventStartAt: '2026-10-01T07:00:00.000Z',
+  status: 'CONFIRMED',
+  scoringState: 'NOT_SCORED',
+  confirmedAt: '2026-10-01T07:00:00.000Z',
+  role: { code: 'ORGANIZER', name: 'Организатор' },
+  result: { code: 'WINNER', name: 'Победитель' },
+  points: '0.0000',
+  ...overrides,
+});
+
+const previewResponse = (
+  overrides: Partial<ScoringPreviewResponse> = {},
+): ScoringPreviewResponse => ({
+  points: '18.5000',
+  policyVersionId: '90000000-0000-4000-8000-000000000001',
+  policyVersionStatus: 'PUBLISHED',
+  calculation: {
+    snapshotSchemaVersion: 1,
+    engineVersion: 'V2',
+    scoringPolicyId: '30000000-0000-4000-8000-000000000001',
+    policyVersionId: '90000000-0000-4000-8000-000000000001',
+    policyVersion: 1,
+    policyVersionStatus: 'PUBLISHED',
+    eventId: '10000000-0000-4000-8000-000000000001',
+    eventStartAt: '2026-10-01T07:00:00.000Z',
+    eventMoscowDate: '2026-10-01',
+    seasonId: '20000000-0000-4000-8000-000000000001',
+    participationId: '80000000-0000-4000-8000-000000000001',
+    personId: '50000000-0000-4000-8000-000000000001',
+    role: { id: 'r1', code: 'ORGANIZER', name: 'Организатор', value: '3.0000' },
+    level: { id: 'l1', code: 'CITY', name: 'Городской', value: '2.0000' },
+    statuses: [
+      {
+        id: 's1',
+        code: 'PROFESSION_AMBASSADOR',
+        name: 'Амбассадор Профессионалитета',
+        value: '1.5000',
+      },
+    ],
+    newcomer: { sequence: 1, value: '1.5000' },
+    result: { id: 'res1', code: 'WINNER', name: 'Победитель', value: '5.0000' },
+    multiplicativeSubtotal: '13.5000',
+    resultBonus: '5.0000',
+    finalPoints: '18.5000',
+    roundingMode: 'ROUND_HALF_UP',
+    calculatedAt: '2026-10-01T08:00:00.000Z',
+    ...(overrides.calculation as object | undefined),
+  },
+  ...overrides,
+});
+
+describe('scoring simulator', () => {
+  it('shows the search box before a person is selected', () => {
+    const markup = renderToStaticMarkup(
+      <SimulatorPanel
+        busy={false}
+        hasSearched={false}
+        searchResults={[]}
+        selectedPerson={undefined}
+        onSearch={() => undefined}
+        onSelectPerson={() => undefined}
+        onClearSelection={() => undefined}
+        participations={[]}
+        selectedParticipationId={undefined}
+        onSelectParticipation={() => undefined}
+        onCalculate={() => undefined}
+        outcome={undefined}
+      />,
+    );
+    expect(markup).toContain('Найти человека');
+    expect(markup).not.toContain('<table');
+  });
+
+  it('shows the selected person by name and the participation by event title, not raw UUIDs', () => {
+    const target = participation();
+    const markup = renderToStaticMarkup(
+      <SimulatorPanel
+        busy={false}
+        hasSearched
+        searchResults={[]}
+        selectedPerson={person()}
+        onSearch={() => undefined}
+        onSelectPerson={() => undefined}
+        onClearSelection={() => undefined}
+        participations={[target]}
+        selectedParticipationId={undefined}
+        onSelectParticipation={() => undefined}
+        onCalculate={() => undefined}
+        outcome={undefined}
+      />,
+    );
+    expect(markup).toContain('Петрова Анна');
+    expect(markup).toContain('День открытых дверей');
+    expect(markup).not.toContain(target.id);
+    expect(markup).not.toContain(target.eventId);
+  });
+
+  it('disables the calculate control while busy', () => {
+    const target = participation();
+    const markup = renderToStaticMarkup(
+      <SimulatorPanel
+        busy
+        hasSearched
+        searchResults={[]}
+        selectedPerson={person()}
+        onSearch={() => undefined}
+        onSelectPerson={() => undefined}
+        onClearSelection={() => undefined}
+        participations={[target]}
+        selectedParticipationId={target.id}
+        onSelectParticipation={() => undefined}
+        onCalculate={() => undefined}
+        outcome={undefined}
+      />,
+    );
+    expect(markup).toContain('disabled=""');
+  });
+
+  it('disables the calculate control when no participation is selected', () => {
+    const target = participation();
+    const markup = renderToStaticMarkup(
+      <SimulatorPanel
+        busy={false}
+        hasSearched
+        searchResults={[]}
+        selectedPerson={person()}
+        onSearch={() => undefined}
+        onSelectPerson={() => undefined}
+        onClearSelection={() => undefined}
+        participations={[target]}
+        selectedParticipationId={undefined}
+        onSelectParticipation={() => undefined}
+        onCalculate={() => undefined}
+        outcome={undefined}
+      />,
+    );
+    expect(markup).toContain('disabled=""');
+  });
+
+  it('renders a successful breakdown with each status multiplier shown separately', () => {
+    const response = previewResponse({
+      calculation: {
+        ...previewResponse().calculation,
+        statuses: [
+          {
+            id: 's1',
+            code: 'PROFESSION_AMBASSADOR',
+            name: 'Амбассадор Профессионалитета',
+            value: '1.5000',
+          },
+          {
+            id: 's2',
+            code: 'VOLUNTEER_CORPS',
+            name: 'Волонтёрский корпус',
+            value: '1.2000',
+          },
+        ],
+      },
+    });
+    const markup = renderToStaticMarkup(
+      <SimulatorPanel
+        busy={false}
+        hasSearched
+        searchResults={[]}
+        selectedPerson={person()}
+        onSearch={() => undefined}
+        onSelectPerson={() => undefined}
+        onClearSelection={() => undefined}
+        participations={[]}
+        selectedParticipationId={undefined}
+        onSelectParticipation={() => undefined}
+        onCalculate={() => undefined}
+        outcome={{ kind: 'result', response }}
+      />,
+    );
+    expect(markup).toContain('18.50');
+    expect(markup).toContain('Амбассадор Профессионалитета');
+    expect(markup).toContain('Волонтёрский корпус');
+    expect(markup).not.toContain(response.calculation.role.id);
+    expect(markup).not.toContain(response.calculation.statuses[0]!.id);
+  });
+
+  it('renders a NO_RULE-style outcome as an explanatory message, not a zero score', () => {
+    const markup = renderToStaticMarkup(
+      <SimulatorPanel
+        busy={false}
+        hasSearched
+        searchResults={[]}
+        selectedPerson={person()}
+        onSearch={() => undefined}
+        onSelectPerson={() => undefined}
+        onClearSelection={() => undefined}
+        participations={[]}
+        selectedParticipationId={undefined}
+        onSelectParticipation={() => undefined}
+        onCalculate={() => undefined}
+        outcome={{
+          kind: 'explanation',
+          text: 'Для выбранной комбинации правило начисления не настроено.',
+        }}
+      />,
+    );
+    expect(markup).toContain(
+      'Для выбранной комбинации правило начисления не настроено.',
+    );
+    expect(markup).not.toContain('0.00 балл');
+    expect(markup).not.toContain('Результат:');
+  });
+
+  it('shows no stale breakdown or explanation when the outcome is cleared', () => {
+    const markup = renderToStaticMarkup(
+      <SimulatorPanel
+        busy={false}
+        hasSearched
+        searchResults={[]}
+        selectedPerson={person()}
+        onSearch={() => undefined}
+        onSelectPerson={() => undefined}
+        onClearSelection={() => undefined}
+        participations={[]}
+        selectedParticipationId={undefined}
+        onSelectParticipation={() => undefined}
+        onCalculate={() => undefined}
+        outcome={undefined}
+      />,
+    );
+    expect(markup).not.toContain('Результат:');
+    expect(markup).not.toContain('Для выбранной комбинации');
   });
 });

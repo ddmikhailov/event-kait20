@@ -1668,3 +1668,27 @@ def test_preview_production_parity_and_published_immutability(
     assert reversal_snapshot["reversalPoints"] == "-18.5000"
     assert reversal_snapshot["originalCalculation"]["finalPoints"] == "18.5000"
     assert sequence == 1
+
+
+def test_person_activity_lists_participation_with_event_start(
+    client: TestClient,
+) -> None:
+    headers = login(client)
+    database: Database = client.app.state.database
+    season_id = create_season(client, headers)
+    event_id = create_event(client, headers, season_id, "2026-07-01T10:00:00Z")
+    registration_id, person_id = create_registration(database, event_id)
+    participation_id = assign_participation(client, headers, event_id, registration_id)
+
+    response = client.get(f"/admin/people/{person_id}/activity", headers=headers)
+    assert response.status_code == 200, response.text
+    items = response.json()["participations"]
+    assert len(items) == 1
+    item = items[0]
+    assert item["id"] == participation_id
+    assert item["eventId"] == event_id
+    assert item["eventStartAt"] == "2026-07-01T10:00:00.000Z"
+    assert item["role"] == {"code": "ORGANIZER", "name": "Организатор"}
+    assert item["result"] == {"code": "WINNER", "name": "Победитель"}
+    assert item["status"] == "DRAFT"
+    assert item["scoringState"] == "NOT_SCORED"

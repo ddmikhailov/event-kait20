@@ -2,6 +2,7 @@ import type {
   ActivityReference,
   AssignScoringPolicy,
   NewcomerTierValue,
+  PersonActivityParticipation,
   PersonStatusAssignment,
   PersonSummary,
   PolicyVersion,
@@ -10,6 +11,7 @@ import type {
   Season,
   ScoringComponentValue,
   ScoringPolicy,
+  ScoringPreviewResponse,
   SessionResponse,
   StatusAssignment,
   StatusTypeReference,
@@ -843,6 +845,234 @@ export const PersonStatusPanel = ({
   );
 };
 
+const formatPoints = (value: string): string => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : value;
+};
+
+const participationStatusLabel = (
+  status: PersonActivityParticipation['status'],
+) =>
+  ({
+    DRAFT: 'Черновик',
+    CONFIRMED: 'Подтверждено',
+    CANCELLED: 'Отменено',
+  })[status];
+
+const scoringStateLabel = (
+  state: PersonActivityParticipation['scoringState'],
+) =>
+  ({
+    NOT_SCORED: 'Не рассчитано',
+    AWARDED: 'Начислено',
+    NO_RULE: 'Правило не найдено',
+    REVERSED: 'Отменено (реверс)',
+  })[state];
+
+// The actual codes `POST .../preview` raises (scoring_v2.py) — this is the
+// diagnostic explanation shown in place of a score, not a page-level error
+// notice: a missing rule is an expected, explainable outcome here, not a
+// failure of the Simulator itself.
+const previewExplanation = (error: unknown): string => {
+  if (error instanceof AdminApiError) {
+    const explanations: Record<string, string> = {
+      PARTICIPATION_NOT_FOUND: 'Участие не найдено.',
+      SCORING_ENGINE_V1:
+        'Это мероприятие ещё не переведено на новую систему начисления баллов.',
+      SCORING_POLICY_NOT_ASSIGNED:
+        'Сезону не назначена система начисления баллов.',
+      SCORING_POLICY_AMBIGUOUS:
+        'Для этой даты действуют одновременно несколько версий политики — исправьте периоды действия версий.',
+      SCORING_COMPONENT_MISSING:
+        'Для выбранной комбинации правило начисления не настроено.',
+    };
+    return explanations[error.code] ?? error.message;
+  }
+  return 'Не удалось выполнить расчёт.';
+};
+
+type PreviewOutcome =
+  | { kind: 'result'; response: ScoringPreviewResponse }
+  | { kind: 'explanation'; text: string };
+
+export const SimulatorPanel = ({
+  busy,
+  hasSearched,
+  searchResults,
+  selectedPerson,
+  onSearch,
+  onSelectPerson,
+  onClearSelection,
+  participations,
+  selectedParticipationId,
+  onSelectParticipation,
+  onCalculate,
+  outcome,
+}: {
+  busy: boolean;
+  hasSearched: boolean;
+  searchResults: PersonSummary[];
+  selectedPerson: PersonSummary | undefined;
+  onSearch: (form: FormData) => void;
+  onSelectPerson: (person: PersonSummary) => void;
+  onClearSelection: () => void;
+  participations: PersonActivityParticipation[];
+  selectedParticipationId: string | undefined;
+  onSelectParticipation: (participation: PersonActivityParticipation) => void;
+  onCalculate: () => void;
+  outcome: PreviewOutcome | undefined;
+}) => (
+  <section className="admin-panel">
+    <h2>Симулятор</h2>
+    <p>
+      Показывает, сколько баллов начислил бы реальный движок за конкретное
+      участие, не сохраняя результат.
+    </p>
+    {!selectedPerson && (
+      <>
+        <form action={onSearch} className="stack-form">
+          <label>
+            <span>Найти человека</span>
+            <input name="query" placeholder="ФИО, email, телефон или группа" />
+          </label>
+          <Button type="submit" disabled={busy}>
+            Найти
+          </Button>
+        </form>
+        <ul className="activity-list">
+          {searchResults.map((person) => (
+            <li key={person.id}>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => onSelectPerson(person)}
+              >
+                <strong>{personFullName(person)}</strong>
+                <span>{person.studyGroup ?? person.organization ?? ''}</span>
+              </button>
+            </li>
+          ))}
+          {searchResults.length === 0 && !hasSearched && (
+            <li>Введите запрос и нажмите «Найти».</li>
+          )}
+          {searchResults.length === 0 && hasSearched && (
+            <li>Никого не найдено по этому запросу.</li>
+          )}
+        </ul>
+      </>
+    )}
+    {selectedPerson && (
+      <>
+        <p>
+          <strong>{personFullName(selectedPerson)}</strong>{' '}
+          <button
+            type="button"
+            className="text-button"
+            onClick={onClearSelection}
+          >
+            Выбрать другого человека
+          </button>
+        </p>
+        <div className="participant-table-wrap">
+          <table className="participant-table">
+            <thead>
+              <tr>
+                <th>Мероприятие</th>
+                <th>Дата</th>
+                <th>Роль</th>
+                <th>Результат</th>
+                <th>Состояние</th>
+                <th>Баллы</th>
+              </tr>
+            </thead>
+            <tbody>
+              {participations.map((participation) => (
+                <tr key={participation.id}>
+                  <td>
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => onSelectParticipation(participation)}
+                    >
+                      {participation.id === selectedParticipationId ? '● ' : ''}
+                      {participation.eventTitle}
+                    </button>
+                  </td>
+                  <td>{participation.eventStartAt}</td>
+                  <td>{participation.role?.name ?? 'Не назначена'}</td>
+                  <td>{participation.result?.name ?? '—'}</td>
+                  <td>
+                    {participationStatusLabel(participation.status)} ·{' '}
+                    {scoringStateLabel(participation.scoringState)}
+                  </td>
+                  <td>{formatPoints(participation.points)}</td>
+                </tr>
+              ))}
+              {participations.length === 0 && (
+                <tr>
+                  <td colSpan={6}>У этого человека пока нет участий.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <Button
+          onClick={onCalculate}
+          disabled={busy || !selectedParticipationId}
+        >
+          Рассчитать
+        </Button>
+        {outcome?.kind === 'explanation' && (
+          <p className="admin-notice">{outcome.text}</p>
+        )}
+        {outcome?.kind === 'result' && (
+          <div className="admin-panel">
+            <h3>Результат: {formatPoints(outcome.response.points)} баллов</h3>
+            <p>
+              Версия политики:{' '}
+              {versionStatusLabel(outcome.response.policyVersionStatus)}
+            </p>
+            <ul className="activity-list">
+              <li>
+                Базовые баллы за роль «{outcome.response.calculation.role.name}
+                »: {outcome.response.calculation.role.value}
+              </li>
+              <li>
+                Множитель уровня «{outcome.response.calculation.level.name}»:{' '}
+                {outcome.response.calculation.level.value}
+              </li>
+              {outcome.response.calculation.statuses.map((status) => (
+                <li key={status.id}>
+                  Статус «{status.name}»: ×{status.value}
+                </li>
+              ))}
+              <li>
+                Порядковое участие:{' '}
+                {outcome.response.calculation.newcomer.sequence} (×
+                {outcome.response.calculation.newcomer.value})
+              </li>
+              <li>
+                Промежуточный итог (до бонуса):{' '}
+                {outcome.response.calculation.multiplicativeSubtotal}
+              </li>
+              <li>
+                Результат «
+                {outcome.response.calculation.result?.name ?? 'не выбран'}»,
+                бонус: {outcome.response.calculation.resultBonus}
+              </li>
+              <li>
+                <strong>
+                  Итого: {outcome.response.calculation.finalPoints}
+                </strong>
+              </li>
+            </ul>
+          </div>
+        )}
+      </>
+    )}
+  </section>
+);
+
 export const ScoringAdmin = ({
   role,
   onBack,
@@ -1162,6 +1392,76 @@ export const ScoringAdmin = ({
     }
   };
 
+  const [simResults, setSimResults] = useState<PersonSummary[]>([]);
+  const [simHasSearched, setSimHasSearched] = useState(false);
+  const [simPerson, setSimPerson] = useState<PersonSummary>();
+  const [simParticipations, setSimParticipations] = useState<
+    PersonActivityParticipation[]
+  >([]);
+  const [simParticipationId, setSimParticipationId] = useState<string>();
+  const [simOutcome, setSimOutcome] = useState<PreviewOutcome>();
+
+  const searchSimulatorPeople = async (form: FormData) => {
+    const query = String(form.get('query') ?? '').trim();
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      setSimResults((await adminApi.people(query)).items);
+      setSimHasSearched(true);
+    } catch (error) {
+      setNotice(scoringAdminError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectSimulatorPerson = async (person: PersonSummary) => {
+    setSimPerson(person);
+    setSimParticipationId(undefined);
+    setSimOutcome(undefined);
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      setSimParticipations(
+        (await adminApi.personActivity(person.id)).participations,
+      );
+    } catch (error) {
+      setNotice(scoringAdminError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearSimulatorSelection = () => {
+    setSimPerson(undefined);
+    setSimParticipations([]);
+    setSimParticipationId(undefined);
+    setSimOutcome(undefined);
+  };
+
+  const selectSimulatorParticipation = (
+    participation: PersonActivityParticipation,
+  ) => {
+    setSimParticipationId(participation.id);
+    setSimOutcome(undefined);
+  };
+
+  const calculatePreview = async () => {
+    if (!simParticipationId) return;
+    setBusy(true);
+    setSimOutcome(undefined);
+    try {
+      const response = await adminApi.scoringPreview({
+        participationId: simParticipationId,
+      });
+      setSimOutcome({ kind: 'result', response });
+    } catch (error) {
+      setSimOutcome({ kind: 'explanation', text: previewExplanation(error) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const references = useMemo(
     () => ({ roles, levels, results, statusTypes }),
     [roles, levels, results, statusTypes],
@@ -1242,6 +1542,20 @@ export const ScoringAdmin = ({
           onCancelAssign={cancelAssignStatus}
           onSubmitAssign={(form) => void assignStatus(form)}
           onRetire={(status) => void retireStatus(status)}
+        />
+        <SimulatorPanel
+          busy={busy}
+          hasSearched={simHasSearched}
+          searchResults={simResults}
+          selectedPerson={simPerson}
+          onSearch={(form) => void searchSimulatorPeople(form)}
+          onSelectPerson={(person) => void selectSimulatorPerson(person)}
+          onClearSelection={clearSimulatorSelection}
+          participations={simParticipations}
+          selectedParticipationId={simParticipationId}
+          onSelectParticipation={selectSimulatorParticipation}
+          onCalculate={() => void calculatePreview()}
+          outcome={simOutcome}
         />
         <div className="activity-settings-grid">
           <section className="admin-panel">

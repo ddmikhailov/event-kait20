@@ -28,6 +28,8 @@ import {
   statusTypeListSchema,
   personStatusAssignmentListSchema,
   personStatusAssignmentCreatedSchema,
+  personActivityResponseSchema,
+  scoringPreviewResponseSchema,
   seasonListSchema,
   seasonSchema,
   staffInvitationResponseSchema,
@@ -86,6 +88,9 @@ import {
   type StatusAssignment,
   type PersonStatusAssignmentList,
   type PersonStatusAssignmentCreated,
+  type PersonActivityResponse,
+  type ScoringPreviewRequest,
+  type ScoringPreviewResponse,
   type Season,
   type SeasonList,
   type SeasonValues,
@@ -320,6 +325,24 @@ export class AdminApiClient {
       `/admin/activity/scoring-v2/people/${encodeURIComponent(personId)}/statuses/${encodeURIComponent(assignmentId)}`,
       { method: 'DELETE' },
       activityOperationResponseSchema,
+    );
+  }
+
+  public personActivity(personId: string): Promise<PersonActivityResponse> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/activity`,
+      { method: 'GET' },
+      personActivityResponseSchema,
+    );
+  }
+
+  public scoringPreview(
+    values: ScoringPreviewRequest,
+  ): Promise<ScoringPreviewResponse> {
+    return this.request(
+      '/admin/activity/scoring-v2/preview',
+      { method: 'POST', body: JSON.stringify(values) },
+      scoringPreviewResponseSchema,
     );
   }
 

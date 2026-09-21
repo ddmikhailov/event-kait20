@@ -1326,6 +1326,7 @@ def person_activity(
         participations = rows(
             connection,
             """SELECT p.id,p.status,p.scoring_state,p.confirmed_at,e.id AS event_id,e.title,
+            e.start_at AS event_start_at,
             pr.code AS role_code,pr.name AS role_name,pres.code AS result_code,pres.name AS result_name,
             COALESCE((SELECT SUM(points) FROM score_transactions st WHERE st.participation_id=p.id),0) AS points
             FROM participations p JOIN events e ON e.id=p.event_id
@@ -1371,6 +1372,7 @@ def person_activity(
                 "id": item["id"],
                 "eventId": item["event_id"],
                 "eventTitle": item["title"],
+                "eventStartAt": serial(item["event_start_at"]),
                 "status": item["status"],
                 "scoringState": item["scoring_state"],
                 "confirmedAt": serial(item["confirmed_at"])

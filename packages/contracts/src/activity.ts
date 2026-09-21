@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { uuidSchema } from './common.js';
+import { decimalScoreSchema } from './scoring-v2.js';
 
 export const activityCodeSchema = z
   .string()
@@ -267,3 +268,42 @@ export const leaderboardResponseSchema = z
   })
   .strict();
 export type LeaderboardResponse = z.infer<typeof leaderboardResponseSchema>;
+
+const personActivityRoleRefSchema = z
+  .object({ code: z.string(), name: z.string() })
+  .strict();
+export const personActivityParticipationSchema = z
+  .object({
+    id: uuidSchema,
+    eventId: uuidSchema,
+    eventTitle: z.string(),
+    eventStartAt: z.iso.datetime({ offset: true }),
+    status: z.enum(['DRAFT', 'CONFIRMED', 'CANCELLED']),
+    scoringState: z.enum(['NOT_SCORED', 'AWARDED', 'NO_RULE', 'REVERSED']),
+    confirmedAt: z.iso.datetime({ offset: true }).nullable(),
+    role: personActivityRoleRefSchema.nullable(),
+    result: personActivityRoleRefSchema.nullable(),
+    points: decimalScoreSchema,
+  })
+  .strict();
+export const personActivityResponseSchema = z
+  .object({
+    participations: z.array(personActivityParticipationSchema),
+    // The Simulator only reads `participations`; the rest of this endpoint's
+    // response (score ledger/summary/achievements) is left loosely typed
+    // rather than fully modeled, so a future backend change to those
+    // sections can't silently break parsing of the part this app actually
+    // uses.
+    scoreTransactions: z.array(z.record(z.string(), z.unknown())),
+    scoreSummary: z.array(z.record(z.string(), z.unknown())),
+    achievements: z.array(z.record(z.string(), z.unknown())),
+    page: z.number().int().positive(),
+    pageSize: z.number().int().positive(),
+  })
+  .strict();
+export type PersonActivityParticipation = z.infer<
+  typeof personActivityParticipationSchema
+>;
+export type PersonActivityResponse = z.infer<
+  typeof personActivityResponseSchema
+>;
