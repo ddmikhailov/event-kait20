@@ -176,6 +176,7 @@ export type ScoringComponentValue = z.infer<typeof scoringComponentSchema>;
 export type NewcomerTierValue = z.infer<typeof newcomerTierSchema>;
 export type PolicyVersionValues = z.infer<typeof policyVersionValuesSchema>;
 export type PublishPolicyVersion = z.infer<typeof publishPolicyVersionSchema>;
+export type AssignScoringPolicy = z.infer<typeof assignScoringPolicySchema>;
 export type ScoringPreviewRequest = z.infer<typeof scoringPreviewRequestSchema>;
 export type ScoringPreviewResponse = z.infer<
   typeof scoringPreviewResponseSchema

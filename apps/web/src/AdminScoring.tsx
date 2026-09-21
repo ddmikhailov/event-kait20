@@ -1,16 +1,18 @@
 import type {
   ActivityReference,
+  AssignScoringPolicy,
   NewcomerTierValue,
   PolicyVersion,
   PolicyVersionDetail,
   PolicyVersionValues,
+  Season,
   ScoringComponentValue,
   ScoringPolicy,
   SessionResponse,
   StatusTypeReference,
 } from '@event-registration/contracts';
 import { Button } from '@event-registration/ui';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
 
@@ -58,6 +60,13 @@ const scoringAdminError = (error: unknown): Notice => {
         'Для этого периода действуют несколько версий политики одновременно.',
       SCORING_POLICY_VERSION_NOT_FOUND: 'Версия политики не найдена.',
       SCORING_POLICY_NOT_FOUND: 'Политика не найдена.',
+      SCORING_POLICY_NOT_PUBLISHED:
+        'У выбранной системы начисления нет опубликованной версии, действующей с указанной даты.',
+      SEASON_NOT_FOUND: 'Сезон не найден.',
+      SEASON_SCORING_POLICY_LOCKED:
+        'Систему начисления для этого сезона нельзя изменить: по ней уже есть начисленные баллы.',
+      SEASON_SCORING_POLICY_RETROACTIVE_CONFLICT:
+        'Нельзя изменить систему начисления задним числом: в этом периоде уже есть рассчитанные активности.',
     };
     return { kind: 'error', text: messages[error.code] ?? error.message };
   }
@@ -451,6 +460,148 @@ const VersionEditor = ({
   );
 };
 
+export const SeasonScoringPanel = ({
+  seasons,
+  policies,
+  publishablePolicyIds,
+  canManage,
+  busy,
+  assigningSeasonId,
+  onBegin,
+  onCancel,
+  onSubmit,
+}: {
+  seasons: Season[];
+  policies: ScoringPolicy[];
+  publishablePolicyIds: Set<string>;
+  canManage: boolean;
+  busy: boolean;
+  assigningSeasonId: string | undefined;
+  onBegin: (season: Season) => void;
+  onCancel: () => void;
+  onSubmit: (season: Season, form: FormData) => void;
+}) => (
+  <section className="admin-panel">
+    <h2>Сезоны · активная система начисления баллов</h2>
+    <div className="participant-table-wrap">
+      <table className="participant-table">
+        <thead>
+          <tr>
+            <th>Сезон</th>
+            <th>Период</th>
+            <th>Активная система</th>
+            <th>Действует с</th>
+            {canManage && <th>Действие</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {seasons.map((season) => {
+            const assignedPolicy = season.scoringPolicyId
+              ? policies.find((item) => item.id === season.scoringPolicyId)
+              : undefined;
+            const assigning = assigningSeasonId === season.id;
+            return (
+              <Fragment key={season.id}>
+                <tr>
+                  <td>
+                    <strong>{season.name}</strong>
+                    {season.active ? '' : ' · неактивен'}
+                  </td>
+                  <td>
+                    {season.startsAt} – {season.endsAt}
+                  </td>
+                  <td>
+                    {assignedPolicy
+                      ? `${assignedPolicy.name}${
+                          assignedPolicy.active ? '' : ' · неактивна'
+                        }`
+                      : 'Не назначена'}
+                  </td>
+                  <td>{season.scoringPolicyEffectiveFrom ?? '—'}</td>
+                  {canManage && (
+                    <td>
+                      {!assigning && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          disabled={busy}
+                          onClick={() => onBegin(season)}
+                        >
+                          {assignedPolicy ? 'Изменить' : 'Назначить'}
+                        </button>
+                      )}
+                      {assigning && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          disabled={busy}
+                          onClick={onCancel}
+                        >
+                          Отмена
+                        </button>
+                      )}
+                    </td>
+                  )}
+                </tr>
+                {assigning && (
+                  <tr>
+                    <td colSpan={canManage ? 5 : 4}>
+                      {publishablePolicyIds.size === 0 ? (
+                        <p className="admin-notice">
+                          Нет опубликованных систем начисления баллов.
+                          Сначала опубликуйте версию в разделе «Политики»
+                          слева.
+                        </p>
+                      ) : (
+                        <form
+                          action={(form) => onSubmit(season, form)}
+                          className="stack-form"
+                        >
+                          <label>
+                            <span>Система начисления баллов</span>
+                            <select name="scoringPolicyId" required>
+                              <option value="">Выберите систему…</option>
+                              {policies
+                                .filter((policy) =>
+                                  publishablePolicyIds.has(policy.id),
+                                )
+                                .map((policy) => (
+                                  <option key={policy.id} value={policy.id}>
+                                    {policy.name}
+                                  </option>
+                                ))}
+                            </select>
+                          </label>
+                          <label>
+                            <span>Действует с</span>
+                            <input
+                              name="effectiveFrom"
+                              type="datetime-local"
+                              required
+                            />
+                          </label>
+                          <Button type="submit" disabled={busy}>
+                            {assignedPolicy ? 'Сменить систему' : 'Назначить'}
+                          </Button>
+                        </form>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+          {seasons.length === 0 && (
+            <tr>
+              <td colSpan={canManage ? 5 : 4}>Сезонов пока нет.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  </section>
+);
+
 export const ScoringAdmin = ({
   role,
   onBack,
@@ -464,6 +615,10 @@ export const ScoringAdmin = ({
   const [levels, setLevels] = useState<ActivityReference[]>([]);
   const [results, setResults] = useState<ActivityReference[]>([]);
   const [statusTypes, setStatusTypes] = useState<StatusTypeReference[]>([]);
+  const [seasons, setSeasons] = useState<Season[]>([]);
+  const [publishablePolicyIds, setPublishablePolicyIds] = useState<
+    Set<string>
+  >(new Set());
   const [selectedPolicy, setSelectedPolicy] = useState<ScoringPolicy>();
   const [versions, setVersions] = useState<PolicyVersion[]>([]);
   const [editing, setEditing] = useState<{
@@ -475,19 +630,38 @@ export const ScoringAdmin = ({
 
   const loadReferences = useCallback(async () => {
     try {
-      const [policyList, roleList, levelList, resultList, statusList] =
+      const [policyList, roleList, levelList, resultList, statusList, seasonList] =
         await Promise.all([
           adminApi.scoringPolicies(),
           adminApi.activityRoles(),
           adminApi.activityLevels(),
           adminApi.activityResults(),
           adminApi.scoringStatusTypes(),
+          adminApi.seasons(),
         ]);
       setPolicies(policyList.items);
       setRoles(roleList.items);
       setLevels(levelList.items);
       setResults(resultList.items);
       setStatusTypes(statusList.items);
+      setSeasons(seasonList.items);
+      // A policy is offered for Season activation only once it has at least
+      // one published version — matches what assign_policy actually accepts
+      // (it still authoritatively re-checks the chosen effective date
+      // server-side; this is a coarser client-side filter for UX only).
+      const publishableIds = await Promise.all(
+        policyList.items.map(async (policy) => {
+          const versionList = await adminApi.scoringPolicyVersions(policy.id);
+          return versionList.items.some(
+            (version) => version.status === 'PUBLISHED',
+          )
+            ? policy.id
+            : undefined;
+        }),
+      );
+      setPublishablePolicyIds(
+        new Set(publishableIds.filter((id): id is string => id !== undefined)),
+      );
     } catch (error) {
       setNotice(scoringAdminError(error));
     }
@@ -536,6 +710,52 @@ export const ScoringAdmin = ({
     try {
       const detail = await adminApi.scoringPolicyVersion(version.id);
       setEditing({ mode: 'existing', version: detail });
+    } catch (error) {
+      setNotice(scoringAdminError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const [assigningSeasonId, setAssigningSeasonId] = useState<string>();
+
+  const beginSeasonAssignment = (season: Season) => {
+    setAssigningSeasonId(season.id);
+    setNotice(undefined);
+  };
+
+  const cancelSeasonAssignment = () => setAssigningSeasonId(undefined);
+
+  const assignSeasonPolicy = async (season: Season, form: FormData) => {
+    const scoringPolicyId = String(form.get('scoringPolicyId') ?? '');
+    const effectiveFromRaw = String(form.get('effectiveFrom') ?? '');
+    if (!scoringPolicyId || !effectiveFromRaw) return;
+    const policy = policies.find((item) => item.id === scoringPolicyId);
+    if (!policy) return;
+    const effectiveFrom = new Date(effectiveFromRaw).toISOString();
+    if (season.scoringPolicyId) {
+      const current = policies.find(
+        (item) => item.id === season.scoringPolicyId,
+      );
+      const confirmed = window.confirm(
+        `Сменить систему начисления баллов для сезона «${season.name}»?\n\n` +
+          `Было: ${current?.name ?? 'не назначена'}\n` +
+          `Станет: ${policy.name}\n` +
+          `Действует с: ${new Date(effectiveFrom).toLocaleString('ru-RU')}`,
+      );
+      if (!confirmed) return;
+    }
+    const values: AssignScoringPolicy = { scoringPolicyId, effectiveFrom };
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      await adminApi.assignSeasonScoringPolicy(season.id, values);
+      setAssigningSeasonId(undefined);
+      await loadReferences();
+      setNotice({
+        kind: 'success',
+        text: `Система начисления баллов назначена сезону «${season.name}».`,
+      });
     } catch (error) {
       setNotice(scoringAdminError(error));
     } finally {
@@ -596,6 +816,17 @@ export const ScoringAdmin = ({
             их может SUPER_ADMIN.
           </p>
         )}
+        <SeasonScoringPanel
+          seasons={seasons}
+          policies={policies}
+          publishablePolicyIds={publishablePolicyIds}
+          canManage={canManage}
+          busy={busy}
+          assigningSeasonId={assigningSeasonId}
+          onBegin={beginSeasonAssignment}
+          onCancel={cancelSeasonAssignment}
+          onSubmit={(season, form) => void assignSeasonPolicy(season, form)}
+        />
         <div className="activity-settings-grid">
           <section className="admin-panel">
             <h2>Политики</h2>

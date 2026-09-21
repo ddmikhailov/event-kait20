@@ -72,6 +72,7 @@ import {
   type ScoringRuleList,
   type ScoringRuleValues,
   type ScoringPolicyList,
+  type AssignScoringPolicy,
   type PolicyCreate,
   type PolicyCreatedResponse,
   type PolicyVersionList,
@@ -264,6 +265,17 @@ export class AdminApiClient {
     return this.request(
       `/admin/activity/scoring-v2/versions/${encodeURIComponent(versionId)}/retire`,
       { method: 'POST' },
+      activityOperationResponseSchema,
+    );
+  }
+
+  public assignSeasonScoringPolicy(
+    seasonId: string,
+    values: AssignScoringPolicy,
+  ): Promise<ActivityOperationResponse> {
+    return this.request(
+      `/admin/activity/scoring-v2/seasons/${encodeURIComponent(seasonId)}/policy`,
+      { method: 'POST', body: JSON.stringify(values) },
       activityOperationResponseSchema,
     );
   }
