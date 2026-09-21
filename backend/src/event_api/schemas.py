@@ -20,6 +20,14 @@ def camel(value: str) -> str:
     return head + "".join(item.capitalize() for item in tail)
 
 
+# Registration submission accepts at most this many custom_answers entries
+# (see RegistrationAnswer/ParticipantValues below). Admin form-field creation
+# enforces the same ceiling on ACTIVE custom fields per Event, so that a form
+# the public/onsite API can render is always a form the registration API can
+# accept in full.
+MAX_CUSTOM_ANSWERS = 100
+
+
 class Contract(BaseModel):
     model_config = ConfigDict(
         alias_generator=camel,
@@ -358,7 +366,7 @@ class ParticipantValues(Contract):
         | None
     ) = None
     custom_answers: list[RegistrationAnswer] = Field(
-        default_factory=list, max_length=100
+        default_factory=list, max_length=MAX_CUSTOM_ANSWERS
     )
 
     @field_validator("last_name", "first_name", "middle_name")

@@ -4,6 +4,7 @@ import json
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from io import BytesIO
@@ -25,7 +26,7 @@ from event_api.email_worker import process_once
 from event_api.errors import ApiError
 from event_api.registration_service import participant
 from event_api.routers.excel import _parse
-from event_api.schemas import ParticipantValues
+from event_api.schemas import MAX_CUSTOM_ANSWERS, ParticipantValues
 from event_api.security import RateLimiter, auth_link_token, hash_password, token_hash
 
 ORIGIN = {"Origin": "http://localhost:5173"}
@@ -106,6 +107,28 @@ def _login(client: TestClient) -> tuple[dict[str, str], str]:
     assert response.status_code == 200, response.text
     csrf = response.json()["csrfToken"]
     return {**ORIGIN, "X-CSRF-Token": csrf}, response.cookies["staff_session"]
+
+
+def _seed_active_fields(
+    database: Database, event_id: str, count: int, start: int = 0
+) -> None:
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO event_form_fields
+                (id,event_id,type,label,required,sort_order,active,created_at,updated_at)
+                VALUES (:id,:event,'SHORT_TEXT',:label,true,:sort,true,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            [
+                {
+                    "id": str(uuid4()),
+                    "event": event_id,
+                    "label": f"Поле {index}",
+                    "sort": index,
+                }
+                for index in range(start, start + count)
+            ],
+        )
 
 
 def test_health_and_security_foundation(client: TestClient) -> None:
@@ -1739,6 +1762,281 @@ def test_registration_constructor_and_private_retry_receipts(
         ).status_code
         == 409
     )
+
+
+def test_form_field_creation_enforces_active_limit_and_exact_limit_submits(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client)
+    database: Database = client.app.state.database
+    created = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Лимит полей",
+            "slug": "field-limit",
+            "location": "КАИТ",
+            "startAt": "2027-10-10T07:00:00Z",
+            "endAt": "2027-10-10T09:00:00Z",
+            "registrationDeadline": "2027-10-09T07:00:00Z",
+            "capacity": 100,
+            "status": "REGISTRATION_OPEN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    _seed_active_fields(database, event_id, MAX_CUSTOM_ANSWERS - 1)
+    exact = client.post(
+        f"/admin/events/{event_id}/form-fields",
+        headers=headers,
+        json={
+            "type": "SHORT_TEXT",
+            "label": "Ровно на лимите",
+            "required": True,
+            "sortOrder": MAX_CUSTOM_ANSWERS - 1,
+        },
+    )
+    assert exact.status_code == 201, exact.text
+    over = client.post(
+        f"/admin/events/{event_id}/form-fields",
+        headers=headers,
+        json={
+            "type": "SHORT_TEXT",
+            "label": "Сверх лимита",
+            "required": False,
+            "sortOrder": MAX_CUSTOM_ANSWERS,
+        },
+    )
+    assert over.status_code == 409, over.text
+    assert over.json()["error"]["code"] == "FORM_FIELD_LIMIT_EXCEEDED"
+    with database.connect() as connection:
+        active_total = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM event_form_fields WHERE event_id=:id AND active=true"
+            ),
+            {"id": event_id},
+        ).scalar_one()
+    assert active_total == MAX_CUSTOM_ANSWERS
+    fields = client.get(
+        f"/admin/events/{event_id}/form-fields", headers=headers
+    ).json()["items"]
+    assert len(fields) == MAX_CUSTOM_ANSWERS
+    answers = [{"fieldId": field["id"], "value": "ответ"} for field in fields]
+    path = "/public/events/field-limit/register"
+    payload = {
+        "requestId": str(uuid4()),
+        "firstName": "Полная",
+        "lastName": "Форма",
+        "consentAccepted": True,
+        "consentVersion": client.app.state.settings.consent_version,
+        "customAnswers": answers,
+    }
+    full = client.post(path, headers=headers, json=payload)
+    assert full.status_code == 201, full.text
+    overflowing = client.post(
+        path,
+        headers=headers,
+        json={
+            **payload,
+            "requestId": str(uuid4()),
+            "customAnswers": [*answers, {"fieldId": str(uuid4()), "value": "лишний"}],
+        },
+    )
+    assert overflowing.status_code == 400, overflowing.text
+    assert overflowing.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_form_field_edit_and_deactivate_remain_allowed_at_limit(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client)
+    database: Database = client.app.state.database
+    created = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Редактирование на лимите",
+            "slug": "field-limit-edit",
+            "location": "КАИТ",
+            "startAt": "2027-10-10T07:00:00Z",
+            "endAt": "2027-10-10T09:00:00Z",
+            "registrationDeadline": "2027-10-09T07:00:00Z",
+            "capacity": 10,
+            "status": "REGISTRATION_OPEN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    _seed_active_fields(database, event_id, MAX_CUSTOM_ANSWERS)
+    fields = client.get(
+        f"/admin/events/{event_id}/form-fields", headers=headers
+    ).json()["items"]
+    assert len(fields) == MAX_CUSTOM_ANSWERS
+    target = fields[0]
+    # Editing label/sortOrder/required of an existing active field never changes
+    # the active count, so it must stay allowed even when the Event is at the
+    # create limit — the check below only guards create.
+    edited = client.patch(
+        f"/admin/events/{event_id}/form-fields/{target['id']}",
+        headers=headers,
+        json={"label": "Отредактировано на лимите"},
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["label"] == "Отредактировано на лимите"
+    blocked = client.post(
+        f"/admin/events/{event_id}/form-fields",
+        headers=headers,
+        json={
+            "type": "SHORT_TEXT",
+            "label": "Ещё одно",
+            "required": False,
+            "sortOrder": MAX_CUSTOM_ANSWERS,
+        },
+    )
+    assert blocked.status_code == 409, blocked.text
+    deactivated = client.delete(
+        f"/admin/events/{event_id}/form-fields/{target['id']}", headers=headers
+    )
+    assert deactivated.status_code == 200, deactivated.text
+    assert deactivated.json()["active"] is False
+    replacement = client.post(
+        f"/admin/events/{event_id}/form-fields",
+        headers=headers,
+        json={
+            "type": "SHORT_TEXT",
+            "label": "Новое после отключения",
+            "required": False,
+            "sortOrder": MAX_CUSTOM_ANSWERS,
+        },
+    )
+    assert replacement.status_code == 201, replacement.text
+    with database.connect() as connection:
+        active_total = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM event_form_fields WHERE event_id=:id AND active=true"
+            ),
+            {"id": event_id},
+        ).scalar_one()
+    assert active_total == MAX_CUSTOM_ANSWERS
+
+
+def test_legacy_over_limit_event_can_recover_but_not_grow(
+    client: TestClient,
+) -> None:
+    headers, _ = _login(client)
+    database: Database = client.app.state.database
+    created = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Легаси сверх лимита",
+            "slug": "legacy-over-limit",
+            "location": "КАИТ",
+            "startAt": "2027-10-10T07:00:00Z",
+            "endAt": "2027-10-10T09:00:00Z",
+            "registrationDeadline": "2027-10-09T07:00:00Z",
+            "capacity": 10,
+            "status": "REGISTRATION_OPEN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    # Simulates a form that already exceeds the new limit, e.g. created before
+    # this invariant existed. The new check must never make such an Event's
+    # form fully immutable — only block growth of the active count.
+    _seed_active_fields(database, event_id, MAX_CUSTOM_ANSWERS + 5)
+    fields = client.get(
+        f"/admin/events/{event_id}/form-fields", headers=headers
+    ).json()["items"]
+    assert len(fields) == MAX_CUSTOM_ANSWERS + 5
+    blocked = client.post(
+        f"/admin/events/{event_id}/form-fields",
+        headers=headers,
+        json={
+            "type": "SHORT_TEXT",
+            "label": "Нельзя",
+            "required": False,
+            "sortOrder": 0,
+        },
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["error"]["code"] == "FORM_FIELD_LIMIT_EXCEEDED"
+    edited = client.patch(
+        f"/admin/events/{event_id}/form-fields/{fields[0]['id']}",
+        headers=headers,
+        json={"sortOrder": 999},
+    )
+    assert edited.status_code == 200, edited.text
+    deactivated = client.delete(
+        f"/admin/events/{event_id}/form-fields/{fields[0]['id']}", headers=headers
+    )
+    assert deactivated.status_code == 200, deactivated.text
+
+
+def test_form_field_creation_race_does_not_exceed_limit(client: TestClient) -> None:
+    from event_api.main import create_app
+
+    headers, _ = _login(client)
+    database: Database = client.app.state.database
+    created = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Гонка полей",
+            "slug": "field-limit-race",
+            "location": "КАИТ",
+            "startAt": "2027-10-10T07:00:00Z",
+            "endAt": "2027-10-10T09:00:00Z",
+            "registrationDeadline": "2027-10-09T07:00:00Z",
+            "capacity": 10,
+            "status": "REGISTRATION_OPEN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    _seed_active_fields(database, event_id, MAX_CUSTOM_ANSWERS - 1)
+    barrier = threading.Barrier(2)
+
+    # Each racer logs in on its own connection *before* the barrier: two
+    # concurrent logins for the same staff_users row can themselves deadlock
+    # in MySQL, which would test the login path's locking, not create_field's.
+    # Only the create_field POST itself — the thing under test — runs behind
+    # the barrier.
+    with ExitStack() as stack:
+        staff_clients = [
+            stack.enter_context(TestClient(create_app(client.app.state.settings)))
+            for _ in range(2)
+        ]
+        race_headers = [_login(staff_client)[0] for staff_client in staff_clients]
+
+        def attempt(index: int) -> int:
+            barrier.wait(timeout=10)
+            return (
+                staff_clients[index]
+                .post(
+                    f"/admin/events/{event_id}/form-fields",
+                    headers=race_headers[index],
+                    json={
+                        "type": "SHORT_TEXT",
+                        "label": f"Гонка {index}",
+                        "required": False,
+                        "sortOrder": MAX_CUSTOM_ANSWERS + index,
+                    },
+                )
+                .status_code
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            statuses = list(pool.map(attempt, range(2)))
+    assert sorted(statuses) == [201, 409]
+    with database.connect() as connection:
+        active_total = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM event_form_fields WHERE event_id=:id AND active=true"
+            ),
+            {"id": event_id},
+        ).scalar_one()
+    assert active_total == MAX_CUSTOM_ANSWERS
 
 
 def test_live_event_status_and_closed_catalogue(client: TestClient) -> None:

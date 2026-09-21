@@ -23,6 +23,7 @@ from ..errors import ApiError
 from ..form_config import event_form_config
 from ..media import cover_path, remove_cover, save_cover
 from ..schemas import (
+    MAX_CUSTOM_ANSWERS,
     EventValues,
     FormFieldValues,
     PurgeEventRequest,
@@ -677,6 +678,17 @@ def create_field(
         event = event_row(connection, str(event_id), True, staff.tenant_id)
         if event["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
+        active_count = row(
+            connection,
+            "SELECT COUNT(*) AS total FROM event_form_fields WHERE event_id=:event AND active=true",
+            {"event": str(event_id)},
+        )
+        if int(active_count["total"] if active_count else 0) >= MAX_CUSTOM_ANSWERS:
+            raise ApiError(
+                409,
+                "FORM_FIELD_LIMIT_EXCEEDED",
+                f"Maximum {MAX_CUSTOM_ANSWERS} active custom fields per event",
+            )
         execute(
             connection,
             """INSERT INTO event_form_fields
