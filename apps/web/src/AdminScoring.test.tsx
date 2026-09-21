@@ -5,6 +5,7 @@ import type {
   PersonActivityParticipation,
   PersonStatusAssignment,
   PersonSummary,
+  PolicyVersionDetail,
   ScoringPolicy,
   ScoringPreviewResponse,
   Season,
@@ -17,6 +18,7 @@ import {
   SeasonScoringPanel,
   SimulatorPanel,
   statusState,
+  VersionEditor,
 } from './AdminScoring.js';
 
 describe('scoring v2 administration', () => {
@@ -759,5 +761,59 @@ describe('scoring simulator', () => {
     );
     expect(markup).not.toContain('Результат:');
     expect(markup).not.toContain('Для выбранной комбинации');
+  });
+});
+
+const policyVersionDetail = (
+  overrides: Partial<PolicyVersionDetail> = {},
+): PolicyVersionDetail => ({
+  id: '90000000-0000-4000-8000-000000000001',
+  scoringPolicyId: '30000000-0000-4000-8000-000000000001',
+  version: 1,
+  status: 'DRAFT',
+  effectiveFrom: null,
+  effectiveTo: null,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  publishedAt: null,
+  retiredAt: null,
+  createdBy: null,
+  roleBases: [],
+  levelMultipliers: [],
+  statusMultipliers: [],
+  newcomerTiers: [],
+  resultBonuses: [],
+  ...overrides,
+});
+
+describe('policy version publish form — Moscow boundary labels', () => {
+  it('labels both effective-date inputs as Moscow time, matching the Season activation fix', () => {
+    const markup = renderToStaticMarkup(
+      <VersionEditor
+        policyId="30000000-0000-4000-8000-000000000001"
+        mode="existing"
+        version={policyVersionDetail()}
+        references={{ roles: [], levels: [], results: [], statusTypes: [] }}
+        canManage
+        onSaved={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Начало действия (МСК)');
+    expect(markup).toContain('Окончание действия (МСК, необязательно)');
+  });
+
+  it('does not offer the publish form for a role that cannot manage scoring', () => {
+    const markup = renderToStaticMarkup(
+      <VersionEditor
+        policyId="30000000-0000-4000-8000-000000000001"
+        mode="existing"
+        version={policyVersionDetail()}
+        references={{ roles: [], levels: [], results: [], statusTypes: [] }}
+        canManage={false}
+        onSaved={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(markup).not.toContain('Начало действия');
   });
 });

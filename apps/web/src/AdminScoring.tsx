@@ -313,7 +313,7 @@ const TierRows = ({
   </div>
 );
 
-const VersionEditor = ({
+export const VersionEditor = ({
   policyId,
   mode,
   version,
@@ -365,14 +365,19 @@ const VersionEditor = ({
     setBusy(true);
     setNotice(undefined);
     try {
-      const effectiveFrom = new Date(
+      // Policy version effective boundaries are historical scoring
+      // boundaries and must be interpreted as Europe/Moscow wall-clock time
+      // regardless of the admin's browser timezone — same reasoning and
+      // same helper as Season policy activation (Stage 3.1).
+      const effectiveFrom = zonedLocalToIso(
         String(form.get('effectiveFrom')),
-      ).toISOString();
+        MOSCOW_TIMEZONE,
+      );
       const effectiveToRaw = String(form.get('effectiveTo') ?? '').trim();
       await adminApi.publishScoringPolicyVersion(version.id, {
         effectiveFrom,
         effectiveTo: effectiveToRaw
-          ? new Date(effectiveToRaw).toISOString()
+          ? zonedLocalToIso(effectiveToRaw, MOSCOW_TIMEZONE)
           : null,
       });
       onSaved();
@@ -462,11 +467,11 @@ const VersionEditor = ({
         <form action={(form) => void publish(form)} className="stack-form">
           <h3>Опубликовать</h3>
           <label>
-            <span>Начало действия</span>
+            <span>Начало действия (МСК)</span>
             <input name="effectiveFrom" type="datetime-local" required />
           </label>
           <label>
-            <span>Окончание действия (необязательно)</span>
+            <span>Окончание действия (МСК, необязательно)</span>
             <input name="effectiveTo" type="datetime-local" />
           </label>
           <Button type="submit" disabled={busy}>
@@ -1183,8 +1188,19 @@ export const ScoringAdmin = ({
           .toUpperCase(),
         name: String(form.get('name') ?? '').trim(),
       });
-      await loadReferences();
-      setNotice({ kind: 'success', text: 'Политика создана.' });
+      // Same contract as loadReferences elsewhere in this file: the create
+      // already committed by this point, so a failed refresh must not be
+      // reported (or silently swallowed) as either "creation failed" or an
+      // unqualified "creation succeeded".
+      const refreshed = await loadReferences();
+      setNotice(
+        refreshed
+          ? { kind: 'success', text: 'Политика создана.' }
+          : {
+              kind: 'error',
+              text: 'Политика создана, но не удалось обновить данные на экране. Обновите страницу.',
+            },
+      );
     } catch (error) {
       setNotice(scoringAdminError(error));
     } finally {
