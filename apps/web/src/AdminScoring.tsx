@@ -2,6 +2,8 @@ import type {
   ActivityReference,
   AssignScoringPolicy,
   NewcomerTierValue,
+  PersonStatusAssignment,
+  PersonSummary,
   PolicyVersion,
   PolicyVersionDetail,
   PolicyVersionValues,
@@ -9,6 +11,7 @@ import type {
   ScoringComponentValue,
   ScoringPolicy,
   SessionResponse,
+  StatusAssignment,
   StatusTypeReference,
 } from '@event-registration/contracts';
 import { Button } from '@event-registration/ui';
@@ -80,6 +83,11 @@ const scoringAdminError = (error: unknown): Notice => {
         'Систему начисления для этого сезона нельзя изменить: по ней уже есть начисленные баллы.',
       SEASON_SCORING_POLICY_RETROACTIVE_CONFLICT:
         'Нельзя изменить систему начисления задним числом: в этом периоде уже есть рассчитанные активности.',
+      PERSON_NOT_FOUND: 'Человек не найден.',
+      INVALID_REFERENCE: 'Этот тип статуса недоступен.',
+      PERSON_STATUS_PERIOD_CONFLICT:
+        'Период пересекается с уже существующим статусом такого же типа у этого человека.',
+      PERSON_STATUS_NOT_FOUND: 'Запись о статусе не найдена.',
     };
     return { kind: 'error', text: messages[error.code] ?? error.message };
   }
@@ -614,6 +622,227 @@ export const SeasonScoringPanel = ({
   </section>
 );
 
+const personFullName = (person: {
+  lastName: string;
+  firstName: string;
+  middleName: string | null;
+}) =>
+  [person.lastName, person.firstName, person.middleName]
+    .filter(Boolean)
+    .join(' ');
+
+const todayMoscow = (): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: MOSCOW_TIMEZONE }).format(
+    new Date(),
+  );
+
+// Mirrors the backend's own eligibility check exactly (scoring_v2.py:195-197):
+//   valid_from<=event_date
+//   AND (valid_to IS NULL OR valid_to>=event_date)                  -- inclusive
+//   AND (retired_effective_on IS NULL OR retired_effective_on>event_date)  -- exclusive
+// validTo and retiredEffectiveOn are NOT the same kind of boundary: validTo
+// is the last day the status still counts (inclusive), while
+// retiredEffectiveOn is the first day it no longer counts (exclusive) — a
+// status retired "today" still counts today, matching
+// _status_retirement_boundary's today+1 default. Collapsing the two into one
+// `endsOn <= today` check (as an earlier version of this helper did) is
+// wrong for validTo specifically: it would mark a status ended one day too
+// early.
+export const statusState = (
+  status: PersonStatusAssignment,
+  today: string,
+): 'Активен' | 'Завершён' | null => {
+  if (status.validFrom > today) return null;
+  if (status.retiredEffectiveOn !== null && status.retiredEffectiveOn <= today)
+    return 'Завершён';
+  if (status.validTo !== null && status.validTo < today) return 'Завершён';
+  return 'Активен';
+};
+
+export const PersonStatusPanel = ({
+  statusTypes,
+  canManage,
+  busy,
+  hasSearched,
+  searchResults,
+  selectedPerson,
+  onSearch,
+  onSelectPerson,
+  onClearSelection,
+  statuses,
+  assigning,
+  onBeginAssign,
+  onCancelAssign,
+  onSubmitAssign,
+  onRetire,
+}: {
+  statusTypes: StatusTypeReference[];
+  canManage: boolean;
+  busy: boolean;
+  hasSearched: boolean;
+  searchResults: PersonSummary[];
+  selectedPerson: PersonSummary | undefined;
+  onSearch: (form: FormData) => void;
+  onSelectPerson: (person: PersonSummary) => void;
+  onClearSelection: () => void;
+  statuses: PersonStatusAssignment[];
+  assigning: boolean;
+  onBeginAssign: () => void;
+  onCancelAssign: () => void;
+  onSubmitAssign: (form: FormData) => void;
+  onRetire: (status: PersonStatusAssignment) => void;
+}) => {
+  const today = todayMoscow();
+  const activeStatusTypes = statusTypes.filter((type) => type.active);
+  return (
+    <section className="admin-panel">
+      <h2>Статусы</h2>
+      {!selectedPerson && (
+        <>
+          <form action={onSearch} className="stack-form">
+            <label>
+              <span>Найти человека</span>
+              <input
+                name="query"
+                placeholder="ФИО, email, телефон или группа"
+              />
+            </label>
+            <Button type="submit" disabled={busy}>
+              Найти
+            </Button>
+          </form>
+          <ul className="activity-list">
+            {searchResults.map((person) => (
+              <li key={person.id}>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => onSelectPerson(person)}
+                >
+                  <strong>{personFullName(person)}</strong>
+                  <span>{person.studyGroup ?? person.organization ?? ''}</span>
+                </button>
+              </li>
+            ))}
+            {searchResults.length === 0 && !hasSearched && (
+              <li>Введите запрос и нажмите «Найти».</li>
+            )}
+            {searchResults.length === 0 && hasSearched && (
+              <li>Никого не найдено по этому запросу.</li>
+            )}
+          </ul>
+        </>
+      )}
+      {selectedPerson && (
+        <>
+          <p>
+            <strong>{personFullName(selectedPerson)}</strong>{' '}
+            <button
+              type="button"
+              className="text-button"
+              onClick={onClearSelection}
+            >
+              Выбрать другого человека
+            </button>
+          </p>
+          <div className="participant-table-wrap">
+            <table className="participant-table">
+              <thead>
+                <tr>
+                  <th>Тип статуса</th>
+                  <th>Действует с</th>
+                  <th>Действует до</th>
+                  <th>Состояние</th>
+                  {canManage && <th>Действие</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {statuses.map((status) => {
+                  const state = statusState(status, today);
+                  return (
+                    <tr key={status.id}>
+                      <td>{status.name}</td>
+                      <td>{status.validFrom}</td>
+                      <td>{status.validTo ?? '—'}</td>
+                      <td>{state ?? '—'}</td>
+                      {canManage && (
+                        <td>
+                          {!status.retiredAt && (
+                            <button
+                              type="button"
+                              className="text-button danger-text"
+                              disabled={busy}
+                              onClick={() => onRetire(status)}
+                            >
+                              Завершить
+                            </button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+                {statuses.length === 0 && (
+                  <tr>
+                    <td colSpan={canManage ? 5 : 4}>Статусов пока нет.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          {canManage && !assigning && (
+            <Button onClick={onBeginAssign} disabled={busy}>
+              Добавить статус
+            </Button>
+          )}
+          {canManage && assigning && activeStatusTypes.length === 0 && (
+            <p className="admin-notice">
+              Нет доступных типов статуса. Обратитесь к администратору
+              справочников.
+            </p>
+          )}
+          {canManage && assigning && activeStatusTypes.length > 0 && (
+            <form action={onSubmitAssign} className="stack-form">
+              <label>
+                <span>Тип статуса</span>
+                <select name="statusTypeId" required>
+                  <option value="">Выберите тип статуса…</option>
+                  {activeStatusTypes.map((type) => (
+                    <option key={type.id} value={type.id}>
+                      {type.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Действует с</span>
+                <input name="validFrom" type="date" required />
+              </label>
+              <label>
+                <span>Действует до (необязательно)</span>
+                <input name="validTo" type="date" />
+              </label>
+              <div className="row-actions">
+                <Button type="submit" disabled={busy}>
+                  Сохранить
+                </Button>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={onCancelAssign}
+                  disabled={busy}
+                >
+                  Отмена
+                </button>
+              </div>
+            </form>
+          )}
+        </>
+      )}
+    </section>
+  );
+};
+
 export const ScoringAdmin = ({
   role,
   onBack,
@@ -805,6 +1034,134 @@ export const ScoringAdmin = ({
     }
   };
 
+  const [personResults, setPersonResults] = useState<PersonSummary[]>([]);
+  const [hasSearchedPeople, setHasSearchedPeople] = useState(false);
+  const [selectedPerson, setSelectedPerson] = useState<PersonSummary>();
+  const [personStatuses, setPersonStatuses] = useState<
+    PersonStatusAssignment[]
+  >([]);
+  const [assigningStatus, setAssigningStatus] = useState(false);
+
+  const searchPeople = async (form: FormData) => {
+    const query = String(form.get('query') ?? '').trim();
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      setPersonResults((await adminApi.people(query)).items);
+      setHasSearchedPeople(true);
+    } catch (error) {
+      setNotice(scoringAdminError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Same success/failure contract as loadReferences (§Season): the boolean
+  // return lets a caller distinguish "the mutation committed but this
+  // specific refresh failed" from an actual failure to mutate.
+  const loadPersonStatuses = useCallback(
+    async (personId: string): Promise<boolean> => {
+      try {
+        setPersonStatuses((await adminApi.personStatuses(personId)).items);
+        return true;
+      } catch (error) {
+        setNotice(scoringAdminError(error));
+        return false;
+      }
+    },
+    [],
+  );
+
+  const selectPerson = async (person: PersonSummary) => {
+    setSelectedPerson(person);
+    setAssigningStatus(false);
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      await loadPersonStatuses(person.id);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearPersonSelection = () => {
+    setSelectedPerson(undefined);
+    setPersonStatuses([]);
+    setAssigningStatus(false);
+  };
+
+  const beginAssignStatus = () => {
+    setAssigningStatus(true);
+    setNotice(undefined);
+  };
+
+  const cancelAssignStatus = () => setAssigningStatus(false);
+
+  const assignStatus = async (form: FormData) => {
+    if (!selectedPerson) return;
+    const statusTypeId = String(form.get('statusTypeId') ?? '');
+    const validFrom = String(form.get('validFrom') ?? '');
+    const validToRaw = String(form.get('validTo') ?? '').trim();
+    if (!statusTypeId || !validFrom) return;
+    // Person Status validity is a plain calendar date in this domain
+    // (backend `valid_from`/`valid_to` are DATE, not DATETIME) — the
+    // datetime-local + zonedLocalToIso conversion used for Season's
+    // effective-from does not apply here and must not be used: there is no
+    // time-of-day component to convert, so nothing should touch UTC at all.
+    const values: StatusAssignment = {
+      statusTypeId,
+      validFrom,
+      validTo: validToRaw || null,
+    };
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      await adminApi.assignPersonStatus(selectedPerson.id, values);
+      setAssigningStatus(false);
+      const refreshed = await loadPersonStatuses(selectedPerson.id);
+      setNotice(
+        refreshed
+          ? { kind: 'success', text: 'Статус сохранён.' }
+          : {
+              kind: 'error',
+              text: 'Статус сохранён, но не удалось обновить данные на экране. Обновите страницу.',
+            },
+      );
+    } catch (error) {
+      setNotice(scoringAdminError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const retireStatus = async (status: PersonStatusAssignment) => {
+    if (!selectedPerson) return;
+    if (
+      !window.confirm(
+        `Завершить статус «${status.name}» для «${personFullName(selectedPerson)}»?`,
+      )
+    )
+      return;
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      await adminApi.retirePersonStatus(selectedPerson.id, status.id);
+      const refreshed = await loadPersonStatuses(selectedPerson.id);
+      setNotice(
+        refreshed
+          ? { kind: 'success', text: 'Статус завершён.' }
+          : {
+              kind: 'error',
+              text: 'Статус завершён, но не удалось обновить данные на экране. Обновите страницу.',
+            },
+      );
+    } catch (error) {
+      setNotice(scoringAdminError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const references = useMemo(
     () => ({ roles, levels, results, statusTypes }),
     [roles, levels, results, statusTypes],
@@ -868,6 +1225,23 @@ export const ScoringAdmin = ({
           onBegin={beginSeasonAssignment}
           onCancel={cancelSeasonAssignment}
           onSubmit={(season, form) => void assignSeasonPolicy(season, form)}
+        />
+        <PersonStatusPanel
+          statusTypes={statusTypes}
+          canManage={canManage}
+          busy={busy}
+          hasSearched={hasSearchedPeople}
+          searchResults={personResults}
+          selectedPerson={selectedPerson}
+          onSearch={(form) => void searchPeople(form)}
+          onSelectPerson={(person) => void selectPerson(person)}
+          onClearSelection={clearPersonSelection}
+          statuses={personStatuses}
+          assigning={assigningStatus}
+          onBeginAssign={beginAssignStatus}
+          onCancelAssign={cancelAssignStatus}
+          onSubmitAssign={(form) => void assignStatus(form)}
+          onRetire={(status) => void retireStatus(status)}
         />
         <div className="activity-settings-grid">
           <section className="admin-panel">

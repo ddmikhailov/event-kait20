@@ -160,6 +160,25 @@ export const statusTypeListSchema = z
   .object({ items: z.array(statusTypeReferenceSchema) })
   .strict();
 
+export const personStatusAssignmentSchema = z
+  .object({
+    id: uuidSchema,
+    statusTypeId: uuidSchema,
+    code: z.string(),
+    name: z.string(),
+    validFrom: z.iso.date(),
+    validTo: z.iso.date().nullable(),
+    retiredAt: z.iso.datetime({ offset: true }).nullable(),
+    retiredEffectiveOn: z.iso.date().nullable(),
+  })
+  .strict();
+export const personStatusAssignmentListSchema = z
+  .object({ items: z.array(personStatusAssignmentSchema) })
+  .strict();
+export const personStatusAssignmentCreatedSchema = z
+  .object({ id: uuidSchema })
+  .strict();
+
 export const policyCreatedResponseSchema = z
   .object({ id: uuidSchema })
   .strict();
@@ -188,6 +207,16 @@ export type PolicyVersionList = z.infer<typeof policyVersionListSchema>;
 export type PolicyVersionDetail = z.infer<typeof policyVersionDetailSchema>;
 export type StatusTypeReference = z.infer<typeof statusTypeReferenceSchema>;
 export type StatusTypeList = z.infer<typeof statusTypeListSchema>;
+export type StatusAssignment = z.infer<typeof statusAssignmentSchema>;
+export type PersonStatusAssignment = z.infer<
+  typeof personStatusAssignmentSchema
+>;
+export type PersonStatusAssignmentList = z.infer<
+  typeof personStatusAssignmentListSchema
+>;
+export type PersonStatusAssignmentCreated = z.infer<
+  typeof personStatusAssignmentCreatedSchema
+>;
 export type PolicyCreatedResponse = z.infer<typeof policyCreatedResponseSchema>;
 export type PolicyVersionCreatedResponse = z.infer<
   typeof policyVersionCreatedResponseSchema

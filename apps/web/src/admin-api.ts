@@ -26,6 +26,8 @@ import {
   policyVersionDetailSchema,
   policyVersionCreatedResponseSchema,
   statusTypeListSchema,
+  personStatusAssignmentListSchema,
+  personStatusAssignmentCreatedSchema,
   seasonListSchema,
   seasonSchema,
   staffInvitationResponseSchema,
@@ -81,6 +83,9 @@ import {
   type PolicyVersionCreatedResponse,
   type PublishPolicyVersion,
   type StatusTypeList,
+  type StatusAssignment,
+  type PersonStatusAssignmentList,
+  type PersonStatusAssignmentCreated,
   type Season,
   type SeasonList,
   type SeasonValues,
@@ -285,6 +290,36 @@ export class AdminApiClient {
       '/admin/activity/scoring-v2/status-types',
       { method: 'GET' },
       statusTypeListSchema,
+    );
+  }
+
+  public personStatuses(personId: string): Promise<PersonStatusAssignmentList> {
+    return this.request(
+      `/admin/activity/scoring-v2/people/${encodeURIComponent(personId)}/statuses`,
+      { method: 'GET' },
+      personStatusAssignmentListSchema,
+    );
+  }
+
+  public assignPersonStatus(
+    personId: string,
+    values: StatusAssignment,
+  ): Promise<PersonStatusAssignmentCreated> {
+    return this.request(
+      `/admin/activity/scoring-v2/people/${encodeURIComponent(personId)}/statuses`,
+      { method: 'POST', body: JSON.stringify(values) },
+      personStatusAssignmentCreatedSchema,
+    );
+  }
+
+  public retirePersonStatus(
+    personId: string,
+    assignmentId: string,
+  ): Promise<ActivityOperationResponse> {
+    return this.request(
+      `/admin/activity/scoring-v2/people/${encodeURIComponent(personId)}/statuses/${encodeURIComponent(assignmentId)}`,
+      { method: 'DELETE' },
+      activityOperationResponseSchema,
     );
   }
 
