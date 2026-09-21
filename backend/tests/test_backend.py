@@ -920,6 +920,18 @@ def test_excel_preview_commit_and_safe_export(client: TestClient) -> None:
     )
     source = BytesIO()
     workbook.save(source)
+
+    def offline_data_version() -> int:
+        with database.connect() as connection:
+            return int(
+                connection.execute(
+                    text("SELECT offline_data_version FROM events WHERE id=:id"),
+                    {"id": event_id},
+                ).scalar_one()
+            )
+
+    # D02: preview must not touch Scanner's cache-invalidation version at all.
+    version_before_preview = offline_data_version()
     preview = client.post(
         f"/admin/events/{event_id}/import/preview",
         headers=headers,
@@ -934,6 +946,7 @@ def test_excel_preview_commit_and_safe_export(client: TestClient) -> None:
     assert preview.status_code == 201, preview.text
     assert preview.json()["summary"]["possibleMatchRows"] == 1
     assert preview.json()["rows"][0]["candidates"][0]["personId"] == existing_person_id
+    assert offline_data_version() == version_before_preview
     commit = client.post(
         f"/admin/events/{event_id}/import/{preview.json()['importJobId']}/commit",
         headers=headers,
@@ -945,12 +958,27 @@ def test_excel_preview_commit_and_safe_export(client: TestClient) -> None:
     )
     assert commit.status_code == 200, commit.text
     assert commit.json()["importedRows"] == 1
+    # A successful commit that actually created a Registration must bump the
+    # version exactly once, atomically with the import itself.
+    version_after_commit = offline_data_version()
+    assert version_after_commit == version_before_preview + 1
+    bundle = client.get(f"/scanner/events/{event_id}/offline-bundle", headers=headers)
+    assert bundle.status_code == 200, bundle.text
+    assert bundle.json()["version"] == str(version_after_commit)
+    assert any(
+        item["lastName"] == "Петрова" and item["firstName"] == "Анна"
+        for item in bundle.json()["registrations"]
+    )
     repeated = client.post(
         f"/admin/events/{event_id}/import/{preview.json()['importJobId']}/commit",
         headers=headers,
         json={"mapping": preview.json()["mapping"], "decisions": []},
     )
     assert repeated.status_code == 409
+    # The rejected repeat must not be a second bump — existing idempotency
+    # (a non-PREVIEW_READY job is refused before any write) already prevents
+    # this; this only proves that guarantee still holds.
+    assert offline_data_version() == version_after_commit
     with database.transaction() as connection:
         registration_id = connection.execute(
             text(
@@ -1067,6 +1095,102 @@ def test_excel_preview_commit_and_safe_export(client: TestClient) -> None:
         },
     )
     assert blocked_import.status_code == 409
+
+
+def test_excel_commit_that_imports_nothing_does_not_bump_offline_data_version(
+    client: TestClient,
+) -> None:
+    """D02: a commit can succeed (200, a valid result summary) while
+    importing zero rows — every row was already registered. That batch
+    changed nothing Scanner-visible, so it must not invalidate the cache."""
+    headers, _ = _login(client)
+    database: Database = client.app.state.database
+    created = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Импорт без изменений",
+            "slug": f"excel-noop-{uuid4().hex[:12]}",
+            "description": "Все строки уже зарегистрированы",
+            "startAt": "2027-10-10T10:00:00Z",
+            "endAt": "2027-10-10T12:00:00Z",
+            "location": "КАИТ №20",
+            "registrationDeadline": "2027-10-09T10:00:00Z",
+            "capacity": 100,
+            "status": "DRAFT",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    person_id = str(uuid4())
+    registration_id = str(uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO persons
+                (id,tenant_id,last_name,first_name,middle_name,birth_date,email,email_normalized,phone,phone_normalized,
+                 person_type,organization,study_group,dedup_review_required,created_at,updated_at)
+                VALUES (:id,'50000000-0000-4000-8000-000000000001','Сидоров','Олег',NULL,NULL,
+                        'noop-import@example.com','noop-import@example.com',
+                        NULL,NULL,'KAIT_TEACHER','КАИТ №20',NULL,FALSE,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {"id": person_id},
+        )
+        connection.execute(
+            text(
+                """INSERT INTO registrations
+                (id,public_id,event_id,person_id,source,status,last_name,first_name,
+                 email,person_type,organization,consent_accepted,registered_at,created_at,updated_at)
+                VALUES (:id,:public,:event,:person,'ADMIN_MANUAL','ACTIVE','Сидоров','Олег',
+                        'noop-import@example.com','KAIT_TEACHER','КАИТ №20',TRUE,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": registration_id,
+                "public": str(uuid4()),
+                "event": event_id,
+                "person": person_id,
+            },
+        )
+    workbook = Workbook()
+    sheet = workbook.active
+    assert sheet is not None
+    sheet.append(["Фамилия", "Имя", "Тип участника", "Email"])
+    sheet.append(["Сидоров", "Олег", "KAIT_TEACHER", "noop-import@example.com"])
+    source = BytesIO()
+    workbook.save(source)
+
+    def offline_data_version() -> int:
+        with database.connect() as connection:
+            return int(
+                connection.execute(
+                    text("SELECT offline_data_version FROM events WHERE id=:id"),
+                    {"id": event_id},
+                ).scalar_one()
+            )
+
+    version_before = offline_data_version()
+    preview = client.post(
+        f"/admin/events/{event_id}/import/preview",
+        headers=headers,
+        files={
+            "file": (
+                "participants.xlsx",
+                source.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert preview.status_code == 201, preview.text
+    assert preview.json()["summary"]["alreadyRegisteredRows"] == 1
+    commit = client.post(
+        f"/admin/events/{event_id}/import/{preview.json()['importJobId']}/commit",
+        headers=headers,
+        json={"mapping": preview.json()["mapping"], "decisions": []},
+    )
+    assert commit.status_code == 200, commit.text
+    assert commit.json()["importedRows"] == 0
+    assert commit.json()["duplicateRows"] == 1
+    assert offline_data_version() == version_before
 
 
 def test_stream_capacity_visibility_and_audience(client: TestClient) -> None:

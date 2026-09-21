@@ -860,6 +860,21 @@ def commit(
             persist_answers(connection, registration_id, fields, item["values"])
             imported += 1
             without_email += not bool(data["email"])
+        if imported:
+            # Scanner-visible state actually changed (at least one new
+            # Registration was created) — invalidate its cached offline
+            # bundle the same way every other write that touches
+            # registrations/events does, atomically in this same
+            # transaction. A batch that committed successfully but imported
+            # nothing (every row ERROR/ALREADY_REGISTERED/SKIP) changed
+            # nothing Scanner-visible, so it doesn't bump — matching the
+            # existing precedent in attendance.py, which skips the bump for
+            # a duplicate scan that changes nothing either.
+            execute(
+                connection,
+                "UPDATE events SET offline_data_version=offline_data_version+1,updated_at=UTC_TIMESTAMP(3) WHERE id=:event",
+                {"event": str(event_id)},
+            )
         result = {
             "importJobId": str(job_id),
             "importedRows": imported,
