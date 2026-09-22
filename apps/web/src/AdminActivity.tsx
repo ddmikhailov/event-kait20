@@ -591,7 +591,7 @@ const optionalId = (value: FormDataEntryValue | null) => {
   return text || null;
 };
 
-const fullName = (item: Participation) =>
+export const fullName = (item: Participation) =>
   [
     item.registration.lastName,
     item.registration.firstName,
@@ -600,12 +600,12 @@ const fullName = (item: Participation) =>
     .filter(Boolean)
     .join(' ');
 
-const participationStatus = (status: Participation['status']) =>
+export const participationStatus = (status: Participation['status']) =>
   ({ DRAFT: 'Черновик', CONFIRMED: 'Подтверждено', CANCELLED: 'Отменено' })[
     status
   ];
 
-const scoringStatus = (status: Participation['scoringState']) =>
+export const scoringStatus = (status: Participation['scoringState']) =>
   ({
     NOT_SCORED: 'Не рассчитано',
     AWARDED: 'Начислено',
@@ -627,7 +627,7 @@ const ruleLabel = (
     .filter(Boolean)
     .join(' · ') || 'Любое участие';
 
-const activityError = (error: unknown): Notice => {
+export const activityError = (error: unknown): Notice => {
   if (error instanceof AdminApiError) {
     const messages: Record<string, string> = {
       ATTENDANCE_REQUIRED:
@@ -636,6 +636,11 @@ const activityError = (error: unknown): Notice => {
         'Такое правило пересекается с другим правилом того же приоритета.',
       SCORING_RULE_AMBIGUOUS:
         'Для участия подходят несколько равнозначных правил. Исправьте настройки начисления.',
+      REGISTRATION_NOT_FOUND: 'Регистрация не найдена или неактивна.',
+      PARTICIPATION_NOT_FOUND: 'Запись об участии не найдена.',
+      PARTICIPATION_ROLE_REQUIRED: 'Укажите роль участия.',
+      INVALID_REFERENCE: 'Указанная роль или результат недоступны.',
+      EVENT_NOT_FOUND: 'Мероприятие не найдено.',
     };
     return { kind: 'error', text: messages[error.code] ?? error.message };
   }

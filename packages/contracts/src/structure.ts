@@ -96,6 +96,7 @@ export const activityDirectionUpdateSchema = activityDirectionValuesSchema
   .partial()
   .refine((value) => Object.keys(value).length > 0);
 export type ActivityDirection = z.infer<typeof activityDirectionSchema>;
+export type ActivityDirectionList = z.infer<typeof activityDirectionListSchema>;
 export type ActivityDirectionValues = z.infer<
   typeof activityDirectionValuesSchema
 >;

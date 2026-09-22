@@ -15,6 +15,7 @@ import {
   personDetailResponseSchema,
   personListResponseSchema,
   participationListSchema,
+  activityDirectionListSchema,
   registrationDetailResponseSchema,
   registrationListResponseSchema,
   sendTicketsResponseSchema,
@@ -67,6 +68,7 @@ import {
   type ParticipationCancelRequest,
   type ParticipationConfirmRequest,
   type ParticipationList,
+  type ActivityDirectionList,
   type PurgeEventRequest,
   type RegistrationDetailResponse,
   type RegistrationListResponse,
@@ -388,6 +390,39 @@ export class AdminApiClient {
       `/admin/events/${encodeURIComponent(eventId)}/participations/cancel`,
       { method: 'POST', body: JSON.stringify(values) },
       activityOperationResponseSchema,
+    );
+  }
+
+  public searchParticipations(filters: {
+    query?: string;
+    status?: string;
+    scoringState?: string;
+    seasonId?: string;
+    directionId?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<ParticipationList> {
+    const params = new URLSearchParams();
+    if (filters.query) params.set('query', filters.query);
+    if (filters.status) params.set('status', filters.status);
+    if (filters.scoringState) params.set('scoringState', filters.scoringState);
+    if (filters.seasonId) params.set('seasonId', filters.seasonId);
+    if (filters.directionId) params.set('directionId', filters.directionId);
+    params.set('page', String(filters.page ?? 1));
+    params.set('pageSize', String(filters.pageSize ?? 25));
+    return this.request(
+      `/admin/activity/participations?${params.toString()}`,
+      { method: 'GET' },
+      participationListSchema,
+    );
+  }
+
+  public directions(active?: boolean): Promise<ActivityDirectionList> {
+    const query = active === undefined ? '' : `?active=${active}`;
+    return this.request(
+      `/admin/structure/directions${query}`,
+      { method: 'GET' },
+      activityDirectionListSchema,
     );
   }
 

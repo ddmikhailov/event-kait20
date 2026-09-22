@@ -102,6 +102,12 @@ def participation_response(item: RowMapping) -> dict[str, Any]:
             "studyGroup": item["study_group"],
         },
         "streamTitle": item["stream_title"],
+        "eventTitle": item["event_title"],
+        "eventStartAt": serial(item["event_start_at"]),
+        "seasonId": item["season_id"],
+        "seasonName": item["season_name"],
+        "directionId": item["direction_id"],
+        "directionName": item["direction_name"],
     }
 
 
@@ -112,10 +118,16 @@ PARTICIPATION_SELECT = """SELECT
     p.source AS participation_source,p.scoring_state,p.scoring_sequence,p.confirmed_at,p.finalized_at,
     pr.id AS role_id,pr.code AS role_code,pr.name AS role_name,
     pres.id AS result_id,pres.code AS result_code,pres.name AS result_name,
+    e.title AS event_title,e.start_at AS event_start_at,
+    se.id AS season_id,se.name AS season_name,
+    ad.id AS direction_id,ad.name AS direction_name,
     COALESCE((SELECT SUM(st.points) FROM score_transactions st WHERE st.participation_id=p.id),0) AS score_awarded,
     (SELECT st.reason FROM score_transactions st WHERE st.participation_id=p.id
      ORDER BY st.created_at DESC,st.id DESC LIMIT 1) AS score_reason
 FROM registrations r
+JOIN events e ON e.id=r.event_id
+LEFT JOIN seasons se ON se.id=e.season_id
+LEFT JOIN activity_directions ad ON ad.id=e.direction_id
 LEFT JOIN event_streams s ON s.id=r.stream_id
 LEFT JOIN participations p ON p.registration_id=r.id
 LEFT JOIN participation_roles pr ON pr.id=p.role_id

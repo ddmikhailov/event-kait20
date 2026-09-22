@@ -46,6 +46,7 @@ from ..errors import ApiError
 from ..scoring_v2 import decimal_string
 from ..service_utils import audit, db_json, json_value, naive_utc, serial
 from ..tenant_scope import require_event_in_tenant, require_person_in_tenant
+from .participants import search_pattern
 
 admin = APIRouter(prefix="/admin/activity", tags=["activity"])
 event_admin = APIRouter(prefix="/admin/events", tags=["participations"])
@@ -742,6 +743,71 @@ def deactivate_scoring_rule(
                 str(identity),
             )
     return {"accepted": True}
+
+
+@admin.get("/participations")
+def search_participations(
+    staff: Annotated[Staff, Depends(administrator)],
+    db: Annotated[Database, Depends(database)],
+    query: str = Query("", max_length=200),
+    status: str | None = Query(None, pattern="^(DRAFT|CONFIRMED|CANCELLED)$"),
+    scoring_state: str | None = Query(
+        None, alias="scoringState", pattern="^(NOT_SCORED|AWARDED|NO_RULE|REVERSED)$"
+    ),
+    season_id: UUID | None = Query(None, alias="seasonId"),  # noqa: B008 - Query default
+    direction_id: UUID | None = Query(None, alias="directionId"),  # noqa: B008
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, alias="pageSize", ge=1, le=100),
+) -> dict[str, Any]:
+    # Cross-Event: unlike list_event_participations (scoped to one Event by
+    # its URL), this browses across the whole organisation, so it must do
+    # its own scoping. Organization is the trusted boundary (never
+    # client-supplied — taken from staff.organization_id, mirroring the
+    # pattern in scoring_v2.py/structure.py); tenant check stays as
+    # defense-in-depth alongside it.
+    where = """o.tenant_id=:tenant AND e.organization_id=:organization AND r.status='ACTIVE'
+        AND (:query='' OR concat_ws(' ',r.last_name,r.first_name,r.middle_name) LIKE :search
+             OR coalesce(r.email,'') LIKE :search OR coalesce(r.phone,'') LIKE :search
+             OR coalesce(r.study_group,'') LIKE :search)
+        AND (:status IS NULL OR COALESCE(p.status,'DRAFT')=:status)
+        AND (:scoring_state IS NULL OR COALESCE(p.scoring_state,'NOT_SCORED')=:scoring_state)
+        AND (:season_id IS NULL OR e.season_id=:season_id)
+        AND (:direction_id IS NULL OR e.direction_id=:direction_id)"""
+    params = {
+        "tenant": staff.tenant_id,
+        "organization": staff.organization_id,
+        "query": query,
+        "search": search_pattern(query),
+        "status": status,
+        "scoring_state": scoring_state,
+        "season_id": str(season_id) if season_id else None,
+        "direction_id": str(direction_id) if direction_id else None,
+        "limit": page_size,
+        "offset": (page - 1) * page_size,
+    }
+    with db.connect() as connection:
+        items = rows(
+            connection,
+            PARTICIPATION_SELECT
+            + f" JOIN organizations o ON o.id=e.organization_id WHERE {where}"
+            " ORDER BY e.start_at DESC,r.last_name,r.first_name,r.id LIMIT :limit OFFSET :offset",
+            params,
+        )
+        count = row(
+            connection,
+            f"""SELECT COUNT(*) AS total FROM registrations r
+            JOIN events e ON e.id=r.event_id
+            JOIN organizations o ON o.id=e.organization_id
+            LEFT JOIN participations p ON p.registration_id=r.id
+            WHERE {where}""",
+            params,
+        )
+    return {
+        "items": [participation_response(item) for item in items],
+        "page": page,
+        "pageSize": page_size,
+        "total": int(count["total"] if count else 0),
+    }
 
 
 @event_admin.get("/{event_id}/participations")

@@ -132,6 +132,12 @@ export const participationSchema = z
       })
       .strict(),
     streamTitle: z.string().nullable(),
+    eventTitle: z.string(),
+    eventStartAt: z.iso.datetime({ offset: true }),
+    seasonId: uuidSchema.nullable(),
+    seasonName: z.string().nullable(),
+    directionId: uuidSchema.nullable(),
+    directionName: z.string().nullable(),
   })
   .strict();
 

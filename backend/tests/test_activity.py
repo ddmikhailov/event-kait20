@@ -1855,3 +1855,174 @@ def test_patch_cannot_deactivate_scoring_rule(client: TestClient) -> None:
         409,
         "SCORING_RULE_RETIRE_REQUIRED",
     )
+
+
+def test_search_participations_finds_by_name_with_full_context(
+    client: TestClient,
+) -> None:
+    headers = login(client)
+    database: Database = client.app.state.database
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"SEARCH_{uuid4().hex[:8].upper()}",
+            "name": "Поиск участий",
+            "startsAt": "2026-01-01T00:00:00Z",
+            "endsAt": "2026-12-31T23:59:59Z",
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    direction = client.post(
+        "/admin/structure/directions",
+        headers=headers,
+        json={"code": f"DIR_{uuid4().hex[:8].upper()}", "name": "Профориентация"},
+    )
+    assert direction.status_code == 201, direction.text
+    event = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Поиск участий: мероприятие",
+            "slug": f"search-participations-{uuid4().hex[:8]}",
+            "description": "Search test",
+            "startAt": "2026-08-01T10:00:00Z",
+            "endAt": "2026-08-01T12:00:00Z",
+            "registrationDeadline": "2026-07-31T10:00:00Z",
+            "timezone": "Europe/Moscow",
+            "location": "КАИТ №20",
+            "capacity": 20,
+            "status": "DRAFT",
+            "seasonId": season.json()["id"],
+            "directionId": direction.json()["id"],
+        },
+    )
+    assert event.status_code == 201, event.text
+    event_id = event.json()["id"]
+    create_registration(database, event_id, suffix="search-one")
+
+    found = client.get(
+        "/admin/activity/participations",
+        headers=headers,
+        params={"query": "Участник search-one"},
+    )
+    assert found.status_code == 200, found.text
+    body = found.json()
+    assert body["total"] == 1
+    assert body["page"] == 1
+    assert body["pageSize"] == 25
+    item = body["items"][0]
+    assert item["eventId"] == event_id
+    assert item["eventTitle"] == "Поиск участий: мероприятие"
+    assert item["seasonId"] == season.json()["id"]
+    assert item["seasonName"] == "Поиск участий"
+    assert item["directionId"] == direction.json()["id"]
+    assert item["directionName"] == "Профориентация"
+    assert item["status"] == "DRAFT"
+
+    none_found = client.get(
+        "/admin/activity/participations",
+        headers=headers,
+        params={"query": "СовершенноНеТотЧеловек"},
+    )
+    assert none_found.status_code == 200, none_found.text
+    assert none_found.json()["items"] == []
+
+
+def test_search_participations_filters_by_status_and_scoring_state(
+    client: TestClient,
+) -> None:
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(
+        client, headers, title="Фильтр по статусу", start_at="2026-08-02T10:00:00Z"
+    )
+    create_registration(database, event_id, suffix="filter-status")
+
+    draft_only = client.get(
+        "/admin/activity/participations",
+        headers=headers,
+        params={"query": "filter-status", "status": "DRAFT"},
+    )
+    assert draft_only.status_code == 200, draft_only.text
+    assert len(draft_only.json()["items"]) == 1
+
+    confirmed_only = client.get(
+        "/admin/activity/participations",
+        headers=headers,
+        params={"query": "filter-status", "status": "CONFIRMED"},
+    )
+    assert confirmed_only.status_code == 200, confirmed_only.text
+    assert confirmed_only.json()["items"] == []
+
+    awarded_only = client.get(
+        "/admin/activity/participations",
+        headers=headers,
+        params={"query": "filter-status", "scoringState": "AWARDED"},
+    )
+    assert awarded_only.status_code == 200, awarded_only.text
+    assert awarded_only.json()["items"] == []
+
+    not_scored_only = client.get(
+        "/admin/activity/participations",
+        headers=headers,
+        params={"query": "filter-status", "scoringState": "NOT_SCORED"},
+    )
+    assert not_scored_only.status_code == 200, not_scored_only.text
+    assert len(not_scored_only.json()["items"]) == 1
+
+
+def test_search_participations_excludes_other_organization_in_same_tenant(
+    client: TestClient,
+) -> None:
+    """Same-Tenant, different-Organization: the client's own tenant boundary
+    alone is not enough. admin@example.com belongs to organization
+    51000000-0000-4000-8000-000000000001; a Participation that lives under a
+    second organization in that SAME tenant must never appear in the search,
+    even though require_event_in_tenant's own tenant-only join would allow it.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    other_org = str(uuid4())
+    other_event = str(uuid4())
+    suffix = f"otherorg-{uuid4().hex[:8]}"
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO organizations
+                (id,tenant_id,code,name,active,created_at,updated_at)
+                VALUES (:id,'50000000-0000-4000-8000-000000000001',:code,
+                        'Другая организация того же tenant',true,
+                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {"id": other_org, "code": f"org-{uuid4().hex[:8]}"},
+        )
+        connection.execute(
+            text(
+                """INSERT INTO events
+                (id,organization_id,title,slug,start_at,end_at,timezone,location,
+                 registration_deadline,capacity,status,created_by,created_at,updated_at)
+                VALUES (:id,:organization,'Мероприятие чужой организации',:slug,
+                        '2026-08-03T10:00:00','2026-08-03T12:00:00','Europe/Moscow',
+                        'КАИТ №20','2026-08-02T10:00:00',20,'DRAFT',
+                        (SELECT id FROM staff_users LIMIT 1),
+                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": other_event,
+                "organization": other_org,
+                "slug": f"other-org-event-{uuid4().hex[:8]}",
+            },
+        )
+    create_registration(database, other_event, suffix=suffix)
+
+    response = client.get(
+        "/admin/activity/participations",
+        headers=headers,
+        params={"query": f"Участник {suffix}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["items"] == []
+    assert body["total"] == 0
