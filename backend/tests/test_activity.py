@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -2554,3 +2556,348 @@ def test_admin_profile_get_has_no_side_effect(client: TestClient) -> None:
     )
     assert updated.status_code == 200, updated.text
     assert profile_row_exists(), "the mutating endpoint must still create the row"
+
+
+def test_membership_boundary_adjacent_transfer_valid_same_day_overlap_rejected(
+    client: TestClient,
+) -> None:
+    """N18: student_memberships uses an inclusive [valid_from, valid_to]
+    interval (both bounds inclusive) at the SQL level. This proves the exact
+    boundary rule a future transfer must respect: ending the old period the
+    day BEFORE the new one starts is valid (no overlap), while ending it on
+    the SAME day the new one starts is rejected as an overlap - the two
+    scenarios TODO1 N18 calls out as A and B.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Membership boundary event")
+    group_a = create_study_group(client, headers, "BOUNDARY_A", "BOUNDARY_DEPT_A", 1)
+    group_b = create_study_group(client, headers, "BOUNDARY_B", "BOUNDARY_DEPT_B", 2)
+
+    # A. Old ends 2026-09-30, new starts 2026-10-01 (adjacent, D-1) -> valid.
+    _, valid_person = create_registration_for_person(
+        database, event_id, "boundary-valid"
+    )
+    old_valid = client.post(
+        f"/admin/people/{valid_person}/memberships",
+        headers=headers,
+        json={
+            "studyGroupId": group_a,
+            "validFrom": "2026-09-01",
+            "validTo": "2026-09-30",
+        },
+    )
+    assert old_valid.status_code == 201, old_valid.text
+    new_valid = client.post(
+        f"/admin/people/{valid_person}/memberships",
+        headers=headers,
+        json={"studyGroupId": group_b, "validFrom": "2026-10-01", "validTo": None},
+    )
+    assert new_valid.status_code == 201, new_valid.text
+
+    # B. Old ends 2026-10-01, new starts 2026-10-01 (same day) -> overlap.
+    _, overlap_person = create_registration_for_person(
+        database, event_id, "boundary-overlap"
+    )
+    old_overlap = client.post(
+        f"/admin/people/{overlap_person}/memberships",
+        headers=headers,
+        json={
+            "studyGroupId": group_a,
+            "validFrom": "2026-09-01",
+            "validTo": "2026-10-01",
+        },
+    )
+    assert old_overlap.status_code == 201, old_overlap.text
+    new_overlap = client.post(
+        f"/admin/people/{overlap_person}/memberships",
+        headers=headers,
+        json={"studyGroupId": group_b, "validFrom": "2026-10-01", "validTo": None},
+    )
+    assert new_overlap.status_code == 409, new_overlap.text
+    assert new_overlap.json()["error"]["code"] == "MEMBERSHIP_PERIOD_OVERLAP"
+
+
+def test_membership_boundary_resolves_exactly_one_membership_at_transfer_date(
+    client: TestClient,
+) -> None:
+    """N18, scenarios C and D: an Event on the old period's last valid day
+    resolves to the old membership; an Event the day after (the new period's
+    first valid day) resolves to the new one. Exactly one row must match on
+    each side of the boundary - never zero, never two.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    group_old = create_study_group(client, headers, "TRANSFER_OLD", "TRANSFER_DEPT", 3)
+    group_new = create_study_group(client, headers, "TRANSFER_NEW", "TRANSFER_DEPT", 3)
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"TRANSFER_{uuid4().hex[:8].upper()}",
+            "name": "Transfer boundary season",
+            "startsAt": "2026-01-01T00:00:00Z",
+            "endsAt": "2026-12-31T23:59:59Z",
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    rule = client.post(
+        "/admin/activity/scoring-rules",
+        headers=headers,
+        json={
+            "seasonId": season.json()["id"],
+            "participationRoleId": role["id"],
+            "points": 5,
+            "priority": 401,
+            "active": True,
+            "validFrom": None,
+            "validTo": None,
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    before_event, _ = create_event(
+        client,
+        headers,
+        title="Transfer boundary before",
+        start_at="2026-09-30T10:00:00Z",
+        end_at="2026-09-30T11:00:00Z",
+        season_id=season.json()["id"],
+    )
+    after_event, _ = create_event(
+        client,
+        headers,
+        title="Transfer boundary after",
+        start_at="2026-10-01T10:00:00Z",
+        end_at="2026-10-01T11:00:00Z",
+        season_id=season.json()["id"],
+    )
+    before_registration, person_id = create_registration_for_person(
+        database, before_event, "transfer-boundary"
+    )
+    after_registration, _ = create_registration_for_person(
+        database, after_event, "transfer-boundary", person_id
+    )
+    old_membership = client.post(
+        f"/admin/people/{person_id}/memberships",
+        headers=headers,
+        json={
+            "studyGroupId": group_old,
+            "validFrom": "2026-09-01",
+            "validTo": "2026-09-30",
+        },
+    )
+    assert old_membership.status_code == 201, old_membership.text
+    new_membership = client.post(
+        f"/admin/people/{person_id}/memberships",
+        headers=headers,
+        json={"studyGroupId": group_new, "validFrom": "2026-10-01", "validTo": None},
+    )
+    assert new_membership.status_code == 201, new_membership.text
+    for event_id, registration_id in (
+        (before_event, before_registration),
+        (after_event, after_registration),
+    ):
+        confirmed = client.post(
+            f"/admin/events/{event_id}/participations/confirm",
+            headers=headers,
+            json={"registrationIds": [registration_id], "roleId": role["id"]},
+        )
+        assert confirmed.status_code == 200, confirmed.text
+    with database.connect() as connection:
+        attributed = connection.execute(
+            text("""SELECT e.title,st.membership_id FROM score_transactions st
+            JOIN participations p ON p.id=st.participation_id
+            JOIN events e ON e.id=p.event_id
+            WHERE st.person_id=:person AND st.transaction_type='AWARD'
+            ORDER BY e.start_at"""),
+            {"person": person_id},
+        ).all()
+    assert [row[1] for row in attributed] == [
+        old_membership.json()["id"],
+        new_membership.json()["id"],
+    ]
+
+
+def test_concurrent_membership_creation_cannot_create_overlap(
+    client: TestClient,
+) -> None:
+    """N18: create_membership()'s first statement locks the Person row FOR
+    UPDATE before the overlap check runs, so two concurrent attempts for the
+    same Person must serialize - never both succeed with overlapping
+    periods. Proven with a genuinely overlapping pair of periods: exactly one
+    must be accepted and the other rejected, regardless of scheduling.
+    """
+    from event_api.main import create_app
+
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Membership race event")
+    _, person_id = create_registration_for_person(database, event_id, "membership-race")
+    group_a = create_study_group(client, headers, "RACE_A", "RACE_DEPT_A", 1)
+    group_b = create_study_group(client, headers, "RACE_B", "RACE_DEPT_B", 2)
+    barrier = threading.Barrier(2)
+
+    with ExitStack() as stack:
+        staff_clients = [
+            stack.enter_context(TestClient(create_app(client.app.state.settings)))
+            for _ in range(2)
+        ]
+        race_headers = [login(staff_client) for staff_client in staff_clients]
+        payloads = (
+            {
+                "studyGroupId": group_a,
+                "validFrom": "2026-09-01",
+                "validTo": "2026-09-30",
+            },
+            {
+                "studyGroupId": group_b,
+                "validFrom": "2026-09-15",
+                "validTo": "2026-10-15",
+            },
+        )
+
+        def attempt(index: int) -> int:
+            barrier.wait(timeout=10)
+            return (
+                staff_clients[index]
+                .post(
+                    f"/admin/people/{person_id}/memberships",
+                    headers=race_headers[index],
+                    json=payloads[index],
+                )
+                .status_code
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            statuses = list(pool.map(attempt, range(2)))
+
+    assert sorted(statuses) == [201, 409], statuses
+    with database.connect() as connection:
+        total = connection.execute(
+            text("SELECT COUNT(*) FROM student_memberships WHERE person_id=:person"),
+            {"person": person_id},
+        ).scalar_one()
+    assert total == 1, "the rejected racer must not have inserted a row"
+
+
+def test_ambiguous_legacy_membership_blocks_award_and_is_audited(
+    client: TestClient,
+) -> None:
+    """N18: the application-level overlap check makes new writes incapable
+    of creating an ambiguous membership window, but pre-existing/legacy data
+    could still contain one (this is not fixed here - see CLAUDE_REVIEW.md's
+    reconciliation note). This proves the existing, unmodified safety net:
+    when membership_for_activity() finds more than one matching row, it
+    leaves score_transactions.membership_id NULL and audits
+    SCORE_MEMBERSHIP_AMBIGUOUS, rather than guessing or silently picking one.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"AMBIG_{uuid4().hex[:8].upper()}",
+            "name": "Ambiguous membership season",
+            "startsAt": "2026-01-01T00:00:00Z",
+            "endsAt": "2026-12-31T23:59:59Z",
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    rule = client.post(
+        "/admin/activity/scoring-rules",
+        headers=headers,
+        json={
+            "seasonId": season.json()["id"],
+            "participationRoleId": role["id"],
+            "points": 5,
+            "priority": 402,
+            "active": True,
+            "validFrom": None,
+            "validTo": None,
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    event_id, _ = create_event(
+        client,
+        headers,
+        title="Ambiguous membership event",
+        start_at="2026-06-15T10:00:00Z",
+        end_at="2026-06-15T11:00:00Z",
+        season_id=season.json()["id"],
+    )
+    registration_id, person_id = create_registration_for_person(
+        database, event_id, "ambiguous-membership"
+    )
+    group_a = create_study_group(client, headers, "AMBIG_A", "AMBIG_DEPT_A", 1)
+    group_b = create_study_group(client, headers, "AMBIG_B", "AMBIG_DEPT_B", 2)
+    # Simulates pre-existing/legacy data the application-level overlap check
+    # could never itself produce - inserted directly, bypassing the API, the
+    # same way an unreconciled historical import might have.
+    with database.transaction() as connection:
+        for study_group_id in (group_a, group_b):
+            group = (
+                connection.execute(
+                    text(
+                        "SELECT organization_id,department_id,course,name FROM study_groups WHERE id=:id"
+                    ),
+                    {"id": study_group_id},
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO student_memberships
+                    (id,person_id,organization_id,department_id,study_group_id,course,
+                     study_group,department,valid_from,valid_to,created_at,updated_at)
+                    VALUES (:id,:person,:organization,:department,:study_group,:course,
+                            :study_group_name,'Ambiguous',:valid_from,:valid_to,
+                            UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+                ),
+                {
+                    "id": str(uuid4()),
+                    "person": person_id,
+                    "organization": group["organization_id"],
+                    "department": group["department_id"],
+                    "study_group": study_group_id,
+                    "course": group["course"],
+                    "study_group_name": group["name"],
+                    "valid_from": "2026-06-01",
+                    "valid_to": "2026-06-30",
+                },
+            )
+    confirmed = client.post(
+        f"/admin/events/{event_id}/participations/confirm",
+        headers=headers,
+        json={"registrationIds": [registration_id], "roleId": role["id"]},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    participation_id = confirmed.json()["participationIds"][0]
+    with database.connect() as connection:
+        award = connection.execute(
+            text(
+                "SELECT membership_id FROM score_transactions WHERE participation_id=:id AND transaction_type='AWARD'"
+            ),
+            {"id": participation_id},
+        ).scalar_one()
+        ambiguous_audit = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM audit_log WHERE action='SCORE_MEMBERSHIP_AMBIGUOUS' AND entity_id=:id"
+            ),
+            {"id": participation_id},
+        ).scalar_one()
+    assert award is None, "an ambiguous match must not silently pick one membership"
+    assert ambiguous_audit == 1

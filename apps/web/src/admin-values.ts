@@ -1,11 +1,15 @@
 import {
   createEventRequestSchema,
   createFormFieldRequestSchema,
+  seasonValuesSchema,
   type CreateEventRequest,
   type CreateFormFieldRequest,
   type EventResponse,
   type FormFieldResponse,
+  type SeasonValues,
 } from '@event-registration/contracts';
+
+const MOSCOW_TIMEZONE = 'Europe/Moscow';
 
 export const eventValues = (form: FormData): CreateEventRequest => {
   const timezone = 'Europe/Moscow';
@@ -33,6 +37,15 @@ export const eventValues = (form: FormData): CreateEventRequest => {
     status: text(form, 'status'),
   });
 };
+
+export const seasonValues = (form: FormData): SeasonValues =>
+  seasonValuesSchema.parse({
+    code: text(form, 'code').trim().toUpperCase(),
+    name: text(form, 'name').trim(),
+    startsAt: zonedLocalToIso(text(form, 'startsAt'), MOSCOW_TIMEZONE),
+    endsAt: zonedLocalToIso(text(form, 'endsAt'), MOSCOW_TIMEZONE),
+    active: form.get('active') === 'on',
+  });
 
 export const formFieldValues = (form: FormData): CreateFormFieldRequest => {
   const type = text(form, 'type');

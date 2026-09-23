@@ -22,13 +22,14 @@ from ..dependencies import Staff, administrator, csrf_administrator, database, s
 from ..errors import ApiError
 from ..form_config import validate_system_fields
 from ..registration_service import (
-    acquire_person_locks,
+    acquire_lock_keys,
     create_person,
     create_registration,
     find_or_create_person,
     form_fields,
     participant,
     persist_answers,
+    person_lock_keys,
     release_person_locks,
     validate_answers,
     validate_participant_type,
@@ -765,56 +766,96 @@ def commit(
 ) -> dict[str, Any]:
     body = values.model_dump(mode="json", by_alias=True, exclude_none=True)
     decisions = {int(item["rowNumber"]): item for item in body.get("decisions", [])}
-    with db.transaction() as connection:
-        job = row(
-            connection,
-            """SELECT j.*,f.file_data FROM import_jobs j LEFT JOIN import_job_files f ON f.import_job_id=j.id
-            WHERE j.id=:id AND j.event_id=:event FOR UPDATE""",
-            {"id": str(job_id), "event": str(event_id)},
-        )
-        if (
-            not job
-            or job["status"] != "PREVIEW_READY"
-            or job["expires_at"] <= datetime.now(UTC).replace(tzinfo=None)
-            or not job["file_data"]
-        ):
-            raise ApiError(409, "CONFLICT", "Import preview is no longer available")
-        mapping_json = json.dumps(body.get("mapping", {}), ensure_ascii=False)
-        fields = form_fields(connection, str(event_id))
-        _, _, parsed = _parse(bytes(job["file_data"]), mapping_json, fields)
-        classified = _classify(connection, str(event_id), parsed, fields)
-        event = _event(
-            connection,
-            str(event_id),
-            True,
-            tenant_id=staff.tenant_id,
-            organization_id=staff.organization_id,
-        )
-        imported = skipped = duplicates = errors = without_email = 0
-        for item in classified:
-            if item["category"] == "ERROR":
-                errors += 1
-                continue
-            if item["category"] == "ALREADY_REGISTERED":
-                duplicates += 1
-                continue
-            decision = decisions.get(item["rowNumber"])
-            if item["category"] == "POSSIBLE_MATCH" and not decision:
-                raise ApiError(409, "CONFLICT", "Every possible match needs a decision")
-            if decision and decision.get("action") == "SKIP":
-                skipped += 1
-                continue
-            validate_system_fields(event, item["values"], "onsite")
-            validate_answers(fields, item["values"], onsite=True)
-            validate_participant_type(event, str(item["values"].person_type or "OTHER"))
-            stream = selected_stream(
+    # Every row's Person identity lock must stay held until this whole
+    # batch's transaction actually commits (or rolls back) - a lock released
+    # right after find_or_create_person() but before COMMIT lets a second
+    # concurrent commit resolve the same new identity before it becomes
+    # visible, and both sides create a duplicate Person. All locks acquired
+    # across every row are accumulated here and released together only once
+    # the transaction outcome is final, on the same connection that acquired
+    # them - the same acquire-then-commit-then-release lifecycle
+    # registrations.py's register()/onsite() already use.
+    all_locks: list[str] = []
+    with db.connect() as connection:
+        transaction = connection.begin()
+        try:
+            job = row(
                 connection,
-                event,
-                str(item["values"].stream_id) if item["values"].stream_id else None,
+                """SELECT j.*,f.file_data FROM import_jobs j LEFT JOIN import_job_files f ON f.import_job_id=j.id
+                WHERE j.id=:id AND j.event_id=:event FOR UPDATE""",
+                {"id": str(job_id), "event": str(event_id)},
             )
-            data = participant(item["values"])
-            locks = acquire_person_locks(connection, data, staff.tenant_id)
-            try:
+            if (
+                not job
+                or job["status"] != "PREVIEW_READY"
+                or job["expires_at"] <= datetime.now(UTC).replace(tzinfo=None)
+                or not job["file_data"]
+            ):
+                raise ApiError(409, "CONFLICT", "Import preview is no longer available")
+            mapping_json = json.dumps(body.get("mapping", {}), ensure_ascii=False)
+            fields = form_fields(connection, str(event_id))
+            _, _, parsed = _parse(bytes(job["file_data"]), mapping_json, fields)
+            classified = _classify(connection, str(event_id), parsed, fields)
+            event = _event(
+                connection,
+                str(event_id),
+                True,
+                tenant_id=staff.tenant_id,
+                organization_id=staff.organization_id,
+            )
+            imported = skipped = duplicates = errors = without_email = 0
+            # Pass 1: classify and validate every row, but acquire no locks
+            # yet and mutate nothing. Rows that terminate here (ERROR,
+            # ALREADY_REGISTERED, an explicit SKIP decision) never need a
+            # Person identity lock at all. Collecting every surviving row's
+            # lock keys first lets the whole batch acquire them in one
+            # deterministic, globally-sorted, de-duplicated order below -
+            # acquiring one Person's lock at a time, interleaved with DB
+            # work, is what let two concurrent imports whose rows are
+            # ordered differently each hold what the other needed next and
+            # deadlock/time out against each other.
+            to_process: list[
+                tuple[Any, dict[str, Any] | None, Any, dict[str, Any]]
+            ] = []
+            for item in classified:
+                if item["category"] == "ERROR":
+                    errors += 1
+                    continue
+                if item["category"] == "ALREADY_REGISTERED":
+                    duplicates += 1
+                    continue
+                decision = decisions.get(item["rowNumber"])
+                if item["category"] == "POSSIBLE_MATCH" and not decision:
+                    raise ApiError(
+                        409, "CONFLICT", "Every possible match needs a decision"
+                    )
+                if decision and decision.get("action") == "SKIP":
+                    skipped += 1
+                    continue
+                validate_system_fields(event, item["values"], "onsite")
+                validate_answers(fields, item["values"], onsite=True)
+                validate_participant_type(
+                    event, str(item["values"].person_type or "OTHER")
+                )
+                stream = selected_stream(
+                    connection,
+                    event,
+                    str(item["values"].stream_id) if item["values"].stream_id else None,
+                )
+                data = participant(item["values"])
+                to_process.append((item, decision, stream, data))
+            all_keys = sorted(
+                {
+                    key
+                    for _, _, _, data in to_process
+                    for key in person_lock_keys(data, staff.tenant_id)
+                }
+            )
+            all_locks.extend(acquire_lock_keys(connection, all_keys))
+            # Pass 2: every row's Person identity lock for this whole batch
+            # is now held - safe to resolve/create Persons and write
+            # Registrations.
+            for item, decision, stream, data in to_process:
                 if decision and decision.get("action") == "USE_PERSON":
                     person_id = str(decision["personId"])
                     candidate_ids = {
@@ -835,96 +876,100 @@ def commit(
                     )
                 else:
                     person_id = find_or_create_person(connection, data, staff.tenant_id)
-            finally:
-                release_person_locks(connection, locks)
-            existing = row(
-                connection,
-                "SELECT id FROM registrations WHERE event_id=:event AND person_id=:person AND status='ACTIVE'",
-                {"event": str(event_id), "person": person_id},
-            )
-            if existing:
-                duplicates += 1
-                continue
-            active_row = row(
-                connection,
-                "SELECT count(*) count FROM registrations WHERE event_id=:event AND status='ACTIVE'",
-                {"event": str(event_id)},
-            )
-            active = int(active_row["count"] if active_row else 0)
-            if (
-                stream is None
-                and active >= int(event["capacity"])
-                and not body.get("capacityOverride", False)
-            ):
-                raise ApiError(
-                    409, "CAPACITY_FULL", "Import would exceed Event capacity"
-                )
-            if stream:
-                occupied = row(
+                existing = row(
                     connection,
-                    "SELECT COUNT(*) AS total FROM registrations WHERE stream_id=:id AND status='ACTIVE'",
-                    {"id": stream["id"]},
+                    "SELECT id FROM registrations WHERE event_id=:event AND person_id=:person AND status='ACTIVE'",
+                    {"event": str(event_id), "person": person_id},
                 )
-                if int(occupied["total"] if occupied else 0) >= stream[
-                    "capacity"
-                ] and not body.get("capacityOverride", False):
+                if existing:
+                    duplicates += 1
+                    continue
+                active_row = row(
+                    connection,
+                    "SELECT count(*) count FROM registrations WHERE event_id=:event AND status='ACTIVE'",
+                    {"event": str(event_id)},
+                )
+                active = int(active_row["count"] if active_row else 0)
+                if (
+                    stream is None
+                    and active >= int(event["capacity"])
+                    and not body.get("capacityOverride", False)
+                ):
                     raise ApiError(
-                        409, "CAPACITY_FULL", "Import would exceed stream capacity"
+                        409, "CAPACITY_FULL", "Import would exceed Event capacity"
                     )
-            registration_id, _ = create_registration(
+                if stream:
+                    occupied = row(
+                        connection,
+                        "SELECT COUNT(*) AS total FROM registrations WHERE stream_id=:id AND status='ACTIVE'",
+                        {"id": stream["id"]},
+                    )
+                    if int(occupied["total"] if occupied else 0) >= stream[
+                        "capacity"
+                    ] and not body.get("capacityOverride", False):
+                        raise ApiError(
+                            409, "CAPACITY_FULL", "Import would exceed stream capacity"
+                        )
+                registration_id, _ = create_registration(
+                    connection,
+                    str(event_id),
+                    person_id,
+                    data,
+                    "EXCEL_IMPORT",
+                    False,
+                    config,
+                    stream["id"] if stream else None,
+                )
+                persist_answers(connection, registration_id, fields, item["values"])
+                imported += 1
+                without_email += not bool(data["email"])
+            if imported:
+                # Scanner-visible state actually changed (at least one new
+                # Registration was created) — invalidate its cached offline
+                # bundle the same way every other write that touches
+                # registrations/events does, atomically in this same
+                # transaction. A batch that committed successfully but imported
+                # nothing (every row ERROR/ALREADY_REGISTERED/SKIP) changed
+                # nothing Scanner-visible, so it doesn't bump — matching the
+                # existing precedent in attendance.py, which skips the bump for
+                # a duplicate scan that changes nothing either.
+                execute(
+                    connection,
+                    "UPDATE events SET offline_data_version=offline_data_version+1,updated_at=UTC_TIMESTAMP(3) WHERE id=:event",
+                    {"event": str(event_id)},
+                )
+            result = {
+                "importJobId": str(job_id),
+                "importedRows": imported,
+                "skippedRows": skipped,
+                "duplicateRows": duplicates,
+                "errorRows": errors,
+                "withoutEmailRows": without_email,
+            }
+            audit(
                 connection,
-                str(event_id),
-                person_id,
-                data,
-                "EXCEL_IMPORT",
-                False,
-                config,
-                stream["id"] if stream else None,
+                staff.id,
+                "IMPORT_COMMITTED",
+                "ImportJob",
+                str(job_id),
+                {**result, "capacityOverride": values.capacity_override},
             )
-            persist_answers(connection, registration_id, fields, item["values"])
-            imported += 1
-            without_email += not bool(data["email"])
-        if imported:
-            # Scanner-visible state actually changed (at least one new
-            # Registration was created) — invalidate its cached offline
-            # bundle the same way every other write that touches
-            # registrations/events does, atomically in this same
-            # transaction. A batch that committed successfully but imported
-            # nothing (every row ERROR/ALREADY_REGISTERED/SKIP) changed
-            # nothing Scanner-visible, so it doesn't bump — matching the
-            # existing precedent in attendance.py, which skips the bump for
-            # a duplicate scan that changes nothing either.
             execute(
                 connection,
-                "UPDATE events SET offline_data_version=offline_data_version+1,updated_at=UTC_TIMESTAMP(3) WHERE id=:event",
-                {"event": str(event_id)},
+                "UPDATE import_jobs SET status='COMPLETED',result_summary=:summary,committed_at=UTC_TIMESTAMP(3),updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
+                {"id": str(job_id), "summary": db_json(result)},
             )
-        result = {
-            "importJobId": str(job_id),
-            "importedRows": imported,
-            "skippedRows": skipped,
-            "duplicateRows": duplicates,
-            "errorRows": errors,
-            "withoutEmailRows": without_email,
-        }
-        audit(
-            connection,
-            staff.id,
-            "IMPORT_COMMITTED",
-            "ImportJob",
-            str(job_id),
-            {**result, "capacityOverride": values.capacity_override},
-        )
-        execute(
-            connection,
-            "UPDATE import_jobs SET status='COMPLETED',result_summary=:summary,committed_at=UTC_TIMESTAMP(3),updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
-            {"id": str(job_id), "summary": db_json(result)},
-        )
-        execute(
-            connection,
-            "DELETE FROM import_job_files WHERE import_job_id=:id",
-            {"id": str(job_id)},
-        )
+            execute(
+                connection,
+                "DELETE FROM import_job_files WHERE import_job_id=:id",
+                {"id": str(job_id)},
+            )
+            transaction.commit()
+        except Exception:
+            transaction.rollback()
+            raise
+        finally:
+            release_person_locks(connection, all_locks)
     return result
 
 

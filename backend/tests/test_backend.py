@@ -3255,3 +3255,438 @@ def test_event_crud_and_related_surfaces_reject_event_outside_staff_scope(
         ).status_code
         == 200
     )
+
+
+def _excel_workbook_for(
+    last_name: str,
+    first_name: str,
+    middle_name: str,
+    email: str,
+    phone: str,
+    birth_date: str,
+) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    assert sheet is not None
+    sheet.append(
+        [
+            "Фамилия",
+            "Имя",
+            "Отчество",
+            "Дата рождения",
+            "Тип участника",
+            "Группа",
+            "Организация",
+            "Телефон",
+            "Email",
+        ]
+    )
+    sheet.append(
+        [
+            last_name,
+            first_name,
+            middle_name,
+            birth_date,
+            "EXTERNAL_STUDENT",
+            "",
+            "",
+            phone,
+            email,
+        ]
+    )
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _excel_workbook_with_rows(identities: list[dict[str, str]]) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    assert sheet is not None
+    sheet.append(
+        [
+            "Фамилия",
+            "Имя",
+            "Отчество",
+            "Дата рождения",
+            "Тип участника",
+            "Группа",
+            "Организация",
+            "Телефон",
+            "Email",
+        ]
+    )
+    for identity in identities:
+        sheet.append(
+            [
+                identity["last_name"],
+                identity["first_name"],
+                identity["middle_name"],
+                identity["birth_date"],
+                "EXTERNAL_STUDENT",
+                "",
+                "",
+                identity["phone"],
+                identity["email"],
+            ]
+        )
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def test_excel_concurrent_commits_with_opposite_row_order_do_not_deadlock(
+    client: TestClient,
+) -> None:
+    """N12 correction: acquiring each row's Person lock one at a time,
+    interleaved with DB work, is not enough once locks are held until COMMIT
+    - two concurrent batches whose rows name the same two new identities in
+    OPPOSITE order could each acquire the first row's lock, then block
+    forever waiting for the second row's lock the other side is holding.
+    commit() must instead collect every surviving row's lock keys up front
+    and acquire the whole batch's keys in one global, deterministic,
+    de-duplicated order - so this scenario can never deadlock, regardless of
+    each workbook's row order.
+    """
+    from event_api.main import create_app
+
+    owner_headers, _ = _login(client)
+    database: Database = client.app.state.database
+
+    def create_event(suffix: str) -> str:
+        created = client.post(
+            "/admin/events",
+            headers=owner_headers,
+            json={
+                "title": f"Импорт-гонка порядка {suffix}",
+                "slug": f"excel-lock-order-{suffix}-{uuid4().hex[:8]}",
+                "location": "КАИТ №20",
+                "startAt": "2027-10-18T07:00:00Z",
+                "endAt": "2027-10-18T17:00:00Z",
+                "registrationDeadline": "2027-10-17T07:00:00Z",
+                "capacity": 10,
+                "status": "DRAFT",
+            },
+        )
+        assert created.status_code == 201, created.text
+        return created.json()["id"]
+
+    event_a, event_b = create_event("a"), create_event("b")
+    suffix = uuid4().hex[:8]
+    identity_a = dict(
+        last_name="Порядков",
+        first_name="Первый",
+        middle_name="Разный",
+        email=f"lock-order-a-{suffix}@example.com",
+        phone="+79993335511",
+        birth_date="2005-07-07",
+    )
+    identity_b = dict(
+        last_name="Обратный",
+        first_name="Второй",
+        middle_name="Разный",
+        email=f"lock-order-b-{suffix}@example.com",
+        phone="+79993335522",
+        birth_date="2005-08-08",
+    )
+    # Workbook 1 lists A then B; workbook 2 lists B then A - opposite order,
+    # same two brand-new identities, imported into different Events.
+    workbook_forward = _excel_workbook_with_rows([identity_a, identity_b])
+    workbook_reverse = _excel_workbook_with_rows([identity_b, identity_a])
+    barrier = threading.Barrier(2)
+
+    with ExitStack() as stack:
+        staff_clients = [
+            stack.enter_context(TestClient(create_app(client.app.state.settings)))
+            for _ in range(2)
+        ]
+        race_headers = [_login(staff_client)[0] for staff_client in staff_clients]
+
+        jobs = []
+        for staff_client, headers, event_id, workbook_bytes in zip(
+            staff_clients,
+            race_headers,
+            (event_a, event_b),
+            (workbook_forward, workbook_reverse),
+            strict=True,
+        ):
+            preview = staff_client.post(
+                f"/admin/events/{event_id}/import/preview",
+                headers=headers,
+                files={
+                    "file": (
+                        "import.xlsx",
+                        workbook_bytes,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+            assert preview.status_code == 201, preview.text
+            jobs.append((preview.json()["importJobId"], preview.json()["mapping"]))
+
+        def commit_batch(index: int) -> int:
+            job_id, mapping = jobs[index]
+            event_id = (event_a, event_b)[index]
+            barrier.wait(timeout=10)
+            return (
+                staff_clients[index]
+                .post(
+                    f"/admin/events/{event_id}/import/{job_id}/commit",
+                    headers=race_headers[index],
+                    json={
+                        "mapping": mapping,
+                        "decisions": [],
+                        "capacityOverride": False,
+                    },
+                )
+                .status_code
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            statuses = list(pool.map(commit_batch, range(2)))
+
+    assert statuses == [200, 200], statuses
+    with database.connect() as connection:
+        person_count = connection.execute(
+            text("SELECT COUNT(*) FROM persons WHERE email_normalized IN (:a,:b)"),
+            {"a": identity_a["email"], "b": identity_b["email"]},
+        ).scalar_one()
+        registration_count = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM registrations WHERE event_id IN (:a,:b) AND status='ACTIVE'"
+            ),
+            {"a": event_a, "b": event_b},
+        ).scalar_one()
+    assert person_count == 2, (
+        "two distinct identities must resolve to two canonical Persons"
+    )
+    assert registration_count == 4, "each Event gets a Registration for both identities"
+
+
+def test_excel_concurrent_commits_of_the_same_new_identity_create_one_person(
+    client: TestClient,
+) -> None:
+    """N12: the Person identity lock acquired inside commit()'s per-row loop
+    must stay held until the whole batch transaction actually commits, not
+    released right after find_or_create_person(). Two racers import the same
+    brand-new identity into two different Events; if the lock were released
+    early (the pre-fix behavior), both could resolve "no existing Person"
+    before either commits and each would insert its own duplicate row.
+    """
+    from event_api.main import create_app
+
+    owner_headers, _ = _login(client)
+    database: Database = client.app.state.database
+
+    def create_event(suffix: str) -> str:
+        created = client.post(
+            "/admin/events",
+            headers=owner_headers,
+            json={
+                "title": f"Импорт-гонка {suffix}",
+                "slug": f"excel-lock-race-{suffix}-{uuid4().hex[:8]}",
+                "location": "КАИТ №20",
+                "startAt": "2027-10-15T07:00:00Z",
+                "endAt": "2027-10-15T17:00:00Z",
+                "registrationDeadline": "2027-10-14T07:00:00Z",
+                "capacity": 10,
+                "status": "DRAFT",
+            },
+        )
+        assert created.status_code == 201, created.text
+        return created.json()["id"]
+
+    event_a, event_b = create_event("a"), create_event("b")
+    identity = dict(
+        last_name="Гонщиков",
+        first_name="Единый",
+        middle_name="Идентичный",
+        email=f"lock-race-{uuid4().hex[:8]}@example.com",
+        phone="+79993334455",
+        birth_date="2005-05-05",
+    )
+    workbook_bytes = _excel_workbook_for(**identity)
+    barrier = threading.Barrier(2)
+
+    # Both racers log in sequentially, before the barrier - concurrent logins
+    # for the same staff row would race the login path itself, not commit().
+    with ExitStack() as stack:
+        staff_clients = [
+            stack.enter_context(TestClient(create_app(client.app.state.settings)))
+            for _ in range(2)
+        ]
+        race_headers = [_login(staff_client)[0] for staff_client in staff_clients]
+
+        # Preview (parse/classify) also happens before the barrier - it's not
+        # part of the identity-critical section under test, and doing it here
+        # keeps the barrier-synchronized window limited to the commit calls.
+        jobs = []
+        for staff_client, headers, event_id in zip(
+            staff_clients, race_headers, (event_a, event_b), strict=True
+        ):
+            preview = staff_client.post(
+                f"/admin/events/{event_id}/import/preview",
+                headers=headers,
+                files={
+                    "file": (
+                        "import.xlsx",
+                        workbook_bytes,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+            assert preview.status_code == 201, preview.text
+            jobs.append((preview.json()["importJobId"], preview.json()["mapping"]))
+
+        def commit_row(index: int) -> int:
+            job_id, mapping = jobs[index]
+            event_id = (event_a, event_b)[index]
+            barrier.wait(timeout=10)
+            return (
+                staff_clients[index]
+                .post(
+                    f"/admin/events/{event_id}/import/{job_id}/commit",
+                    headers=race_headers[index],
+                    json={
+                        "mapping": mapping,
+                        "decisions": [],
+                        "capacityOverride": False,
+                    },
+                )
+                .status_code
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            statuses = list(pool.map(commit_row, range(2)))
+
+    assert statuses == [200, 200], statuses
+    with database.connect() as connection:
+        matching_people = connection.execute(
+            text("SELECT COUNT(*) FROM persons WHERE email_normalized=:email"),
+            {"email": identity["email"]},
+        ).scalar_one()
+        registration_count = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM registrations WHERE event_id IN (:a,:b) AND status='ACTIVE'"
+            ),
+            {"a": event_a, "b": event_b},
+        ).scalar_one()
+    assert matching_people == 1, (
+        "concurrent commits must resolve to one canonical Person"
+    )
+    assert registration_count == 2, "each Event still gets its own Registration"
+
+
+def test_excel_commit_failure_after_person_resolution_releases_lock(
+    client: TestClient,
+) -> None:
+    """N12: a failure inside commit()'s transaction, after a row's Person has
+    already been resolved, must roll back and release that row's lock - not
+    leave it held (which would permanently block every future import of the
+    same identity, since GET_LOCK is scoped to the now-dead connection only
+    until the pool eventually recycles it).
+    """
+    headers, _ = _login(client)
+    database: Database = client.app.state.database
+    full_event = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Заполненное мероприятие",
+            "slug": f"excel-lock-full-{uuid4().hex[:8]}",
+            "location": "КАИТ №20",
+            "startAt": "2027-10-16T07:00:00Z",
+            "endAt": "2027-10-16T17:00:00Z",
+            "registrationDeadline": "2027-10-15T07:00:00Z",
+            "capacity": 1,
+            "status": "REGISTRATION_OPEN",
+        },
+    ).json()["id"]
+    filler = client.post(
+        f"/admin/events/{full_event}/registrations/onsite",
+        headers=headers,
+        json={
+            "lastName": "Заполнитель",
+            "firstName": "Места",
+            "birthDate": "2000-01-01",
+            "personType": "EXTERNAL_STUDENT",
+            "consentAccepted": True,
+        },
+    )
+    assert filler.status_code == 201, filler.text
+
+    identity = dict(
+        last_name="Заблокированный",
+        first_name="Повтор",
+        middle_name="Проверка",
+        email=f"lock-release-{uuid4().hex[:8]}@example.com",
+        phone="+79993334466",
+        birth_date="2005-06-06",
+    )
+    workbook_bytes = _excel_workbook_for(**identity)
+    preview = client.post(
+        f"/admin/events/{full_event}/import/preview",
+        headers=headers,
+        files={
+            "file": (
+                "import.xlsx",
+                workbook_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert preview.status_code == 201, preview.text
+    failing_commit = client.post(
+        f"/admin/events/{full_event}/import/{preview.json()['importJobId']}/commit",
+        headers=headers,
+        json={
+            "mapping": preview.json()["mapping"],
+            "decisions": [],
+            "capacityOverride": False,
+        },
+    )
+    assert failing_commit.status_code == 409, failing_commit.text
+    with database.connect() as connection:
+        rolled_back = connection.execute(
+            text("SELECT COUNT(*) FROM persons WHERE email_normalized=:email"),
+            {"email": identity["email"]},
+        ).scalar_one()
+    assert rolled_back == 0, "a rolled-back commit must not leave the Person behind"
+
+    open_event = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Открытое мероприятие",
+            "slug": f"excel-lock-open-{uuid4().hex[:8]}",
+            "location": "КАИТ №20",
+            "startAt": "2027-10-17T07:00:00Z",
+            "endAt": "2027-10-17T17:00:00Z",
+            "registrationDeadline": "2027-10-16T07:00:00Z",
+            "capacity": 10,
+            "status": "DRAFT",
+        },
+    ).json()["id"]
+    retry_preview = client.post(
+        f"/admin/events/{open_event}/import/preview",
+        headers=headers,
+        files={
+            "file": (
+                "import.xlsx",
+                workbook_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert retry_preview.status_code == 201, retry_preview.text
+    retry_commit = client.post(
+        f"/admin/events/{open_event}/import/{retry_preview.json()['importJobId']}/commit",
+        headers=headers,
+        json={
+            "mapping": retry_preview.json()["mapping"],
+            "decisions": [],
+            "capacityOverride": False,
+        },
+    )
+    assert retry_commit.status_code == 200, retry_commit.text
+    assert retry_commit.json()["importedRows"] == 1

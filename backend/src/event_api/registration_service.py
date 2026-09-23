@@ -96,9 +96,12 @@ def valid_answer(field: RowMapping, value: Any) -> bool:
     return value in options if field["type"] == "SINGLE_CHOICE" else bool(value.strip())
 
 
-def acquire_person_locks(
-    connection: Connection, data: dict[str, Any], tenant_id: str
-) -> list[str]:
+def person_lock_keys(data: dict[str, Any], tenant_id: str) -> list[str]:
+    """The set of named-lock keys that identify `data` for GET_LOCK/RELEASE_LOCK
+    purposes - the single canonical derivation, so every caller (a lone
+    public/onsite registration, or a whole Excel import batch) normalizes
+    name/email/phone/birth date identically and never drifts apart.
+    """
     name = "|".join(
         [
             tenant_id,
@@ -107,7 +110,7 @@ def acquire_person_locks(
             (data["middle_name"] or "").lower(),
         ]
     )
-    keys = sorted(
+    return sorted(
         [
             *([f"{name}|email:{data['email']}"] if data["email"] else []),
             *([f"{name}|phone:{data['phone']}"] if data["phone"] else []),
@@ -118,6 +121,17 @@ def acquire_person_locks(
             ),
         ]
     )
+
+
+def acquire_lock_keys(connection: Connection, keys: list[str]) -> list[str]:
+    """Acquire every key in `keys`, strictly in the given order, releasing
+    whatever was already acquired if any single key fails. Callers with more
+    than one Person's worth of keys (e.g. a whole Excel import batch) must
+    pass a single globally-sorted, de-duplicated list here - never call this
+    (or acquire_person_locks) once per Person while already holding another
+    Person's lock, or two batches whose rows are ordered differently can each
+    hold what the other needs next and deadlock/time out.
+    """
     acquired: list[str] = []
     for key in keys:
         result = row(
@@ -128,6 +142,12 @@ def acquire_person_locks(
             raise ApiError(409, "CONFLICT", "Registration is busy; retry")
         acquired.append(key)
     return acquired
+
+
+def acquire_person_locks(
+    connection: Connection, data: dict[str, Any], tenant_id: str
+) -> list[str]:
+    return acquire_lock_keys(connection, person_lock_keys(data, tenant_id))
 
 
 def release_person_locks(connection: Connection, keys: list[str]) -> None:

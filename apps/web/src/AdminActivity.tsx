@@ -10,6 +10,7 @@ import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
+import { seasonValues } from './admin-values.js';
 
 type Notice = { kind: 'error' | 'success'; text: string };
 
@@ -355,15 +356,11 @@ export const ActivitySettings = ({
   const createSeason = async (form: FormData) => {
     setBusy(true);
     try {
-      await adminApi.saveSeason({
-        code: String(form.get('code') ?? '')
-          .trim()
-          .toUpperCase(),
-        name: String(form.get('name') ?? '').trim(),
-        startsAt: new Date(String(form.get('startsAt'))).toISOString(),
-        endsAt: new Date(String(form.get('endsAt'))).toISOString(),
-        active: form.get('active') === 'on',
-      });
+      // The admin enters Moscow wall-clock time regardless of the browser's
+      // own timezone — seasonValues() resolves both boundaries against the
+      // Europe/Moscow IANA zone via zonedLocalToIso, never the machine's
+      // local offset.
+      await adminApi.saveSeason(seasonValues(form));
       await load();
       setNotice({ kind: 'success', text: 'Сезон создан.' });
     } catch (error) {
@@ -453,11 +450,11 @@ export const ActivitySettings = ({
                   />
                 </label>
                 <label>
-                  <span>Начало</span>
+                  <span>Начало сезона (МСК)</span>
                   <input name="startsAt" type="datetime-local" required />
                 </label>
                 <label>
-                  <span>Окончание</span>
+                  <span>Окончание сезона (МСК)</span>
                   <input name="endsAt" type="datetime-local" required />
                 </label>
                 <label className="checkbox-line">

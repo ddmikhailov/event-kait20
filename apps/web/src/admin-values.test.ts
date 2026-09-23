@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   eventValues,
   formFieldValues,
+  seasonValues,
   zonedLocalToIso,
 } from './admin-values.js';
 
@@ -53,6 +54,32 @@ describe('admin form values', () => {
     form.set('options', 'not applicable');
 
     expect(formFieldValues(form).options).toBeNull();
+  });
+});
+
+describe('seasonValues', () => {
+  it('resolves Season boundaries as Moscow wall-clock time, not the browser timezone', () => {
+    const form = new FormData();
+    form.set('code', 'S2026_2027');
+    form.set('name', '2026/2027 учебный год');
+    form.set('startsAt', '2026-09-21T12:00');
+    form.set('endsAt', '2027-06-30T23:59');
+
+    const values = seasonValues(form);
+    expect(values.startsAt).toBe('2026-09-21T09:00:00.000Z');
+    expect(values.code).toBe('S2026_2027');
+    expect(values.active).toBe(false);
+  });
+
+  it('marks the season active only when the checkbox is checked', () => {
+    const form = new FormData();
+    form.set('code', 'ACTIVE_SEASON');
+    form.set('name', 'Активный сезон');
+    form.set('startsAt', '2026-01-01T00:00');
+    form.set('endsAt', '2026-12-31T23:59');
+    form.set('active', 'on');
+
+    expect(seasonValues(form).active).toBe(true);
   });
 });
 
