@@ -9,6 +9,7 @@ from ..errors import ApiError
 from ..schemas import SendTicketsRequest
 from ..scoring_v2 import decimal_string
 from ..service_utils import audit, utc_iso
+from ..tenant_scope import require_event_for_staff
 
 router = APIRouter(prefix="/admin/events", tags=["reporting"])
 
@@ -17,18 +18,14 @@ router = APIRouter(prefix="/admin/events", tags=["reporting"])
 def statistics(
     event_id: UUID,
     response: Response,
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "private, no-store"
     with db.connect() as connection:
-        event = row(
-            connection,
-            "SELECT id,capacity FROM events WHERE id=:id",
-            {"id": str(event_id)},
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id
         )
-        if not event:
-            raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
         totals = row(
             connection,
             """SELECT count(*) AS registered,SUM(first_attended_at IS NOT NULL) AS attended
@@ -148,12 +145,9 @@ def send_tickets(
 ) -> dict[str, Any]:
     event_id_s = str(event_id)
     with db.transaction() as connection:
-        if not row(
-            connection,
-            "SELECT id FROM events WHERE id=:id FOR UPDATE",
-            {"id": event_id_s},
-        ):
-            raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
+        require_event_for_staff(
+            connection, event_id_s, staff.tenant_id, staff.organization_id, lock=True
+        )
         all_items = rows(
             connection,
             "SELECT id,email,status,source FROM registrations WHERE event_id=:event ORDER BY registered_at,id FOR UPDATE",

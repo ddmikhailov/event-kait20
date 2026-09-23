@@ -2026,3 +2026,531 @@ def test_search_participations_excludes_other_organization_in_same_tenant(
     body = response.json()
     assert body["items"] == []
     assert body["total"] == 0
+
+
+def create_cross_scope(database: Database) -> dict[str, str]:
+    """Tenant A / Organization A1 (the seeded default, used by login()) /
+    Organization A2 (same Tenant), plus Tenant B / Organization B1 (a
+    different Tenant) - the two isolation classes the security gate needs to
+    prove: same-Tenant/different-Organization, and a different Tenant
+    entirely.
+    """
+    tenant_a = "50000000-0000-4000-8000-000000000001"
+    organization_a1 = "51000000-0000-4000-8000-000000000001"
+    organization_a2 = str(uuid4())
+    tenant_b = str(uuid4())
+    organization_b1 = str(uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO organizations (id,tenant_id,code,name,active,created_at,updated_at)
+                VALUES (:id,:tenant,:code,'Another organization, same tenant',true,
+                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": organization_a2,
+                "tenant": tenant_a,
+                "code": f"org-{uuid4().hex[:8]}",
+            },
+        )
+        connection.execute(
+            text(
+                """INSERT INTO tenants (id,code,name,active,created_at,updated_at)
+                VALUES (:id,:code,'Another tenant',true,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {"id": tenant_b, "code": f"tenant-{uuid4().hex[:8]}"},
+        )
+        connection.execute(
+            text(
+                """INSERT INTO organizations (id,tenant_id,code,name,active,created_at,updated_at)
+                VALUES (:id,:tenant,:code,'Organization of another tenant',true,
+                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": organization_b1,
+                "tenant": tenant_b,
+                "code": f"org-{uuid4().hex[:8]}",
+            },
+        )
+    return {
+        "tenant_a": tenant_a,
+        "organization_a1": organization_a1,
+        "organization_a2": organization_a2,
+        "tenant_b": tenant_b,
+        "organization_b1": organization_b1,
+    }
+
+
+def login_as_scope(
+    database: Database,
+    client: TestClient,
+    tenant_id: str,
+    organization_id: str,
+    role: str = "SUPER_ADMIN",
+) -> dict[str, str]:
+    staff_id = str(uuid4())
+    email = f"boundary-{staff_id[:12]}@example.com"
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO staff_users
+                (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,
+                 active,password_changed_at,created_at,updated_at)
+                VALUES (:id,:tenant,:organization,:email,:email,:password,:role,true,
+                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": staff_id,
+                "tenant": tenant_id,
+                "organization": organization_id,
+                "email": email,
+                "password": hash_password("boundary gate password"),
+                "role": role,
+            },
+        )
+    client.cookies.clear()
+    response = client.post(
+        "/auth/login",
+        headers=ORIGIN,
+        json={"email": email, "password": "boundary gate password"},
+    )
+    assert response.status_code == 200, response.text
+    return {**ORIGIN, "X-CSRF-Token": response.json()["csrfToken"]}
+
+
+def test_participation_and_manual_adjustment_reject_other_organization(
+    client: TestClient,
+) -> None:
+    """N03: Participation lifecycle mutations and manual score adjustment
+    must resolve their Event/Season only within the caller's own Tenant AND
+    Organization. Proves denial happens before any ledger mutation - no new
+    score_transactions row, no participation status change.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    scope = create_cross_scope(database)
+
+    event_id, _ = create_event(client, headers, title="Boundary participation event")
+    registration_id, person_id = create_registration_for_person(
+        database, event_id, "boundary-participation"
+    )
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    assigned = client.post(
+        f"/admin/events/{event_id}/participations/assign",
+        headers=headers,
+        json={
+            "registrationIds": [registration_id],
+            "roleId": role["id"],
+            "reason": "Owner-assigned baseline",
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    participation_id = assigned.json()["participationIds"][0]
+
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"BOUNDARY_{uuid4().hex[:8].upper()}",
+            "name": "Boundary season",
+            "startsAt": "2026-01-01T00:00:00Z",
+            "endsAt": "2026-12-31T23:59:59Z",
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    season_id = season.json()["id"]
+
+    with database.connect() as connection:
+        awards_before = connection.execute(
+            text("SELECT COUNT(*) FROM score_transactions WHERE participation_id=:id"),
+            {"id": participation_id},
+        ).scalar_one()
+        status_before = connection.execute(
+            text("SELECT status FROM participations WHERE id=:id"),
+            {"id": participation_id},
+        ).scalar_one()
+        manual_before = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM score_transactions WHERE person_id=:person AND season_id=:season"
+            ),
+            {"person": person_id, "season": season_id},
+        ).scalar_one()
+
+    for label, tenant_id, organization_id in (
+        (
+            "same tenant, other organization",
+            scope["tenant_a"],
+            scope["organization_a2"],
+        ),
+        ("other tenant entirely", scope["tenant_b"], scope["organization_b1"]),
+    ):
+        foreign_headers = login_as_scope(database, client, tenant_id, organization_id)
+
+        assert (
+            client.post(
+                f"/admin/events/{event_id}/participations/assign",
+                headers=foreign_headers,
+                json={
+                    "registrationIds": [registration_id],
+                    "roleId": role["id"],
+                    "reason": "Cross-organization reassignment attempt",
+                },
+            ).status_code
+            == 404
+        ), f"assign leaked across {label}"
+        assert (
+            client.post(
+                f"/admin/events/{event_id}/participations/confirm",
+                headers=foreign_headers,
+                json={
+                    "registrationIds": [registration_id],
+                    "roleId": role["id"],
+                    "confirmWithoutAttendance": True,
+                    "overrideReason": "Cross-organization confirm attempt",
+                },
+            ).status_code
+            == 404
+        ), f"confirm leaked across {label}"
+        assert (
+            client.patch(
+                f"/admin/events/{event_id}/participations/{participation_id}",
+                headers=foreign_headers,
+                json={
+                    "roleId": role["id"],
+                    "reason": "Cross-organization patch attempt",
+                },
+            ).status_code
+            == 404
+        ), f"patch leaked across {label}"
+        assert (
+            client.post(
+                f"/admin/events/{event_id}/participations/cancel",
+                headers=foreign_headers,
+                json={
+                    "participationIds": [participation_id],
+                    "reason": "Cross-organization cancel attempt",
+                },
+            ).status_code
+            == 404
+        ), f"cancel leaked across {label}"
+
+        manual = client.post(
+            "/admin/activity/score-adjustments",
+            headers=foreign_headers,
+            json={
+                "requestId": str(uuid4()),
+                "personId": person_id,
+                "seasonId": season_id,
+                "points": 5,
+                "reason": "Cross-organization manual adjustment attempt",
+            },
+        )
+        assert manual.status_code in (400, 404), (
+            f"manual adjustment leaked across {label}"
+        )
+
+    with database.connect() as connection:
+        awards_after = connection.execute(
+            text("SELECT COUNT(*) FROM score_transactions WHERE participation_id=:id"),
+            {"id": participation_id},
+        ).scalar_one()
+        status_after = connection.execute(
+            text("SELECT status FROM participations WHERE id=:id"),
+            {"id": participation_id},
+        ).scalar_one()
+        manual_after = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM score_transactions WHERE person_id=:person AND season_id=:season"
+            ),
+            {"person": person_id, "season": season_id},
+        ).scalar_one()
+    assert awards_after == awards_before, "denied confirm must not award a score"
+    assert status_after == status_before, (
+        "denied mutation must not change participation status"
+    )
+    assert manual_after == manual_before, (
+        "denied manual adjustment must not write a score"
+    )
+
+    # Happy path: the owning Organization's own admin is unaffected.
+    headers = login(client)
+    confirmed = client.post(
+        f"/admin/events/{event_id}/participations/confirm",
+        headers=headers,
+        json={
+            "registrationIds": [registration_id],
+            "roleId": role["id"],
+            "confirmWithoutAttendance": True,
+            "overrideReason": "Owner confirms after boundary attempts",
+        },
+    )
+    assert confirmed.status_code == 200, confirmed.text
+
+
+def test_achievement_mutations_enforce_tenant_boundary_not_organization(
+    client: TestClient,
+) -> None:
+    """N03: Person (and therefore Achievement, which is Person-anchored) is
+    Tenant-canonical by design (see MOSACTIVE-STAGE1.md) - there is no
+    Organization column on persons/achievements/student_profiles/
+    person_status_assignments to scope by. The correct and complete boundary
+    here is Tenant, already enforced by require_person_in_tenant. This test
+    proves both halves: a different Tenant is correctly denied, while a
+    same-Tenant/different-Organization admin - having no narrower boundary to
+    check against in this domain - is not artificially blocked.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    scope = create_cross_scope(database)
+
+    event_id, _ = create_event(client, headers, title="Boundary achievement event")
+    _, person_id = create_registration_for_person(
+        database, event_id, "boundary-achievement"
+    )
+    created = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=headers,
+        json={
+            "personId": person_id,
+            "title": "Boundary achievement",
+            "achievementType": "CERTIFICATE",
+            "source": "MANUAL",
+            "occurredAt": "2026-10-01T10:00:00Z",
+        },
+    )
+    assert created.status_code == 201, created.text
+    achievement_id = created.json()["id"]
+
+    same_tenant_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a2"]
+    )
+    same_tenant_decision = client.patch(
+        f"/admin/people/{person_id}/achievements/{achievement_id}",
+        headers=same_tenant_headers,
+        json={"status": "VERIFIED", "reason": "Same-tenant decision"},
+    )
+    assert same_tenant_decision.status_code == 200, same_tenant_decision.text
+
+    other_tenant_headers = login_as_scope(
+        database, client, scope["tenant_b"], scope["organization_b1"]
+    )
+    other_tenant_decision = client.patch(
+        f"/admin/people/{person_id}/achievements/{achievement_id}",
+        headers=other_tenant_headers,
+        json={"status": "REJECTED", "reason": "Other-tenant decision attempt"},
+    )
+    assert other_tenant_decision.status_code == 404, other_tenant_decision.text
+    with database.connect() as connection:
+        status = connection.execute(
+            text("SELECT status FROM achievements WHERE id=:id"),
+            {"id": achievement_id},
+        ).scalar_one()
+    assert status == "VERIFIED", (
+        "the other-tenant attempt must not have changed anything"
+    )
+
+    # The Event cross-reference on create IS organization-scoped (Event
+    # belongs to Organization, unlike Person) - a same-tenant/different
+    # Organization admin cannot claim an achievement happened at an Event
+    # that isn't theirs. The other_tenant_headers login above moved the
+    # client's session cookie away from the same-tenant staff; log back in
+    # as that staff before reusing its (session-cookie-authenticated) access.
+    same_tenant_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a2"]
+    )
+    mismatched_event = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=same_tenant_headers,
+        json={
+            "personId": person_id,
+            "title": "Cross-organization event reference",
+            "achievementType": "CERTIFICATE",
+            "source": "EVENT_KAIT20",
+            "occurredAt": "2026-10-01T10:00:00Z",
+            "eventId": event_id,
+        },
+    )
+    assert mismatched_event.status_code == 400, mismatched_event.text
+
+
+def test_season_and_scoring_rule_assignment_reject_other_organization(
+    client: TestClient,
+) -> None:
+    """N04: Season is Organization-owned (unlike the other four reference
+    dictionaries reference() serves, which are tenant-global by design).
+    Event season assignment and scoring rule create/list must not let one
+    Organization see or attach to another Organization's Season, even inside
+    the same Tenant.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    scope = create_cross_scope(database)
+
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"OWNER_{uuid4().hex[:8].upper()}",
+            "name": "Owner-only season",
+            "startsAt": "2026-01-01T00:00:00Z",
+            "endsAt": "2026-12-31T23:59:59Z",
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    season_id = season.json()["id"]
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+
+    foreign_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a2"]
+    )
+
+    foreign_event = client.post(
+        "/admin/events",
+        headers=foreign_headers,
+        json={
+            "title": "Foreign organization event",
+            "slug": f"foreign-season-{uuid4().hex[:8]}",
+            "location": "Elsewhere",
+            "startAt": "2027-11-01T07:00:00Z",
+            "endAt": "2027-11-01T17:00:00Z",
+            "registrationDeadline": "2027-10-31T07:00:00Z",
+            "capacity": 10,
+            "status": "DRAFT",
+            "seasonId": season_id,
+        },
+    )
+    assert foreign_event.status_code == 400, foreign_event.text
+
+    foreign_rule = client.post(
+        "/admin/activity/scoring-rules",
+        headers=foreign_headers,
+        json={
+            "seasonId": season_id,
+            "eventCategoryId": None,
+            "eventLevelId": None,
+            "participationRoleId": role["id"],
+            "participationResultId": None,
+            "points": 15,
+            "priority": 0,
+            "active": True,
+            "validFrom": None,
+            "validTo": None,
+        },
+    )
+    assert foreign_rule.status_code == 400, foreign_rule.text
+
+    # login_as_scope replaced the client's session cookie; log back in as the
+    # owner before using its (now stale) CSRF token again.
+    headers = login(client)
+    owner_rule = client.post(
+        "/admin/activity/scoring-rules",
+        headers=headers,
+        json={
+            "seasonId": season_id,
+            "eventCategoryId": None,
+            "eventLevelId": None,
+            "participationRoleId": role["id"],
+            "participationResultId": None,
+            "points": 15,
+            "priority": 0,
+            "active": True,
+            "validFrom": None,
+            "validTo": None,
+        },
+    )
+    assert owner_rule.status_code == 201, owner_rule.text
+
+    # login_as_scope's own login re-pointed the client's session cookie back
+    # to the owner when creating owner_rule above; log back in as the same
+    # foreign Organization before using its session-cookie-authenticated GET.
+    foreign_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a2"]
+    )
+    foreign_list = client.get("/admin/activity/scoring-rules", headers=foreign_headers)
+    assert foreign_list.status_code == 200, foreign_list.text
+    assert owner_rule.json()["id"] not in {
+        item["id"] for item in foreign_list.json()["items"]
+    }, "an unfiltered rule list must not leak another organization's rules"
+
+    foreign_update = client.patch(
+        f"/admin/activity/scoring-rules/{owner_rule.json()['id']}",
+        headers=foreign_headers,
+        json={
+            "seasonId": season_id,
+            "eventCategoryId": None,
+            "eventLevelId": None,
+            "participationRoleId": role["id"],
+            "participationResultId": None,
+            "points": 20,
+            "priority": 0,
+            "active": True,
+            "validFrom": None,
+            "validTo": None,
+        },
+    )
+    assert foreign_update.status_code == 404, foreign_update.text
+
+    foreign_deactivate = client.delete(
+        f"/admin/activity/scoring-rules/{owner_rule.json()['id']}",
+        headers=foreign_headers,
+    )
+    assert foreign_deactivate.status_code == 404, foreign_deactivate.text
+    with database.connect() as connection:
+        active = connection.execute(
+            text("SELECT active FROM scoring_rules WHERE id=:id"),
+            {"id": owner_rule.json()["id"]},
+        ).scalar_one()
+    assert bool(active) is True, (
+        "a denied cross-organization deactivate must not persist"
+    )
+
+
+def test_admin_profile_get_has_no_side_effect(client: TestClient) -> None:
+    """N05: GET must stay a safe method. Before this fix, get_profile_admin
+    unconditionally upserted a student_profiles row on every call.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Profile GET safety")
+    _, person_id = create_registration_for_person(database, event_id, "profile-get")
+
+    def profile_row_exists() -> bool:
+        with database.connect() as connection:
+            return (
+                connection.execute(
+                    text(
+                        "SELECT COUNT(*) FROM student_profiles WHERE person_id=:person"
+                    ),
+                    {"person": person_id},
+                ).scalar_one()
+                > 0
+            )
+
+    assert not profile_row_exists()
+    first = client.get(f"/admin/people/{person_id}/profile", headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["visibility"] == "PRIVATE"
+    assert first.json()["id"] is None
+    assert not profile_row_exists(), "GET must not create a StudentProfile row"
+
+    second = client.get(f"/admin/people/{person_id}/profile", headers=headers)
+    assert second.status_code == 200, second.text
+    assert not profile_row_exists()
+
+    updated = client.patch(
+        f"/admin/people/{person_id}/profile",
+        headers=headers,
+        json={"visibility": "PRIVATE"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert profile_row_exists(), "the mutating endpoint must still create the row"

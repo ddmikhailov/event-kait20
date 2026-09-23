@@ -15,7 +15,7 @@ from ..errors import ApiError
 from ..schemas import StreamValues
 from ..service_utils import audit, naive_utc
 from ..streams import list_streams
-from .events import event_row
+from ..tenant_scope import require_event_for_staff
 
 admin = APIRouter(prefix="/admin/events", tags=["event-streams"])
 scanner = APIRouter(prefix="/scanner/events", tags=["scanner-streams"])
@@ -24,11 +24,13 @@ scanner = APIRouter(prefix="/scanner/events", tags=["scanner-streams"])
 @admin.get("/{event_id}/streams")
 def admin_streams(
     event_id: UUID,
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        event_row(connection, str(event_id))
+        require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id
+        )
         return {"items": list_streams(connection, str(event_id))}
 
 
@@ -39,13 +41,17 @@ def scanner_streams(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
+        # Tenant + Organization first (trusted boundary for every role), then
+        # SCANNER's event_access as an additional requirement on top of it.
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id
+        )
         if staff.role == "SCANNER" and not row(
             connection,
             "SELECT 1 FROM event_access WHERE event_id=:event AND user_id=:user",
             {"event": str(event_id), "user": staff.id},
         ):
             raise ApiError(403, "FORBIDDEN", "Event access required")
-        event = event_row(connection, str(event_id))
         return {
             "items": list_streams(connection, str(event_id), public=True),
             "streamsEnabled": bool(event["streams_enabled"]),
@@ -62,7 +68,9 @@ def save_stream(
     event_id_s, identity = str(event_id), str(stream_id or uuid4())
     start, end = naive_utc(values.start_at), naive_utc(values.end_at)
     with db.transaction() as connection:
-        event = event_row(connection, event_id_s, True)
+        event = require_event_for_staff(
+            connection, event_id_s, staff.tenant_id, staff.organization_id, lock=True
+        )
         if event["status"] in {"ARCHIVED", "COMPLETED"}:
             raise ApiError(409, "INVALID_EVENT_STATE", "Event is immutable")
         if end <= start or start < event["start_at"] or end > event["end_at"]:

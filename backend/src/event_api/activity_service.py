@@ -58,6 +58,30 @@ def reference(connection: Connection, table: str, identity: str, active=True) ->
     return item
 
 
+def scoped_reference(
+    connection: Connection, table: str, identity: str, organization_id: str, active=True
+) -> Any:
+    """Like reference(), but also enforces the Organization boundary.
+
+    Only for tables that actually carry organization_id (currently: seasons).
+    participation_roles/participation_results/event_categories/event_levels are
+    tenant-global configuration dictionaries by design (no organization_id
+    column exists) and must keep using the unscoped reference() above.
+    """
+    allowed = {"seasons"}
+    if table not in allowed:
+        raise RuntimeError("Table is not organization-scoped")
+    item = row(
+        connection,
+        f"SELECT * FROM {table} WHERE id=:id AND organization_id=:organization"
+        + (" AND active=true" if active else ""),
+        {"id": identity, "organization": organization_id},
+    )
+    if not item:
+        raise ApiError(400, "INVALID_REFERENCE", "Referenced value is unavailable")
+    return item
+
+
 def participation_response(item: RowMapping) -> dict[str, Any]:
     return {
         "id": item["participation_id"],

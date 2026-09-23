@@ -81,3 +81,30 @@ def require_event_in_tenant(
     if not item:
         raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
     return item
+
+
+def require_event_for_staff(
+    connection: Connection,
+    event_id: str,
+    tenant_id: str,
+    organization_id: str,
+    *,
+    lock: bool = False,
+) -> RowMapping:
+    """Like require_event_in_tenant, but also enforces the Organization boundary.
+
+    Organization is a security boundary alongside Tenant (see MOSACTIVE-STAGE1.md:
+    "Event ... belong[s] to Organization"). require_event_in_tenant alone is
+    correct only for callers that don't yet enforce Organization; new callers
+    should use this instead.
+    """
+    item = row(
+        connection,
+        f"""SELECT e.* FROM events e
+        JOIN organizations o ON o.id=e.organization_id
+        WHERE e.id=:event AND o.tenant_id=:tenant AND e.organization_id=:organization{" FOR UPDATE" if lock else ""}""",
+        {"event": event_id, "tenant": tenant_id, "organization": organization_id},
+    )
+    if not item:
+        raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
+    return item

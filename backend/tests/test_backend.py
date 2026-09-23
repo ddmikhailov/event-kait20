@@ -2728,3 +2728,530 @@ def test_e_transient_smtp_failure_for_a_valid_intent_still_retries(
     assert outcome["status"] == "QUEUED"
     assert outcome["last_error_code"] == "TIMEOUTERROR"
     assert outcome["next_attempt_at"] is not None, "a transient failure must be retried"
+
+
+def _create_cross_scope(database: Database) -> dict[str, str]:
+    """Tenant A / Organization A1 (the seeded default) / Organization A2 (same
+    Tenant), plus Tenant B / Organization B1 (a different Tenant) - the two
+    isolation classes the security gate needs to prove: same-Tenant/
+    different-Organization, and different-Tenant entirely.
+    """
+    tenant_a = "50000000-0000-4000-8000-000000000001"
+    organization_a1 = "51000000-0000-4000-8000-000000000001"
+    organization_a2 = str(uuid4())
+    tenant_b = str(uuid4())
+    organization_b1 = str(uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO organizations (id,tenant_id,code,name,active,created_at,updated_at)
+                VALUES (:id,:tenant,:code,'Another organization, same tenant',true,
+                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": organization_a2,
+                "tenant": tenant_a,
+                "code": f"org-{uuid4().hex[:8]}",
+            },
+        )
+        connection.execute(
+            text(
+                """INSERT INTO tenants (id,code,name,active,created_at,updated_at)
+                VALUES (:id,:code,'Another tenant',true,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {"id": tenant_b, "code": f"tenant-{uuid4().hex[:8]}"},
+        )
+        connection.execute(
+            text(
+                """INSERT INTO organizations (id,tenant_id,code,name,active,created_at,updated_at)
+                VALUES (:id,:tenant,:code,'Organization of another tenant',true,
+                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": organization_b1,
+                "tenant": tenant_b,
+                "code": f"org-{uuid4().hex[:8]}",
+            },
+        )
+    return {
+        "tenant_a": tenant_a,
+        "organization_a1": organization_a1,
+        "organization_a2": organization_a2,
+        "tenant_b": tenant_b,
+        "organization_b1": organization_b1,
+    }
+
+
+def _login_as_scope(
+    database: Database,
+    client: TestClient,
+    tenant_id: str,
+    organization_id: str,
+    role: str = "SUPER_ADMIN",
+) -> dict[str, str]:
+    staff_id = str(uuid4())
+    email = f"boundary-{staff_id[:12]}@example.com"
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO staff_users
+                (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,
+                 active,password_changed_at,created_at,updated_at)
+                VALUES (:id,:tenant,:organization,:email,:email,:password,:role,true,
+                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": staff_id,
+                "tenant": tenant_id,
+                "organization": organization_id,
+                "email": email,
+                "password": hash_password("boundary gate password"),
+                "role": role,
+            },
+        )
+    client.cookies.clear()
+    response = client.post(
+        "/auth/login",
+        headers=ORIGIN,
+        json={"email": email, "password": "boundary gate password"},
+    )
+    assert response.status_code == 200, response.text
+    return {**ORIGIN, "X-CSRF-Token": response.json()["csrfToken"]}
+
+
+def test_scanner_reporting_and_stream_routes_reject_event_outside_staff_scope(
+    client: TestClient,
+) -> None:
+    """N01/N02: attendance/scanner, reporting and stream routes must resolve
+    an Event only within the caller's own Tenant AND Organization - not Tenant
+    alone. Covers both isolation classes (same-Tenant/different-Organization,
+    and a different Tenant entirely) and proves denial happens before any
+    side effect (no email queued, no stream created, no attendance recorded).
+    """
+    owner_headers, _ = _login(client)
+    database: Database = client.app.state.database
+    scope = _create_cross_scope(database)
+
+    created = client.post(
+        "/admin/events",
+        headers=owner_headers,
+        json={
+            "title": "Access boundary event",
+            "slug": f"boundary-event-{uuid4().hex[:8]}",
+            "location": "KAIT20",
+            "startAt": "2027-11-01T07:00:00Z",
+            "endAt": "2027-11-01T17:00:00Z",
+            "registrationDeadline": "2027-10-31T07:00:00Z",
+            "capacity": 10,
+            "status": "REGISTRATION_OPEN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+
+    with database.connect() as connection:
+        deliveries_before = connection.execute(
+            text("SELECT COUNT(*) FROM email_deliveries WHERE event_id=:event"),
+            {"event": event_id},
+        ).scalar_one()
+        streams_before = connection.execute(
+            text("SELECT COUNT(*) FROM event_streams WHERE event_id=:event"),
+            {"event": event_id},
+        ).scalar_one()
+
+    for label, tenant_id, organization_id in (
+        (
+            "same tenant, other organization",
+            scope["tenant_a"],
+            scope["organization_a2"],
+        ),
+        ("other tenant entirely", scope["tenant_b"], scope["organization_b1"]),
+    ):
+        foreign_headers = _login_as_scope(database, client, tenant_id, organization_id)
+
+        assert (
+            client.get(
+                f"/scanner/events/{event_id}/offline-bundle", headers=foreign_headers
+            ).status_code
+            == 404
+        ), f"offline-bundle leaked across {label}"
+        assert (
+            client.post(
+                f"/scanner/events/{event_id}/resolve-qr",
+                headers=foreign_headers,
+                json={"qrPayload": f"{uuid4()}.{'x' * 20}"},
+            ).status_code
+            == 404
+        ), f"resolve-qr leaked across {label}"
+        assert (
+            client.post(
+                f"/scanner/events/{event_id}/attendance/sync",
+                headers=foreign_headers,
+                json={
+                    "deviceId": str(uuid4()),
+                    "events": [
+                        {
+                            "clientEventId": str(uuid4()),
+                            "registrationId": str(uuid4()),
+                            "mode": "MANUAL_SEARCH",
+                            "source": "ONLINE",
+                            "deviceScannedAt": "2027-11-01T08:00:00Z",
+                            "estimatedScannedAt": "2027-11-01T08:00:00Z",
+                        }
+                    ],
+                },
+            ).status_code
+            == 404
+        ), f"attendance/sync leaked across {label}"
+
+        assert (
+            client.get(
+                f"/admin/events/{event_id}/statistics", headers=foreign_headers
+            ).status_code
+            == 404
+        ), f"statistics leaked across {label}"
+        send_tickets = client.post(
+            f"/admin/events/{event_id}/send-tickets",
+            headers=foreign_headers,
+            json={"requestId": str(uuid4()), "selection": "IMPORTED"},
+        )
+        assert send_tickets.status_code == 404, f"send-tickets leaked across {label}"
+
+        assert (
+            client.get(
+                f"/admin/events/{event_id}/streams", headers=foreign_headers
+            ).status_code
+            == 404
+        ), f"admin stream read leaked across {label}"
+        assert (
+            client.get(
+                f"/scanner/events/{event_id}/streams", headers=foreign_headers
+            ).status_code
+            == 404
+        ), f"scanner stream read leaked across {label}"
+        assert (
+            client.post(
+                f"/admin/events/{event_id}/streams",
+                headers=foreign_headers,
+                json={
+                    "title": "Foreign stream",
+                    "startAt": "2027-11-01T08:00:00Z",
+                    "endAt": "2027-11-01T09:00:00Z",
+                    "capacity": 5,
+                },
+            ).status_code
+            == 404
+        ), f"stream create leaked across {label}"
+
+    with database.connect() as connection:
+        deliveries_after = connection.execute(
+            text("SELECT COUNT(*) FROM email_deliveries WHERE event_id=:event"),
+            {"event": event_id},
+        ).scalar_one()
+        streams_after = connection.execute(
+            text("SELECT COUNT(*) FROM event_streams WHERE event_id=:event"),
+            {"event": event_id},
+        ).scalar_one()
+    assert deliveries_after == deliveries_before, (
+        "denied send-tickets must not queue mail"
+    )
+    assert streams_after == streams_before, (
+        "denied stream create must not persist a row"
+    )
+
+    # Happy path: the owning Organization's own admin is unaffected. Each
+    # foreign login above replaced the client's session cookie, so log back
+    # in as the owner before checking it can still read its own Event.
+    owner_headers, _ = _login(client)
+    assert (
+        client.get(
+            f"/admin/events/{event_id}/statistics", headers=owner_headers
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            f"/admin/events/{event_id}/streams", headers=owner_headers
+        ).status_code
+        == 200
+    )
+
+
+def test_event_crud_and_related_surfaces_reject_event_outside_staff_scope(
+    client: TestClient,
+) -> None:
+    """Event CRUD itself (list/get/update/archive/purge/cover/form-fields),
+    the scanner Event list and scanner form-fields, the onsite registration
+    routes, the registrations list/annul/resend surface, and the Excel
+    import/export surface all resolve an Event by id somewhere. This proves
+    none of them let a same-Tenant/different-Organization admin read or
+    mutate another Organization's Event, and that the owning Organization's
+    own access is unaffected. A different-Tenant check is not duplicated in
+    full here - the Tenant half of this boundary was unchanged by this round
+    and already proven for other surfaces in the prior gate's test; a
+    representative subset (list, get) is enough to confirm it still holds
+    for Event CRUD specifically.
+    """
+    owner_headers, _ = _login(client)
+    database: Database = client.app.state.database
+    scope = _create_cross_scope(database)
+
+    created = client.post(
+        "/admin/events",
+        headers=owner_headers,
+        json={
+            "title": "Event CRUD boundary event",
+            "slug": f"crud-boundary-{uuid4().hex[:8]}",
+            "location": "KAIT20",
+            "startAt": "2027-12-01T07:00:00Z",
+            "endAt": "2027-12-01T17:00:00Z",
+            "registrationDeadline": "2027-11-30T07:00:00Z",
+            "capacity": 10,
+            "status": "DRAFT",
+        },
+    )
+    assert created.status_code == 201, created.text
+    event_id = created.json()["id"]
+    slug = created.json()["slug"]
+
+    field = client.post(
+        f"/admin/events/{event_id}/form-fields",
+        headers=owner_headers,
+        json={
+            "type": "SHORT_TEXT",
+            "label": "Boundary field",
+            "required": False,
+            "sortOrder": 0,
+        },
+    )
+    assert field.status_code == 201, field.text
+    field_id = field.json()["id"]
+
+    with database.connect() as connection:
+        title_before = connection.execute(
+            text("SELECT title FROM events WHERE id=:id"), {"id": event_id}
+        ).scalar_one()
+        status_before = connection.execute(
+            text("SELECT status FROM events WHERE id=:id"), {"id": event_id}
+        ).scalar_one()
+        cover_before = connection.execute(
+            text("SELECT cover_object_key FROM events WHERE id=:id"), {"id": event_id}
+        ).scalar_one()
+        field_label_before = connection.execute(
+            text("SELECT label FROM event_form_fields WHERE id=:id"), {"id": field_id}
+        ).scalar_one()
+        event_row_still_exists = (
+            connection.execute(
+                text("SELECT COUNT(*) FROM events WHERE id=:id"), {"id": event_id}
+            ).scalar_one()
+            == 1
+        )
+    assert event_row_still_exists
+
+    foreign_headers = _login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a2"]
+    )
+
+    # A. admin Event GET
+    assert (
+        client.get(f"/admin/events/{event_id}", headers=foreign_headers).status_code
+        == 404
+    )
+    # B. update
+    assert (
+        client.patch(
+            f"/admin/events/{event_id}",
+            headers=foreign_headers,
+            json={"title": "Hijacked title"},
+        ).status_code
+        == 404
+    )
+    # C. archive / purge (representative mutations)
+    assert (
+        client.post(
+            f"/admin/events/{event_id}/archive", headers=foreign_headers
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/admin/events/{event_id}/purge",
+            headers=foreign_headers,
+            json={"confirmationSlug": slug},
+        ).status_code
+        == 404
+    )
+    # Cover upload/removal
+    assert (
+        client.post(
+            f"/admin/events/{event_id}/cover",
+            headers=foreign_headers,
+            files={"cover": ("cover.png", _tiny_png(), "image/png")},
+        ).status_code
+        == 404
+    )
+    assert (
+        client.delete(
+            f"/admin/events/{event_id}/cover", headers=foreign_headers
+        ).status_code
+        == 404
+    )
+    # D. form-field mutation (list, create, update, deactivate)
+    assert (
+        client.get(
+            f"/admin/events/{event_id}/form-fields", headers=foreign_headers
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/admin/events/{event_id}/form-fields",
+            headers=foreign_headers,
+            json={
+                "type": "SHORT_TEXT",
+                "label": "Hijacked field",
+                "required": False,
+                "sortOrder": 0,
+            },
+        ).status_code
+        == 404
+    )
+    assert (
+        client.patch(
+            f"/admin/events/{event_id}/form-fields/{field_id}",
+            headers=foreign_headers,
+            json={"label": "Hijacked label"},
+        ).status_code
+        == 404
+    )
+    assert (
+        client.delete(
+            f"/admin/events/{event_id}/form-fields/{field_id}", headers=foreign_headers
+        ).status_code
+        == 404
+    )
+    # E. scanner Event detail/form-fields
+    assert (
+        client.get(
+            f"/scanner/events/{event_id}/form-fields", headers=foreign_headers
+        ).status_code
+        == 404
+    )
+    # Onsite registration and admin registrations-list surfaces
+    assert (
+        client.post(
+            f"/admin/events/{event_id}/registrations/onsite",
+            headers=foreign_headers,
+            json={
+                "lastName": "Hijack",
+                "firstName": "Attempt",
+                "birthDate": "2000-01-01",
+                "personType": "EXTERNAL_STUDENT",
+                "consentAccepted": True,
+            },
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/admin/events/{event_id}/registrations", headers=foreign_headers
+        ).status_code
+        == 404
+    )
+    # Excel import preview / export
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["Фамилия", "Имя"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    assert (
+        client.post(
+            f"/admin/events/{event_id}/import/preview",
+            headers=foreign_headers,
+            files={
+                "file": (
+                    "import.xlsx",
+                    buffer.getvalue(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/admin/events/{event_id}/export.xlsx", headers=foreign_headers
+        ).status_code
+        == 404
+    )
+
+    # F. scanner Event list must not contain the other Organization's Event
+    foreign_scanner_list = client.get("/scanner/events", headers=foreign_headers)
+    assert foreign_scanner_list.status_code == 200, foreign_scanner_list.text
+    assert event_id not in {item["id"] for item in foreign_scanner_list.json()["items"]}
+    foreign_admin_list = client.get("/admin/events", headers=foreign_headers)
+    assert foreign_admin_list.status_code == 200, foreign_admin_list.text
+    assert event_id not in {item["id"] for item in foreign_admin_list.json()["items"]}
+
+    # No side effect from any denied attempt above.
+    with database.connect() as connection:
+        title_after = connection.execute(
+            text("SELECT title FROM events WHERE id=:id"), {"id": event_id}
+        ).scalar_one()
+        status_after = connection.execute(
+            text("SELECT status FROM events WHERE id=:id"), {"id": event_id}
+        ).scalar_one()
+        cover_after = connection.execute(
+            text("SELECT cover_object_key FROM events WHERE id=:id"), {"id": event_id}
+        ).scalar_one()
+        field_label_after = connection.execute(
+            text("SELECT label FROM event_form_fields WHERE id=:id"), {"id": field_id}
+        ).scalar_one()
+        still_exists_after = (
+            connection.execute(
+                text("SELECT COUNT(*) FROM events WHERE id=:id"), {"id": event_id}
+            ).scalar_one()
+            == 1
+        )
+    assert title_after == title_before, "denied update must not change the title"
+    assert status_after == status_before, "denied archive must not change status"
+    assert cover_after == cover_before, "denied cover upload/removal must not persist"
+    assert field_label_after == field_label_before, (
+        "denied field mutation must not persist"
+    )
+    assert still_exists_after, "denied purge must not delete the Event"
+
+    # A different Tenant is also denied (representative subset: list + get).
+    other_tenant_headers = _login_as_scope(
+        database, client, scope["tenant_b"], scope["organization_b1"]
+    )
+    assert (
+        client.get(
+            f"/admin/events/{event_id}", headers=other_tenant_headers
+        ).status_code
+        == 404
+    )
+    other_tenant_list = client.get("/admin/events", headers=other_tenant_headers)
+    assert other_tenant_list.status_code == 200, other_tenant_list.text
+    assert event_id not in {item["id"] for item in other_tenant_list.json()["items"]}
+
+    # The owning Organization's own admin is unaffected.
+    owner_headers, _ = _login(client)
+    assert (
+        client.get(f"/admin/events/{event_id}", headers=owner_headers).status_code
+        == 200
+    )
+    owner_list = client.get("/admin/events", headers=owner_headers)
+    assert event_id in {item["id"] for item in owner_list.json()["items"]}
+    renamed = client.patch(
+        f"/admin/events/{event_id}",
+        headers=owner_headers,
+        json={"title": "Owner-renamed event"},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert (
+        client.get(
+            f"/scanner/events/{event_id}/form-fields", headers=owner_headers
+        ).status_code
+        == 200
+    )

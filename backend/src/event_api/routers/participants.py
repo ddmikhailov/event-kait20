@@ -209,12 +209,14 @@ def update_person(
     return get_person(person_id, staff, db)
 
 
-def assert_event(connection: Any, event_id: str, tenant_id: str) -> None:
+def assert_event(
+    connection: Any, event_id: str, tenant_id: str, organization_id: str
+) -> None:
     if not row(
         connection,
         """SELECT e.id FROM events e JOIN organizations o ON o.id=e.organization_id
-        WHERE e.id=:id AND o.tenant_id=:tenant""",
-        {"id": event_id, "tenant": tenant_id},
+        WHERE e.id=:id AND o.tenant_id=:tenant AND e.organization_id=:organization""",
+        {"id": event_id, "tenant": tenant_id, "organization": organization_id},
     ):
         raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
 
@@ -241,7 +243,7 @@ def list_registrations(
         concat_ws(' ',last_name,first_name,middle_name) LIKE :search OR coalesce(email,'') LIKE :search
         OR coalesce(phone,'') LIKE :search OR coalesce(study_group,'') LIKE :search)"""
     with db.connect() as connection:
-        assert_event(connection, str(event_id), staff.tenant_id)
+        assert_event(connection, str(event_id), staff.tenant_id, staff.organization_id)
         items = rows(
             connection,
             f"SELECT * FROM registrations WHERE {where} ORDER BY registered_at DESC,id LIMIT :limit OFFSET :offset",
@@ -269,7 +271,7 @@ def get_registration(
     config: Annotated[Settings, Depends(settings)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        assert_event(connection, str(event_id), staff.tenant_id)
+        assert_event(connection, str(event_id), staff.tenant_id, staff.organization_id)
         item = row(
             connection,
             "SELECT * FROM registrations WHERE id=:id AND event_id=:event",
@@ -383,7 +385,7 @@ def annul(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     with db.transaction() as connection:
-        assert_event(connection, str(event_id), staff.tenant_id)
+        assert_event(connection, str(event_id), staff.tenant_id, staff.organization_id)
         item = row(
             connection,
             "SELECT status FROM registrations WHERE id=:id AND event_id=:event FOR UPDATE",
@@ -431,7 +433,7 @@ def resend(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
     with db.transaction() as connection:
-        assert_event(connection, str(event_id), staff.tenant_id)
+        assert_event(connection, str(event_id), staff.tenant_id, staff.organization_id)
         item = row(
             connection,
             "SELECT email,status FROM registrations WHERE id=:id AND event_id=:event FOR UPDATE",
@@ -486,7 +488,7 @@ def scanner_search(
     where = """event_id=:event AND status='ACTIVE' AND (:query='' OR concat_ws(' ',last_name,first_name,middle_name) LIKE :search
         OR coalesce(email,'') LIKE :search OR coalesce(phone,'') LIKE :search OR coalesce(study_group,'') LIKE :search)"""
     with db.connect() as connection:
-        assert_event(connection, str(event_id), staff.tenant_id)
+        assert_event(connection, str(event_id), staff.tenant_id, staff.organization_id)
         if staff.role == "SCANNER" and not row(
             connection,
             "SELECT 1 FROM event_access WHERE event_id=:event AND user_id=:user",

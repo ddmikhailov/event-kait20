@@ -15,6 +15,7 @@ from ..registration_service import qr_hash
 from ..schemas import AttendanceItem, AttendanceSyncRequest, ResolveQrRequest
 from ..security import utc_iso, verify_registration
 from ..service_utils import naive_utc
+from ..tenant_scope import require_event_for_staff
 
 router = APIRouter(prefix="/scanner/events", tags=["attendance"])
 MAX_BUNDLE_ROWS = 5_000
@@ -22,13 +23,14 @@ MAX_BUNDLE_ROWS = 5_000
 
 def event_context(db: Database, event_id: str, staff: Staff) -> Any:
     with db.connect() as connection:
-        event = row(
-            connection,
-            "SELECT id,start_at,end_at,offline_data_version FROM events WHERE id=:id",
-            {"id": event_id},
+        # Tenant + Organization is the trusted boundary for every scanner route
+        # below (offline bundle, resolve-qr, attendance sync); SCANNER's
+        # event_access check is an ADDITIONAL requirement on top of it, not a
+        # replacement for it, so ORGANIZER/SUPER_ADMIN never get implicit
+        # cross-Organization/cross-Tenant access to another Event's data.
+        event = require_event_for_staff(
+            connection, event_id, staff.tenant_id, staff.organization_id
         )
-        if not event:
-            raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
         if staff.role == "SCANNER" and not row(
             connection,
             "SELECT 1 FROM event_access WHERE event_id=:event AND user_id=:user",

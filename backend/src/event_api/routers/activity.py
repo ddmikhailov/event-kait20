@@ -32,6 +32,7 @@ from ..activity_service import (
     outbox,
     participation_response,
     reference,
+    scoped_reference,
     update_participation,
 )
 from ..database import Database, execute, row, rows
@@ -45,7 +46,7 @@ from ..dependencies import (
 from ..errors import ApiError
 from ..scoring_v2 import decimal_string
 from ..service_utils import audit, db_json, json_value, naive_utc, serial
-from ..tenant_scope import require_event_in_tenant, require_person_in_tenant
+from ..tenant_scope import require_event_for_staff, require_person_in_tenant
 from .participants import search_pattern
 
 admin = APIRouter(prefix="/admin/activity", tags=["activity"])
@@ -396,16 +397,21 @@ def rule_response(item: RowMapping) -> dict[str, Any]:
 
 @admin.get("/scoring-rules")
 def scoring_rules(
-    _staff: Annotated[Staff, Depends(administrator)],
+    staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
     season_id: Annotated[UUID | None, Query(alias="seasonId")] = None,
 ) -> dict[str, Any]:
     with db.connect() as connection:
         items = rows(
             connection,
-            """SELECT * FROM scoring_rules WHERE (:season IS NULL OR season_id=:season)
-            ORDER BY active DESC,priority DESC,version DESC,created_at DESC""",
-            {"season": str(season_id) if season_id else None},
+            """SELECT sr.* FROM scoring_rules sr JOIN seasons s ON s.id=sr.season_id
+            WHERE s.organization_id=:organization
+              AND (:season IS NULL OR sr.season_id=:season)
+            ORDER BY sr.active DESC,sr.priority DESC,sr.version DESC,sr.created_at DESC""",
+            {
+                "organization": staff.organization_id,
+                "season": str(season_id) if season_id else None,
+            },
         )
     return {"items": [rule_response(item) for item in items]}
 
@@ -434,23 +440,28 @@ def validity_overlap(left: Any, right: Any) -> bool:
     )
 
 
-def lock_scoring_season(connection: Connection, season_id: str) -> None:
+def lock_scoring_season(
+    connection: Connection, season_id: str, organization_id: str
+) -> None:
     if not row(
         connection,
-        "SELECT id FROM seasons WHERE id=:season FOR UPDATE",
-        {"season": season_id},
+        "SELECT id FROM seasons WHERE id=:season AND organization_id=:organization FOR UPDATE",
+        {"season": season_id, "organization": organization_id},
     ):
         raise ApiError(400, "INVALID_REFERENCE", "Referenced value is unavailable")
 
 
 def assert_no_rule_conflict(
-    connection: Connection, values: dict[str, Any], exclude_id: str | None = None
+    connection: Connection,
+    values: dict[str, Any],
+    organization_id: str,
+    exclude_id: str | None = None,
 ) -> None:
     if not values["active"]:
         return
     # The parent Season row is the concurrency lock for all rule writes in that season.
     # A gap/range lock over an empty candidate set alone would not protect this check.
-    lock_scoring_season(connection, values["season_id"])
+    lock_scoring_season(connection, values["season_id"], organization_id)
     candidates = rows(
         connection,
         """SELECT * FROM scoring_rules WHERE active=true AND season_id=:season
@@ -507,8 +518,12 @@ def rule_data(values: ScoringRuleValues) -> dict[str, Any]:
     return data
 
 
-def validate_rule_references(connection: Connection, data: dict[str, Any]) -> None:
-    reference(connection, "seasons", data["season_id"], active=False)
+def validate_rule_references(
+    connection: Connection, data: dict[str, Any], organization_id: str
+) -> None:
+    scoped_reference(
+        connection, "seasons", data["season_id"], organization_id, active=False
+    )
     for table, key in (
         ("event_categories", "event_category_id"),
         ("event_levels", "event_level_id"),
@@ -547,9 +562,9 @@ def create_scoring_rule(
 ) -> dict[str, Any]:
     identity, data = str(uuid4()), rule_data(values)
     with db.transaction() as connection:
-        lock_scoring_season(connection, data["season_id"])
-        validate_rule_references(connection, data)
-        assert_no_rule_conflict(connection, data)
+        lock_scoring_season(connection, data["season_id"], staff.organization_id)
+        validate_rule_references(connection, data, staff.organization_id)
+        assert_no_rule_conflict(connection, data, staff.organization_id)
         insert_rule(connection, identity, data, 1, staff.id)
         audit(connection, staff.id, "SCORING_RULE_CREATED", "ScoringRule", identity)
         item = row(
@@ -575,13 +590,27 @@ def replace_scoring_rule(
         )
         if not existing_hint:
             raise ApiError(404, "SCORING_RULE_NOT_FOUND", "Scoring rule not found")
+        # A rule id is a bare UUID with no scope of its own; its season is the
+        # only thing that ties it to an Organization, so that boundary has to
+        # be checked before anything else uses this rule's identity.
+        if not row(
+            connection,
+            "SELECT id FROM seasons WHERE id=:season AND organization_id=:organization",
+            {
+                "season": existing_hint["season_id"],
+                "organization": staff.organization_id,
+            },
+        ):
+            raise ApiError(404, "SCORING_RULE_NOT_FOUND", "Scoring rule not found")
         if data["season_id"] != existing_hint["season_id"]:
             raise ApiError(
                 409,
                 "SCORING_RULE_SEASON_IMMUTABLE",
                 "A scoring rule version cannot move to another season",
             )
-        lock_scoring_season(connection, existing_hint["season_id"])
+        lock_scoring_season(
+            connection, existing_hint["season_id"], staff.organization_id
+        )
         existing = row(
             connection,
             "SELECT * FROM scoring_rules WHERE id=:id FOR UPDATE",
@@ -595,7 +624,7 @@ def replace_scoring_rule(
                 "SCORING_RULE_RETIRE_REQUIRED",
                 "Use the scoring-rule deactivate endpoint to retire a rule",
             )
-        validate_rule_references(connection, data)
+        validate_rule_references(connection, data, staff.organization_id)
         boundary = data["valid_from"]
         current = row(connection, "SELECT UTC_TIMESTAMP(3) AS current_value")
         assert current is not None
@@ -641,7 +670,7 @@ def replace_scoring_rule(
                     "actor": staff.id,
                 },
             )
-        assert_no_rule_conflict(connection, data)
+        assert_no_rule_conflict(connection, data, staff.organization_id)
         insert_rule(connection, new_id, data, int(existing["version"]) + 1, staff.id)
         audit(
             connection,
@@ -672,7 +701,18 @@ def deactivate_scoring_rule(
         )
         if not existing_hint:
             raise ApiError(404, "SCORING_RULE_NOT_FOUND", "Scoring rule not found")
-        lock_scoring_season(connection, existing_hint["season_id"])
+        if not row(
+            connection,
+            "SELECT id FROM seasons WHERE id=:season AND organization_id=:organization",
+            {
+                "season": existing_hint["season_id"],
+                "organization": staff.organization_id,
+            },
+        ):
+            raise ApiError(404, "SCORING_RULE_NOT_FOUND", "Scoring rule not found")
+        lock_scoring_season(
+            connection, existing_hint["season_id"], staff.organization_id
+        )
         existing = row(
             connection,
             "SELECT active,valid_from,valid_to FROM scoring_rules WHERE id=:id FOR UPDATE",
@@ -824,7 +864,9 @@ def list_event_participations(
         "offset": (page - 1) * page_size,
     }
     with db.connect() as connection:
-        require_event_in_tenant(connection, str(event_id), staff.tenant_id)
+        require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id
+        )
         items = rows(
             connection,
             PARTICIPATION_SELECT
@@ -853,7 +895,9 @@ def assign_participations(
 ) -> dict[str, Any]:
     assigned: list[str] = []
     with db.transaction() as connection:
-        require_event_in_tenant(connection, str(event_id), staff.tenant_id, lock=True)
+        require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
         role = reference(connection, "participation_roles", str(values.role_id))
         if values.result_id:
             reference(connection, "participation_results", str(values.result_id))
@@ -923,7 +967,9 @@ def confirm_participations(
 ) -> dict[str, Any]:
     confirmed: list[str] = []
     with db.transaction() as connection:
-        require_event_in_tenant(connection, str(event_id), staff.tenant_id, lock=True)
+        require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
         for registration_id in values.registration_ids:
             confirmed.append(
                 confirm_registration(
@@ -950,7 +996,9 @@ def patch_participation(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
-        require_event_in_tenant(connection, str(event_id), staff.tenant_id, lock=True)
+        require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
         target = row(
             connection,
             "SELECT event_id FROM participations WHERE id=:id",
@@ -978,7 +1026,9 @@ def cancel_participations(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, bool]:
     with db.transaction() as connection:
-        require_event_in_tenant(connection, str(event_id), staff.tenant_id, lock=True)
+        require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
         for participation_id in values.participation_ids:
             target = row(
                 connection,
@@ -1013,7 +1063,13 @@ def manual_adjustment(
         require_person_in_tenant(
             connection, str(values.person_id), staff.tenant_id, lock=True
         )
-        reference(connection, "seasons", str(values.season_id), active=False)
+        scoped_reference(
+            connection,
+            "seasons",
+            str(values.season_id),
+            staff.organization_id,
+            active=False,
+        )
         existing = row(
             connection,
             "SELECT * FROM score_transactions WHERE idempotency_key=:key FOR UPDATE",
@@ -1097,6 +1153,10 @@ def profile_response(item: RowMapping, consent: RowMapping | None) -> dict[str, 
 def load_profile(
     connection: Connection, person_id: str, tenant_id: str
 ) -> tuple[RowMapping, RowMapping | None]:
+    """Upsert-and-read: creates the StudentProfile row (default PRIVATE) if it
+    doesn't exist yet, locking it either way. For mutating endpoints only —
+    GET must stay read-only, see read_profile() below.
+    """
     require_person_in_tenant(connection, person_id, tenant_id, lock=True)
     identity = str(uuid4())
     execute(
@@ -1121,14 +1181,46 @@ def load_profile(
     return profile, consent
 
 
+def read_profile(
+    connection: Connection, person_id: str, tenant_id: str
+) -> tuple[RowMapping | None, RowMapping | None]:
+    """Read-only counterpart of load_profile(): never creates a row, so GET
+    stays a safe method with no side effect. Returns (None, None) when no
+    StudentProfile exists yet for this Person.
+    """
+    require_person_in_tenant(connection, person_id, tenant_id)
+    profile = row(
+        connection,
+        "SELECT * FROM student_profiles WHERE person_id=:person",
+        {"person": person_id},
+    )
+    if not profile:
+        return None, None
+    consent = row(
+        connection,
+        """SELECT * FROM profile_publication_consents
+        WHERE person_id=:person AND withdrawn_at IS NULL ORDER BY accepted_at DESC,id DESC LIMIT 1""",
+        {"person": person_id},
+    )
+    return profile, consent
+
+
 @person_admin.get("/{person_id}/profile")
 def get_profile_admin(
     person_id: UUID,
     staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
-    with db.transaction() as connection:
-        profile, consent = load_profile(connection, str(person_id), staff.tenant_id)
+    with db.connect() as connection:
+        profile, consent = read_profile(connection, str(person_id), staff.tenant_id)
+        if profile is None:
+            return {
+                "id": None,
+                "personId": str(person_id),
+                "publicSlug": None,
+                "visibility": "PRIVATE",
+                "consent": None,
+            }
         return profile_response(profile, consent)
 
 
@@ -1531,8 +1623,12 @@ def create_achievement(
             if not row(
                 connection,
                 """SELECT e.id FROM events e JOIN organizations o ON o.id=e.organization_id
-                WHERE e.id=:id AND o.tenant_id=:tenant""",
-                {"id": str(values.event_id), "tenant": staff.tenant_id},
+                WHERE e.id=:id AND o.tenant_id=:tenant AND e.organization_id=:organization""",
+                {
+                    "id": str(values.event_id),
+                    "tenant": staff.tenant_id,
+                    "organization": staff.organization_id,
+                },
             ):
                 raise ApiError(
                     400,
@@ -1576,6 +1672,10 @@ def decide_achievement(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
+        # Previously looked up by id+person_id alone with no Tenant check at
+        # all; Person is Tenant-canonical (see MOSACTIVE-STAGE1.md), so this
+        # is the correct and complete boundary for this route.
+        require_person_in_tenant(connection, str(person_id), staff.tenant_id, lock=True)
         existing = row(
             connection,
             "SELECT * FROM achievements WHERE id=:id AND person_id=:person FOR UPDATE",

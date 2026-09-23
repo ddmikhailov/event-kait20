@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.engine import Connection, RowMapping
 
-from ..activity_service import reference
+from ..activity_service import reference, scoped_reference
 from ..config import Settings
 from ..database import Database, execute, row, rows
 from ..dependencies import (
@@ -38,6 +38,7 @@ from ..service_utils import (
     json_value,
     naive_utc,
 )
+from ..tenant_scope import require_event_for_staff
 
 admin = APIRouter(prefix="/admin/events", tags=["events"])
 scanner = APIRouter(prefix="/scanner/events", tags=["scanner-events"])
@@ -175,10 +176,11 @@ def list_events(
         items = rows(
             connection,
             f"""SELECT e.* FROM events e JOIN organizations o ON o.id=e.organization_id
-            WHERE o.tenant_id=:tenant {archived_filter}
+            WHERE o.tenant_id=:tenant AND e.organization_id=:organization {archived_filter}
             ORDER BY e.start_at DESC LIMIT :limit OFFSET :offset""",
             {
                 "tenant": staff.tenant_id,
+                "organization": staff.organization_id,
                 "limit": page_size,
                 "offset": (page - 1) * page_size,
             },
@@ -187,8 +189,8 @@ def list_events(
             connection,
             f"""SELECT count(*) AS count FROM events e
             JOIN organizations o ON o.id=e.organization_id
-            WHERE o.tenant_id=:tenant {archived_filter}""",
-            {"tenant": staff.tenant_id},
+            WHERE o.tenant_id=:tenant AND e.organization_id=:organization {archived_filter}""",
+            {"tenant": staff.tenant_id, "organization": staff.organization_id},
         )
     return {
         "items": [event_response(item) for item in items],
@@ -222,7 +224,13 @@ def create_event(
             values.direction,
         )
         if values.season_id:
-            reference(connection, "seasons", str(values.season_id), active=False)
+            scoped_reference(
+                connection,
+                "seasons",
+                str(values.season_id),
+                staff.organization_id,
+                active=False,
+            )
         if values.category_id:
             reference(connection, "event_categories", str(values.category_id))
         if values.level_id:
@@ -271,7 +279,9 @@ def get_event(
 ) -> dict[str, Any]:
     with db.connect() as connection:
         return event_response(
-            event_row(connection, str(event_id), tenant_id=staff.tenant_id)
+            require_event_for_staff(
+                connection, str(event_id), staff.tenant_id, staff.organization_id
+            )
         )
 
 
@@ -284,7 +294,9 @@ def update_event(
 ) -> dict[str, Any]:
     event_id_s = str(event_id)
     with db.transaction() as connection:
-        existing = event_row(connection, event_id_s, True, staff.tenant_id)
+        existing = require_event_for_staff(
+            connection, event_id_s, staff.tenant_id, staff.organization_id, lock=True
+        )
         if existing["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
         changes = values.model_dump(exclude_unset=True)
@@ -326,18 +338,20 @@ def update_event(
             )
         if "slug" in changes:
             assert_slug(connection, changes["slug"], event_id_s)
+        if "season_id" in changes and changes["season_id"] is not None:
+            scoped_reference(
+                connection,
+                "seasons",
+                str(changes["season_id"]),
+                staff.organization_id,
+                active=False,
+            )
         for field, table in (
-            ("season_id", "seasons"),
             ("category_id", "event_categories"),
             ("level_id", "event_levels"),
         ):
             if field in changes and changes[field] is not None:
-                reference(
-                    connection,
-                    table,
-                    str(changes[field]),
-                    active=field != "season_id",
-                )
+                reference(connection, table, str(changes[field]))
         capacity = changes.get("capacity", existing["capacity"])
         if existing["streams_enabled"] and capacity != existing["capacity"]:
             raise ApiError(409, "CONFLICT", "Edit individual stream capacities")
@@ -424,7 +438,13 @@ async def upload_event_cover(
     previous_key: str | None = None
     try:
         with db.transaction() as connection:
-            existing = event_row(connection, event_id_s, True, staff.tenant_id)
+            existing = require_event_for_staff(
+                connection,
+                event_id_s,
+                staff.tenant_id,
+                staff.organization_id,
+                lock=True,
+            )
             if existing["status"] == "ARCHIVED":
                 raise ApiError(
                     409, "INVALID_EVENT_STATE", "Archived Event is immutable"
@@ -454,7 +474,9 @@ def delete_event_cover(
     event_id_s = str(event_id)
     previous_key: str | None = None
     with db.transaction() as connection:
-        existing = event_row(connection, event_id_s, True, staff.tenant_id)
+        existing = require_event_for_staff(
+            connection, event_id_s, staff.tenant_id, staff.organization_id, lock=True
+        )
         if existing["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
         previous_key = existing["cover_object_key"]
@@ -495,7 +517,9 @@ def archive_event(
 ) -> dict[str, Any]:
     event_id_s = str(event_id)
     with db.transaction() as connection:
-        existing = event_row(connection, event_id_s, True, staff.tenant_id)
+        existing = require_event_for_staff(
+            connection, event_id_s, staff.tenant_id, staff.organization_id, lock=True
+        )
         if existing["status"] != "ARCHIVED":
             execute(
                 connection,
@@ -518,7 +542,9 @@ def purge_event(
     """Permanently remove one archived Event while preserving global Person rows."""
     event_id_s = str(event_id)
     with db.transaction() as connection:
-        existing = event_row(connection, event_id_s, True, staff.tenant_id)
+        existing = require_event_for_staff(
+            connection, event_id_s, staff.tenant_id, staff.organization_id, lock=True
+        )
         if existing["status"] != "ARCHIVED":
             raise ApiError(
                 409,
@@ -656,7 +682,9 @@ def list_fields(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        event_row(connection, str(event_id), tenant_id=staff.tenant_id)
+        require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id
+        )
         items = rows(
             connection,
             "SELECT * FROM event_form_fields WHERE event_id=:id ORDER BY sort_order,created_at",
@@ -675,7 +703,9 @@ def create_field(
     validate_options(str(values.type), values.options)
     field_id = str(uuid4())
     with db.transaction() as connection:
-        event = event_row(connection, str(event_id), True, staff.tenant_id)
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
         if event["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
         active_count = row(
@@ -734,7 +764,9 @@ def update_field(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
-        event = event_row(connection, str(event_id), True, staff.tenant_id)
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
         if event["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
         existing = row(
@@ -799,7 +831,9 @@ def deactivate_field(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
-        event = event_row(connection, str(event_id), True, staff.tenant_id)
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
         if event["status"] == "ARCHIVED":
             raise ApiError(409, "INVALID_EVENT_STATE", "Archived Event is immutable")
         if not execute(
@@ -839,18 +873,23 @@ def scanner_events(
             items = rows(
                 connection,
                 """SELECT e.* FROM events e JOIN organizations o ON o.id=e.organization_id
-                WHERE o.tenant_id=:tenant AND e.status<>'ARCHIVED'
+                WHERE o.tenant_id=:tenant AND e.organization_id=:organization
+                  AND e.status<>'ARCHIVED'
                 ORDER BY e.start_at LIMIT 100""",
-                {"tenant": staff.tenant_id},
+                {"tenant": staff.tenant_id, "organization": staff.organization_id},
             )
         else:
             items = rows(
                 connection,
                 """SELECT e.* FROM events e JOIN event_access a ON a.event_id=e.id
                 JOIN organizations o ON o.id=e.organization_id
-                WHERE a.user_id=:user AND o.tenant_id=:tenant AND a.role='SCANNER'
-                  AND e.status<>'ARCHIVED' ORDER BY e.start_at""",
-                {"user": staff.id, "tenant": staff.tenant_id},
+                WHERE a.user_id=:user AND o.tenant_id=:tenant AND e.organization_id=:organization
+                  AND a.role='SCANNER' AND e.status<>'ARCHIVED' ORDER BY e.start_at""",
+                {
+                    "user": staff.id,
+                    "tenant": staff.tenant_id,
+                    "organization": staff.organization_id,
+                },
             )
     return {
         "items": [
@@ -880,7 +919,9 @@ def scanner_fields(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        event = event_row(connection, str(event_id), tenant_id=staff.tenant_id)
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id
+        )
         if staff.role == "SCANNER" and not row(
             connection,
             "SELECT 1 FROM event_access WHERE event_id=:event AND user_id=:user",

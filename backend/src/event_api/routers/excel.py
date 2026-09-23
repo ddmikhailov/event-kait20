@@ -506,14 +506,27 @@ def _event(
     *,
     allow_archived: bool = False,
     tenant_id: str | None = None,
+    organization_id: str | None = None,
 ) -> Any:
-    tenant_join = " JOIN organizations o ON o.id=e.organization_id" if tenant_id else ""
+    # organization_id is accepted independently of tenant_id (not bundled into
+    # one "scope" flag) so the one internal, already-scoped caller (_classify,
+    # invoked only after its caller's own _event(..., tenant_id=..., organization_id=...)
+    # already validated the same event_id in the same transaction) keeps
+    # calling this with neither, unchanged.
+    tenant_join = (
+        " JOIN organizations o ON o.id=e.organization_id"
+        if tenant_id or organization_id
+        else ""
+    )
     tenant_filter = " AND o.tenant_id=:tenant" if tenant_id else ""
+    organization_filter = (
+        " AND e.organization_id=:organization" if organization_id else ""
+    )
     item = row(
         connection,
-        f"SELECT e.* FROM events e{tenant_join} WHERE e.id=:id{tenant_filter}"
+        f"SELECT e.* FROM events e{tenant_join} WHERE e.id=:id{tenant_filter}{organization_filter}"
         f"{' FOR UPDATE' if lock else ''}",
-        {"id": event_id, "tenant": tenant_id},
+        {"id": event_id, "tenant": tenant_id, "organization": organization_id},
     )
     if not item:
         raise ApiError(404, "NOT_FOUND", "Event not found")
@@ -641,7 +654,12 @@ async def preview(
     source = await file.read(MAX_FILE + 1)
     expires = datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=24)
     with db.transaction() as connection:
-        event = _event(connection, str(event_id), tenant_id=staff.tenant_id)
+        event = _event(
+            connection,
+            str(event_id),
+            tenant_id=staff.tenant_id,
+            organization_id=staff.organization_id,
+        )
         fields = form_fields(connection, str(event_id))
         headers, resolved, parsed = _parse(source, mapping, fields)
         classified = _classify(connection, str(event_id), parsed, fields)
@@ -765,7 +783,13 @@ def commit(
         fields = form_fields(connection, str(event_id))
         _, _, parsed = _parse(bytes(job["file_data"]), mapping_json, fields)
         classified = _classify(connection, str(event_id), parsed, fields)
-        event = _event(connection, str(event_id), True, tenant_id=staff.tenant_id)
+        event = _event(
+            connection,
+            str(event_id),
+            True,
+            tenant_id=staff.tenant_id,
+            organization_id=staff.organization_id,
+        )
         imported = skipped = duplicates = errors = without_email = 0
         for item in classified:
             if item["category"] == "ERROR":
@@ -916,6 +940,7 @@ def export(
             str(event_id),
             allow_archived=True,
             tenant_id=staff.tenant_id,
+            organization_id=staff.organization_id,
         )
         registrations = rows(
             connection,

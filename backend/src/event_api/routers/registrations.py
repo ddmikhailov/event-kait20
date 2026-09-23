@@ -21,6 +21,7 @@ from ..schemas import OnsiteRegistrationRequest, PublicRegistrationRequest
 from ..security import registration_qr, utc_iso, verify_registration
 from ..service_utils import json_value
 from ..streams import list_streams
+from ..tenant_scope import require_event_for_staff
 
 public = APIRouter(prefix="/public/events", tags=["public-registration"])
 tickets = APIRouter(prefix="/tickets", tags=["tickets"])
@@ -208,14 +209,9 @@ def onsite(
         transaction = connection.begin()
         locks: list[str] = []
         try:
-            event = row(
-                connection,
-                """SELECT e.* FROM events e JOIN organizations o ON o.id=e.organization_id
-                WHERE e.id=:id AND o.tenant_id=:tenant FOR UPDATE""",
-                {"id": event_id, "tenant": staff.tenant_id},
+            event = require_event_for_staff(
+                connection, event_id, staff.tenant_id, staff.organization_id, lock=True
             )
-            if not event:
-                raise ApiError(404, "EVENT_NOT_FOUND", "Event not found")
             if event["status"] not in {
                 "REGISTRATION_OPEN",
                 "REGISTRATION_CLOSED",
