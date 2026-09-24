@@ -17,6 +17,7 @@ import {
   personListResponseSchema,
   participationListSchema,
   activityDirectionListSchema,
+  activityDirectionSchema,
   registrationDetailResponseSchema,
   registrationListResponseSchema,
   sendTicketsResponseSchema,
@@ -77,7 +78,10 @@ import {
   type ParticipationCancelRequest,
   type ParticipationConfirmRequest,
   type ParticipationList,
+  type ActivityDirection,
   type ActivityDirectionList,
+  type ActivityDirectionUpdate,
+  type ActivityDirectionValues,
   type PurgeEventRequest,
   type RegistrationDetailResponse,
   type RegistrationListResponse,
@@ -526,6 +530,38 @@ export class AdminApiClient {
       `/admin/structure/directions${query}`,
       { method: 'GET' },
       activityDirectionListSchema,
+    );
+  }
+
+  public createDirection(
+    values: ActivityDirectionValues,
+  ): Promise<ActivityDirection> {
+    return this.request(
+      '/admin/structure/directions',
+      { method: 'POST', body: JSON.stringify(values) },
+      activityDirectionSchema,
+    );
+  }
+
+  public updateDirection(
+    id: string,
+    values: ActivityDirectionUpdate,
+  ): Promise<ActivityDirection> {
+    return this.request(
+      `/admin/structure/directions/${encodeURIComponent(id)}`,
+      { method: 'PATCH', body: JSON.stringify(values) },
+      activityDirectionSchema,
+    );
+  }
+
+  // The backend endpoint is a DELETE verb, but it only ever sets
+  // active=false (never a hard delete - see review) - named for what it
+  // actually does, not for the HTTP verb it happens to use.
+  public deactivateDirection(id: string): Promise<AcceptedResponse> {
+    return this.request(
+      `/admin/structure/directions/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+      acceptedResponseSchema,
     );
   }
 

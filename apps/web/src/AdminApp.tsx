@@ -17,6 +17,7 @@ import { AdminApiError, adminApi } from './admin-api.js';
 import { ActivitySettings } from './AdminActivity.js';
 import { ParticipationsAdmin } from './AdminActivityAdmin.js';
 import { AchievementAdmin } from './AdminAchievement.js';
+import { DirectionAdmin } from './AdminDirection.js';
 import { ManualAdjustmentAdmin } from './AdminManualAdjustment.js';
 import { MembershipAdmin } from './AdminMembership.js';
 import { ScoringAdmin } from './AdminScoring.js';
@@ -129,6 +130,7 @@ const AdminWorkspace = ({
     | 'membership'
     | 'achievements'
     | 'adjustments'
+    | 'directions'
     | 'scoring'
   >('events');
   const [selected, setSelected] = useState<EventResponse>();
@@ -263,6 +265,14 @@ const AdminWorkspace = ({
       />
     );
   }
+  if (view === 'directions') {
+    return (
+      <DirectionAdmin
+        role={session.user.role}
+        onBack={() => setView('events')}
+      />
+    );
+  }
 
   return (
     <main className="admin-shell">
@@ -312,6 +322,12 @@ const AdminWorkspace = ({
               onClick={() => setView('adjustments')}
             >
               Корректировки баллов
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => setView('directions')}
+            >
+              Направления
             </button>
             <button
               className="secondary-button"

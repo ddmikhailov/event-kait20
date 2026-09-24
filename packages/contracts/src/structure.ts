@@ -83,7 +83,12 @@ export const activityDirectionSchema = z
     name: z.string().min(1).max(150),
     description: z.string().max(500).nullable(),
     active: z.boolean(),
-    sortOrder: z.number().int().nonnegative(),
+    // Mirrors the backend's actual bound exactly:
+    // DirectionValues/DirectionUpdate.sort_order = Field(ge=0, le=100_000).
+    // activityDirectionValuesSchema/UpdateSchema below both derive from
+    // this schema, so fixing it here is the single source of truth for
+    // create and update alike.
+    sortOrder: z.number().int().nonnegative().max(100_000),
   })
   .strict();
 export const activityDirectionListSchema = z

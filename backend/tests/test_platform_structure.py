@@ -383,6 +383,68 @@ def event_payload(**extra: object) -> dict[str, object]:
     }
 
 
+def test_direction_create_and_edit_are_reflected_canonically(
+    client: TestClient,
+) -> None:
+    """Stage 4.5: the two gaps in existing Direction coverage - (1) a
+    created Direction actually appears in the canonical list with its
+    submitted fields, and (2) an edit updates exactly the fields sent and
+    preserves the rest, while an existing Event's own `direction_id` FK is
+    unaffected by editing the Direction's name.
+    """
+    headers = login(client)
+    code = f"DIR_EDIT_{uuid4().hex[:8].upper()}"
+    created = client.post(
+        "/admin/structure/directions",
+        headers=headers,
+        json={
+            "code": code,
+            "name": "Исходное направление",
+            "description": "Исходное описание",
+            "sortOrder": 5,
+        },
+    )
+    assert created.status_code == 201, created.text
+    direction_id = created.json()["id"]
+    assert created.json()["code"] == code
+    assert created.json()["sortOrder"] == 5
+
+    listed = client.get("/admin/structure/directions", headers=headers)
+    assert listed.status_code == 200, listed.text
+    listed_item = next(
+        item for item in listed.json()["items"] if item["id"] == direction_id
+    )
+    assert listed_item["name"] == "Исходное направление"
+    assert listed_item["description"] == "Исходное описание"
+
+    event = client.post(
+        "/admin/events",
+        headers=headers,
+        json=event_payload(directionId=direction_id),
+    )
+    assert event.status_code == 201, event.text
+    event_id = event.json()["id"]
+
+    updated = client.patch(
+        f"/admin/structure/directions/{direction_id}",
+        headers=headers,
+        json={"name": "Изменённое направление", "sortOrder": 9},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["name"] == "Изменённое направление"
+    assert updated.json()["sortOrder"] == 9
+    assert updated.json()["code"] == code, (
+        "fields not sent in the PATCH must be preserved"
+    )
+    assert updated.json()["description"] == "Исходное описание"
+
+    reread_event = client.get(f"/admin/events/{event_id}", headers=headers)
+    assert reread_event.status_code == 200, reread_event.text
+    assert reread_event.json()["directionId"] == direction_id, (
+        "editing a Direction's name must not change an existing Event's FK"
+    )
+
+
 def test_inactive_direction_is_rejected_for_id_and_legacy_text(
     client: TestClient,
 ) -> None:

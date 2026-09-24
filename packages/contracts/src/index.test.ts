@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  activityDirectionUpdateSchema,
+  activityDirectionValuesSchema,
   activityOperationResponseSchema,
   calculationSnapshotSchema,
   createEventRequestSchema,
@@ -371,6 +373,36 @@ describe('healthResponseSchema', () => {
     expect(
       manualAdjustmentRequestSchema.safeParse({ ...base, points: '1000001' })
         .success,
+    ).toBe(false);
+  });
+
+  it('enforces the backend Direction sort_order bound (ge=0, le=100_000) on both create and update', () => {
+    const baseValues = {
+      code: 'SORT_BOUND',
+      name: 'Sort bound direction',
+      description: null,
+      active: true,
+      sortOrder: 0,
+    };
+    for (const sortOrder of [0, 1, 100_000]) {
+      expect(
+        activityDirectionValuesSchema.safeParse({ ...baseValues, sortOrder })
+          .success,
+        `expected sortOrder ${sortOrder} to PASS`,
+      ).toBe(true);
+    }
+    for (const sortOrder of [-1, 100_001, 1.5, Number.NaN]) {
+      expect(
+        activityDirectionValuesSchema.safeParse({ ...baseValues, sortOrder })
+          .success,
+        `expected sortOrder ${sortOrder} to FAIL`,
+      ).toBe(false);
+    }
+    expect(
+      activityDirectionUpdateSchema.safeParse({ sortOrder: 100_000 }).success,
+    ).toBe(true);
+    expect(
+      activityDirectionUpdateSchema.safeParse({ sortOrder: 100_001 }).success,
     ).toBe(false);
   });
 });
