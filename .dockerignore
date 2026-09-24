@@ -1,0 +1,17 @@
+.git
+.runtime
+node_modules
+**/node_modules
+dist
+**/dist
+.turbo
+**/.turbo
+.venv
+**/__pycache__
+**/*.pyc
+.env
+.env.*
+**/.env
+**/.env.*
+*.log
+MOS_ACTIVE_1_0_REPOSITORY_REPORT.md
