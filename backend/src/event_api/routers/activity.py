@@ -799,6 +799,7 @@ def search_participations(
     ),
     season_id: UUID | None = Query(None, alias="seasonId"),  # noqa: B008 - Query default
     direction_id: UUID | None = Query(None, alias="directionId"),  # noqa: B008
+    person_id: UUID | None = Query(None, alias="personId"),  # noqa: B008
     page: int = Query(1, ge=1),
     page_size: int = Query(25, alias="pageSize", ge=1, le=100),
 ) -> dict[str, Any]:
@@ -808,14 +809,20 @@ def search_participations(
     # client-supplied — taken from staff.organization_id, mirroring the
     # pattern in scoring_v2.py/structure.py); tenant check stays as
     # defense-in-depth alongside it.
+    # personId is a narrowing FILTER, not a second authority - the
+    # Tenant+Organization WHERE below still runs unconditionally, so a
+    # personId for a Person outside this scope simply yields zero rows
+    # rather than bypassing the boundary (used by the Achievement admin's
+    # Participation picker to search within one Person's own history).
     where = """o.tenant_id=:tenant AND e.organization_id=:organization AND r.status='ACTIVE'
         AND (:query='' OR concat_ws(' ',r.last_name,r.first_name,r.middle_name) LIKE :search
              OR coalesce(r.email,'') LIKE :search OR coalesce(r.phone,'') LIKE :search
-             OR coalesce(r.study_group,'') LIKE :search)
+             OR coalesce(r.study_group,'') LIKE :search OR e.title LIKE :search)
         AND (:status IS NULL OR COALESCE(p.status,'DRAFT')=:status)
         AND (:scoring_state IS NULL OR COALESCE(p.scoring_state,'NOT_SCORED')=:scoring_state)
         AND (:season_id IS NULL OR e.season_id=:season_id)
-        AND (:direction_id IS NULL OR e.direction_id=:direction_id)"""
+        AND (:direction_id IS NULL OR e.direction_id=:direction_id)
+        AND (:person_id IS NULL OR r.person_id=:person_id)"""
     params = {
         "tenant": staff.tenant_id,
         "organization": staff.organization_id,
@@ -825,6 +832,7 @@ def search_participations(
         "scoring_state": scoring_state,
         "season_id": str(season_id) if season_id else None,
         "direction_id": str(direction_id) if direction_id else None,
+        "person_id": str(person_id) if person_id else None,
         "limit": page_size,
         "offset": (page - 1) * page_size,
     }
@@ -1737,12 +1745,39 @@ def person_activity(
             WHERE st.person_id=:person GROUP BY st.season_id,se.name ORDER BY se.starts_at DESC""",
             {"person": str(person_id)},
         )
+        # Stage 4.3: minimally extended (source, event title, participation
+        # role/result) so the admin list never has to show a raw Event/
+        # Participation UUID as its only identifying label - reusing this
+        # existing private dossier response rather than adding a second
+        # Achievement-list endpoint.
+        #
+        # Person/Achievement identity is Tenant-canonical (readable Tenant-
+        # wide, per the accepted model), but Event and Participation are
+        # Organization-owned objects - so the READABLE CONTEXT (title, start
+        # date, role/result) must stay Organization-scoped even when the
+        # Achievement row itself is visible. Both `e` (a direct event_id
+        # link) and `pe` (the Participation's own event_id - covers both the
+        # coherent post-correction case and pre-existing legacy rows where
+        # participation_id is set but event_id is NULL) are joined WITH an
+        # organization_id filter, so a foreign-Organization Event/
+        # Participation's title/date/role/result all come back NULL - only
+        # the raw ids (already part of the accepted dossier) stay visible.
         achievements = rows(
             connection,
-            """SELECT id,title,description,achievement_type,status,occurred_at,
-            event_id,participation_id,created_at FROM achievements
-            WHERE person_id=:person ORDER BY occurred_at DESC,id DESC""",
-            {"person": str(person_id)},
+            """SELECT a.id,a.title,a.description,a.achievement_type,a.status,a.source,
+            a.occurred_at,a.event_id,a.participation_id,a.created_at,
+            COALESCE(e.title,pe.title) AS event_title,
+            COALESCE(e.start_at,pe.start_at) AS event_start_at,
+            pr.code AS role_code,pr.name AS role_name,
+            pres.code AS result_code,pres.name AS result_name
+            FROM achievements a
+            LEFT JOIN events e ON e.id=a.event_id AND e.organization_id=:organization
+            LEFT JOIN participations part ON part.id=a.participation_id
+            LEFT JOIN events pe ON pe.id=part.event_id AND pe.organization_id=:organization
+            LEFT JOIN participation_roles pr ON pr.id=part.role_id AND pe.id IS NOT NULL
+            LEFT JOIN participation_results pres ON pres.id=part.result_id AND pe.id IS NOT NULL
+            WHERE a.person_id=:person ORDER BY a.occurred_at DESC,a.id DESC""",
+            {"person": str(person_id), "organization": staff.organization_id},
         )
     return {
         "participations": [
@@ -1794,9 +1829,26 @@ def person_activity(
                 "description": item["description"],
                 "type": item["achievement_type"],
                 "status": item["status"],
+                "source": item["source"],
                 "occurredAt": serial(item["occurred_at"]),
                 "eventId": item["event_id"],
+                "eventTitle": item["event_title"],
+                "eventStartAt": serial(item["event_start_at"])
+                if item["event_start_at"]
+                else None,
                 "participationId": item["participation_id"],
+                "participationRole": {
+                    "code": item["role_code"],
+                    "name": item["role_name"],
+                }
+                if item["role_code"]
+                else None,
+                "participationResult": {
+                    "code": item["result_code"],
+                    "name": item["result_name"],
+                }
+                if item["result_code"]
+                else None,
                 "createdAt": serial(item["created_at"]),
             }
             for item in achievements
@@ -1820,10 +1872,27 @@ def create_achievement(
     with db.transaction() as connection:
         require_person_in_tenant(connection, str(person_id), staff.tenant_id, lock=True)
         if values.participation_id:
+            # Participation is the authority here, not the client's own
+            # event_id: an Event is an Organization-owned object, so a
+            # Participation must be proven to belong to the caller's own
+            # Organization (not just to the same Person) before its Event
+            # can be trusted - same boundary as the plain event_id branch
+            # below, reused via the same JOIN shape. The persisted row
+            # always stores the Participation's own canonical event_id,
+            # never a client-supplied one, so a future client that forgets
+            # to send event_id (or sends a stale one) can never produce an
+            # Achievement with an incoherent participation_id/event_id pair.
             participation = row(
                 connection,
-                "SELECT person_id,event_id FROM participations WHERE id=:id",
-                {"id": str(values.participation_id)},
+                """SELECT p.person_id,p.event_id FROM participations p
+                JOIN events e ON e.id=p.event_id
+                JOIN organizations o ON o.id=e.organization_id
+                WHERE p.id=:id AND o.tenant_id=:tenant AND e.organization_id=:organization""",
+                {
+                    "id": str(values.participation_id),
+                    "tenant": staff.tenant_id,
+                    "organization": staff.organization_id,
+                },
             )
             if not participation:
                 raise ApiError(
@@ -1839,6 +1908,7 @@ def create_achievement(
                     "ACHIEVEMENT_REFERENCE_MISMATCH",
                     "Achievement references do not describe the same activity",
                 )
+            data["event_id"] = participation["event_id"]
         elif values.event_id:
             if not row(
                 connection,

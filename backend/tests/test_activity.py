@@ -2383,6 +2383,556 @@ def test_achievement_mutations_enforce_tenant_boundary_not_organization(
     assert mismatched_event.status_code == 400, mismatched_event.text
 
 
+def test_person_achievements_are_listed_readably(client: TestClient) -> None:
+    """Stage 4.3: the person_activity dossier's achievements array is
+    minimally extended (source, event title, participation role/result) so
+    the admin list never has only a raw Event/Participation UUID to show -
+    covers create of all three link shapes (manual, Event-linked,
+    participation-linked) and proves the extended fields round-trip.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Achievement list event")
+    registration_id, person_id = create_registration_for_person(
+        database, event_id, "achievement-list"
+    )
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    assigned = client.post(
+        f"/admin/events/{event_id}/participations/assign",
+        headers=headers,
+        json={
+            "registrationIds": [registration_id],
+            "roleId": role["id"],
+            "reason": "Achievement list readability fixture",
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    participation_id = assigned.json()["participationIds"][0]
+
+    manual = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=headers,
+        json={
+            "personId": person_id,
+            "title": "Manual achievement",
+            "achievementType": "CERTIFICATE",
+            "source": "MANUAL",
+            "occurredAt": "2026-10-01T10:00:00Z",
+        },
+    )
+    assert manual.status_code == 201, manual.text
+    event_linked = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=headers,
+        json={
+            "personId": person_id,
+            "title": "Event-linked achievement",
+            "achievementType": "MEDAL",
+            "source": "EVENT_KAIT20",
+            "occurredAt": "2026-10-01T10:00:00Z",
+            "eventId": event_id,
+        },
+    )
+    assert event_linked.status_code == 201, event_linked.text
+    participation_linked = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=headers,
+        json={
+            "personId": person_id,
+            "title": "Participation-linked achievement",
+            "achievementType": "DIPLOMA",
+            "source": "EVENT_KAIT20",
+            "occurredAt": "2026-10-01T10:00:00Z",
+            "eventId": event_id,
+            "participationId": participation_id,
+        },
+    )
+    assert participation_linked.status_code == 201, participation_linked.text
+
+    activity = client.get(f"/admin/people/{person_id}/activity", headers=headers)
+    assert activity.status_code == 200, activity.text
+    items = {item["title"]: item for item in activity.json()["achievements"]}
+
+    manual_item = items["Manual achievement"]
+    assert manual_item["source"] == "MANUAL"
+    assert manual_item["eventId"] is None
+    assert manual_item["eventTitle"] is None
+    assert manual_item["participationId"] is None
+    assert manual_item["participationRole"] is None
+
+    event_item = items["Event-linked achievement"]
+    assert event_item["eventId"] == event_id
+    assert event_item["eventTitle"] == "Achievement list event"
+    assert event_item["participationId"] is None
+
+    participation_item = items["Participation-linked achievement"]
+    assert participation_item["eventTitle"] == "Achievement list event"
+    assert participation_item["participationId"] == participation_id
+    assert participation_item["participationRole"] == {
+        "code": "PARTICIPANT",
+        "name": role["name"],
+    }
+
+
+def test_achievement_mutations_require_super_admin(client: TestClient) -> None:
+    """Stage 4.3: create/decide are csrf_super_admin (same convention as
+    Membership lifecycle); the read (person_activity, which carries the
+    achievements list) stays at the lower `administrator` bar. An ORGANIZER
+    can read but not mutate.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Achievement authz event")
+    _, person_id = create_registration_for_person(
+        database, event_id, "achievement-authz"
+    )
+    scope = create_cross_scope(database)
+    organizer_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a1"], role="ORGANIZER"
+    )
+
+    readable = client.get(
+        f"/admin/people/{person_id}/activity", headers=organizer_headers
+    )
+    assert readable.status_code == 200, readable.text
+
+    denied_create = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=organizer_headers,
+        json={
+            "personId": person_id,
+            "title": "Should be denied",
+            "achievementType": "CERTIFICATE",
+            "source": "MANUAL",
+            "occurredAt": "2026-10-01T10:00:00Z",
+        },
+    )
+    assert denied_create.status_code == 403, denied_create.text
+
+    # login_as_scope() above moved the client's session cookie to the
+    # ORGANIZER staff; log back in as the original owner before reusing its
+    # (session-cookie-authenticated) CSRF token.
+    headers = login(client)
+    created = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=headers,
+        json={
+            "personId": person_id,
+            "title": "Owner-created achievement",
+            "achievementType": "CERTIFICATE",
+            "source": "MANUAL",
+            "occurredAt": "2026-10-01T10:00:00Z",
+        },
+    )
+    assert created.status_code == 201, created.text
+    achievement_id = created.json()["id"]
+
+    # Same session-cookie lesson as above: get a fresh ORGANIZER session
+    # (the earlier one's cookie was replaced by the owner re-login).
+    organizer_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a1"], role="ORGANIZER"
+    )
+    denied_decision = client.patch(
+        f"/admin/people/{person_id}/achievements/{achievement_id}",
+        headers=organizer_headers,
+        json={"status": "VERIFIED", "reason": "Should be denied"},
+    )
+    assert denied_decision.status_code == 403, denied_decision.text
+    with database.connect() as connection:
+        status = connection.execute(
+            text("SELECT status FROM achievements WHERE id=:id"),
+            {"id": achievement_id},
+        ).scalar_one()
+    assert status == "PENDING", "a denied decision must not change status"
+
+
+def test_achievement_decision_allows_repeated_transition_per_current_domain(
+    client: TestClient,
+) -> None:
+    """Stage 4.3: decide_achievement has no status-machine guard today (any
+    existing row can be re-decided to any of VERIFIED/REJECTED/CANCELLED,
+    regardless of its current status) - documenting this actual behavior
+    rather than inventing a new restriction the backend doesn't have. The
+    admin UI itself only offers decision controls while status is PENDING,
+    but that is a frontend choice, not a backend rule.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Achievement redecision event")
+    _, person_id = create_registration_for_person(
+        database, event_id, "achievement-redecision"
+    )
+    created = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=headers,
+        json={
+            "personId": person_id,
+            "title": "Redecided achievement",
+            "achievementType": "CERTIFICATE",
+            "source": "MANUAL",
+            "occurredAt": "2026-10-01T10:00:00Z",
+        },
+    )
+    assert created.status_code == 201, created.text
+    achievement_id = created.json()["id"]
+
+    first = client.patch(
+        f"/admin/people/{person_id}/achievements/{achievement_id}",
+        headers=headers,
+        json={"status": "VERIFIED", "reason": "Initial decision"},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "VERIFIED"
+
+    second = client.patch(
+        f"/admin/people/{person_id}/achievements/{achievement_id}",
+        headers=headers,
+        json={"status": "REJECTED", "reason": "Reconsidered decision"},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "REJECTED"
+
+    with database.connect() as connection:
+        final_status = connection.execute(
+            text("SELECT status FROM achievements WHERE id=:id"),
+            {"id": achievement_id},
+        ).scalar_one()
+        decision_audit_count = connection.execute(
+            text(
+                """SELECT COUNT(*) FROM audit_log
+                WHERE entity_id=:id AND action IN ('ACHIEVEMENT_VERIFIED','ACHIEVEMENT_UPDATED')"""
+            ),
+            {"id": achievement_id},
+        ).scalar_one()
+    assert final_status == "REJECTED"
+    assert decision_audit_count == 2, "each decision must be independently audited"
+
+
+def test_participation_search_is_scoped_to_the_personid_filter(
+    client: TestClient,
+) -> None:
+    """Stage 4.3 correction: the Achievement admin's Participation picker
+    must use `personId` as a server-side filter on the existing, already
+    Organization+Tenant-scoped search - not a client-side filter over a
+    page of results that could miss this Person's own Participation
+    entirely. Also proves the `query` text search now matches Event title,
+    which it did not before this correction.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Олимпиада по информатике")
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    registration_a, person_a = create_registration_for_person(
+        database, event_id, "search-scope-a"
+    )
+    registration_b, person_b = create_registration_for_person(
+        database, event_id, "search-scope-b"
+    )
+    assigned = client.post(
+        f"/admin/events/{event_id}/participations/assign",
+        headers=headers,
+        json={
+            "registrationIds": [registration_a, registration_b],
+            "roleId": role["id"],
+            "reason": "Participation search scope fixture",
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+
+    scoped = client.get(
+        f"/admin/activity/participations?personId={person_a}&query=Олимпиада",
+        headers=headers,
+    )
+    assert scoped.status_code == 200, scoped.text
+    items = scoped.json()["items"]
+    assert len(items) == 1
+    assert items[0]["personId"] == person_a
+    assert all(item["personId"] != person_b for item in items)
+
+
+def test_achievement_participation_link_persists_canonical_event_id(
+    client: TestClient,
+) -> None:
+    """Stage 4.3 correction: when participation_id is given, the persisted
+    Achievement must always store the Participation's OWN event_id - never
+    a client-supplied one that happened to be omitted or stale. The Person
+    dossier must then show that Event's title for the caller's own
+    Organization.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(
+        client, headers, title="Canonical event id fixture event"
+    )
+    registration_id, person_id = create_registration_for_person(
+        database, event_id, "canonical-event-id"
+    )
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    assigned = client.post(
+        f"/admin/events/{event_id}/participations/assign",
+        headers=headers,
+        json={
+            "registrationIds": [registration_id],
+            "roleId": role["id"],
+            "reason": "Canonical event id fixture",
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    participation_id = assigned.json()["participationIds"][0]
+
+    created = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=headers,
+        json={
+            "personId": person_id,
+            "title": "Participation-linked, no explicit eventId",
+            "achievementType": "MEDAL",
+            "source": "EVENT_KAIT20",
+            "occurredAt": "2026-10-01T10:00:00Z",
+            "participationId": participation_id,
+        },
+    )
+    assert created.status_code == 201, created.text
+    achievement_id = created.json()["id"]
+
+    with database.connect() as connection:
+        persisted_event_id = connection.execute(
+            text("SELECT event_id FROM achievements WHERE id=:id"),
+            {"id": achievement_id},
+        ).scalar_one()
+    assert persisted_event_id == event_id
+
+    activity = client.get(f"/admin/people/{person_id}/activity", headers=headers)
+    assert activity.status_code == 200, activity.text
+    item = next(i for i in activity.json()["achievements"] if i["id"] == achievement_id)
+    assert item["eventTitle"] == "Canonical event id fixture event"
+
+
+def test_achievement_participation_event_mismatch_rejected(
+    client: TestClient,
+) -> None:
+    """Stage 4.3 correction: a Participation that belongs to a DIFFERENT
+    Event than the one explicitly requested must still be rejected -
+    the correction makes the Participation's event_id canonical, but a
+    client that names a conflicting eventId is still lying about the
+    activity, not merely omitting a field.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_a, _ = create_event(client, headers, title="Mismatch event A")
+    event_b, _ = create_event(client, headers, title="Mismatch event B")
+    registration_id, person_id = create_registration_for_person(
+        database, event_a, "event-mismatch"
+    )
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    assigned = client.post(
+        f"/admin/events/{event_a}/participations/assign",
+        headers=headers,
+        json={
+            "registrationIds": [registration_id],
+            "roleId": role["id"],
+            "reason": "Event mismatch fixture",
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    participation_id = assigned.json()["participationIds"][0]
+
+    rejected = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=headers,
+        json={
+            "personId": person_id,
+            "title": "Should be rejected",
+            "achievementType": "MEDAL",
+            "source": "EVENT_KAIT20",
+            "occurredAt": "2026-10-01T10:00:00Z",
+            "participationId": participation_id,
+            "eventId": event_b,
+        },
+    )
+    assert rejected.status_code == 400, rejected.text
+    assert rejected.json()["error"]["code"] == "ACHIEVEMENT_REFERENCE_MISMATCH"
+    with database.connect() as connection:
+        total = connection.execute(
+            text("SELECT COUNT(*) FROM achievements WHERE person_id=:person"),
+            {"person": person_id},
+        ).scalar_one()
+    assert total == 0, "a rejected creation must not insert anything"
+
+
+def test_achievement_creation_rejects_foreign_organization_participation(
+    client: TestClient,
+) -> None:
+    """Stage 4.3 correction: Participation is not proven trustworthy merely
+    by `participation.person_id == person_id` - it must also be proven to
+    belong to the caller's own Organization, since Event (and therefore
+    Participation) is Organization-owned, unlike Person. A same-Tenant,
+    different-Organization Participation must be rejected before INSERT.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    scope = create_cross_scope(database)
+    foreign_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a2"]
+    )
+    foreign_event, _ = create_event(
+        client, foreign_headers, title="Foreign organization event"
+    )
+    foreign_registration, person_id = create_registration_for_person(
+        database, foreign_event, "foreign-org-participation"
+    )
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    assigned = client.post(
+        f"/admin/events/{foreign_event}/participations/assign",
+        headers=foreign_headers,
+        json={
+            "registrationIds": [foreign_registration],
+            "roleId": role["id"],
+            "reason": "Foreign organization participation fixture",
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    foreign_participation_id = assigned.json()["participationIds"][0]
+
+    # login_as_scope() above moved the client's session cookie away from the
+    # original owner staff; log back in before reusing `headers`.
+    headers = login(client)
+    rejected = client.post(
+        f"/admin/people/{person_id}/achievements",
+        headers=headers,
+        json={
+            "personId": person_id,
+            "title": "Should be rejected",
+            "achievementType": "MEDAL",
+            "source": "EVENT_KAIT20",
+            "occurredAt": "2026-10-01T10:00:00Z",
+            "participationId": foreign_participation_id,
+        },
+    )
+    assert rejected.status_code == 400, rejected.text
+    assert rejected.json()["error"]["code"] == "ACHIEVEMENT_REFERENCE_MISMATCH"
+    with database.connect() as connection:
+        total = connection.execute(
+            text("SELECT COUNT(*) FROM achievements WHERE person_id=:person"),
+            {"person": person_id},
+        ).scalar_one()
+    assert total == 0, "a rejected cross-organization creation must not insert anything"
+
+
+def test_person_dossier_redacts_foreign_organization_achievement_context(
+    client: TestClient,
+) -> None:
+    """Stage 4.3 correction: Person/Achievement identity is Tenant-canonical
+    (readable Tenant-wide, per the accepted model), but the READABLE
+    CONTEXT (Event title/date, Participation role/result) is Organization-
+    owned and must be redacted for a staff outside that Organization - even
+    though the Achievement row itself stays visible. Fixture is inserted
+    directly (creation itself is now rejected per the cross-organization
+    test above, so this proves the READ side against legacy-shaped data).
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    scope = create_cross_scope(database)
+    foreign_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a2"]
+    )
+    foreign_event, _ = create_event(
+        client, foreign_headers, title="Redaction fixture event"
+    )
+    foreign_registration, person_id = create_registration_for_person(
+        database, foreign_event, "redaction-fixture"
+    )
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    assigned = client.post(
+        f"/admin/events/{foreign_event}/participations/assign",
+        headers=foreign_headers,
+        json={
+            "registrationIds": [foreign_registration],
+            "roleId": role["id"],
+            "reason": "Redaction fixture",
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    foreign_participation_id = assigned.json()["participationIds"][0]
+
+    achievement_id = str(uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO achievements
+                (id,person_id,event_id,participation_id,title,achievement_type,
+                 source,status,occurred_at,created_at,updated_at)
+                VALUES (:id,:person,:event,:participation,'Foreign context fixture',
+                        'MEDAL','EVENT_KAIT20','PENDING','2026-10-01 10:00:00',
+                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": achievement_id,
+                "person": person_id,
+                "event": foreign_event,
+                "participation": foreign_participation_id,
+            },
+        )
+
+    # login_as_scope() above moved the client's session cookie away from the
+    # original owner staff; log back in before reusing `headers`.
+    headers = login(client)
+    own_org_view = client.get(f"/admin/people/{person_id}/activity", headers=headers)
+    assert own_org_view.status_code == 200, own_org_view.text
+    redacted = next(
+        i for i in own_org_view.json()["achievements"] if i["id"] == achievement_id
+    )
+    assert redacted["eventId"] == foreign_event, (
+        "the raw id stays part of the already-accepted dossier"
+    )
+    assert redacted["eventTitle"] is None
+    assert redacted["eventStartAt"] is None
+    assert redacted["participationRole"] is None
+    assert redacted["participationResult"] is None
+
+    # Same session-cookie lesson: get a fresh session as the foreign staff
+    # (the earlier one's cookie was replaced by the owner re-login above).
+    foreign_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a2"]
+    )
+    foreign_org_view = client.get(
+        f"/admin/people/{person_id}/activity", headers=foreign_headers
+    )
+    assert foreign_org_view.status_code == 200, foreign_org_view.text
+    readable = next(
+        i for i in foreign_org_view.json()["achievements"] if i["id"] == achievement_id
+    )
+    assert readable["eventTitle"] == "Redaction fixture event"
+    assert readable["participationRole"] == {
+        "code": "PARTICIPANT",
+        "name": role["name"],
+    }
+
+
 def test_season_and_scoring_rule_assignment_reject_other_organization(
     client: TestClient,
 ) -> None:

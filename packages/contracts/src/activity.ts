@@ -318,17 +318,83 @@ export const personActivityParticipationSchema = z
     points: decimalScoreSchema,
   })
   .strict();
+
+export const achievementStatusSchema = z.enum([
+  'DRAFT',
+  'PENDING',
+  'VERIFIED',
+  'REJECTED',
+  'CANCELLED',
+]);
+export const achievementSourceSchema = z.enum([
+  'EVENT_KAIT20',
+  'MANUAL',
+  'IMPORT',
+  'EXTERNAL_SYSTEM',
+]);
+export const personAchievementSchema = z
+  .object({
+    id: uuidSchema,
+    title: z.string(),
+    description: z.string().nullable(),
+    type: activityCodeSchema,
+    status: achievementStatusSchema,
+    source: achievementSourceSchema,
+    occurredAt: z.iso.datetime({ offset: true }),
+    eventId: uuidSchema.nullable(),
+    eventTitle: z.string().nullable(),
+    eventStartAt: z.iso.datetime({ offset: true }).nullable(),
+    participationId: uuidSchema.nullable(),
+    participationRole: personActivityRoleRefSchema.nullable(),
+    participationResult: personActivityRoleRefSchema.nullable(),
+    createdAt: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+export type PersonAchievement = z.infer<typeof personAchievementSchema>;
+
+export const achievementCreateRequestSchema = z
+  .object({
+    personId: uuidSchema,
+    eventId: uuidSchema.nullable().optional(),
+    participationId: uuidSchema.nullable().optional(),
+    title: z.string().trim().min(1).max(255),
+    description: z.string().max(20_000).nullable().optional(),
+    achievementType: activityCodeSchema,
+    source: achievementSourceSchema,
+    occurredAt: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+export type AchievementCreateRequest = z.infer<
+  typeof achievementCreateRequestSchema
+>;
+export const achievementMutationResponseSchema = z
+  .object({ id: uuidSchema, status: achievementStatusSchema })
+  .strict();
+export type AchievementMutationResponse = z.infer<
+  typeof achievementMutationResponseSchema
+>;
+
+export const achievementDecisionRequestSchema = z
+  .object({
+    status: z.enum(['VERIFIED', 'REJECTED', 'CANCELLED']),
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict();
+export type AchievementDecisionRequest = z.infer<
+  typeof achievementDecisionRequestSchema
+>;
+
 export const personActivityResponseSchema = z
   .object({
     participations: z.array(personActivityParticipationSchema),
-    // The Simulator only reads `participations`; the rest of this endpoint's
-    // response (score ledger/summary/achievements) is left loosely typed
-    // rather than fully modeled, so a future backend change to those
-    // sections can't silently break parsing of the part this app actually
-    // uses.
+    // The Simulator only reads `participations`; score ledger/summary is
+    // left loosely typed rather than fully modeled, so a future backend
+    // change to those sections can't silently break parsing of the parts
+    // this app actually uses. Achievements ARE precisely typed (Stage 4.3
+    // reads and displays that field), unlike the two above.
     scoreTransactions: z.array(z.record(z.string(), z.unknown())),
     scoreSummary: z.array(z.record(z.string(), z.unknown())),
-    achievements: z.array(z.record(z.string(), z.unknown())),
+    achievements: z.array(personAchievementSchema),
     page: z.number().int().positive(),
     pageSize: z.number().int().positive(),
   })

@@ -646,6 +646,13 @@ export const activityError = (error: unknown): Notice => {
       MEMBERSHIP_PERIOD_OVERLAP:
         'Периоды учебной принадлежности пересекаются. Обратитесь к администратору для сверки истории.',
       CONFLICT: 'Выбранная группа уже указана как текущая принадлежность.',
+      ACHIEVEMENT_NOT_FOUND: 'Достижение не найдено.',
+      // Achievement-specific, deliberately not reusing the shared CONFLICT
+      // mapping above (Stage 4.2 debt note) - this code means something
+      // different in each domain.
+      ACHIEVEMENT_REFERENCE_MISMATCH:
+        'Мероприятие и участие не описывают одно и то же событие, или ссылка недоступна.',
+      PERSON_MISMATCH: 'Человек не совпадает с выбранным.',
     };
     return { kind: 'error', text: messages[error.code] ?? error.message };
   }

@@ -1,4 +1,5 @@
 import {
+  achievementMutationResponseSchema,
   activityOperationResponseSchema,
   activityReferenceListSchema,
   activityReferenceSchema,
@@ -47,6 +48,9 @@ import {
   formFieldResponseSchema,
   sessionResponseSchema,
   type AcceptedResponse,
+  type AchievementCreateRequest,
+  type AchievementDecisionRequest,
+  type AchievementMutationResponse,
   type ActivityOperationResponse,
   type ActivityReference,
   type ActivityReferenceList,
@@ -399,6 +403,29 @@ export class AdminApiClient {
     );
   }
 
+  public createAchievement(
+    personId: string,
+    values: AchievementCreateRequest,
+  ): Promise<AchievementMutationResponse> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/achievements`,
+      { method: 'POST', body: JSON.stringify(values) },
+      achievementMutationResponseSchema,
+    );
+  }
+
+  public decideAchievement(
+    personId: string,
+    achievementId: string,
+    values: AchievementDecisionRequest,
+  ): Promise<AchievementMutationResponse> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/achievements/${encodeURIComponent(achievementId)}`,
+      { method: 'PATCH', body: JSON.stringify(values) },
+      achievementMutationResponseSchema,
+    );
+  }
+
   public scoringPreview(
     values: ScoringPreviewRequest,
   ): Promise<ScoringPreviewResponse> {
@@ -460,6 +487,7 @@ export class AdminApiClient {
     scoringState?: string;
     seasonId?: string;
     directionId?: string;
+    personId?: string;
     page?: number;
     pageSize?: number;
   }): Promise<ParticipationList> {
@@ -469,6 +497,7 @@ export class AdminApiClient {
     if (filters.scoringState) params.set('scoringState', filters.scoringState);
     if (filters.seasonId) params.set('seasonId', filters.seasonId);
     if (filters.directionId) params.set('directionId', filters.directionId);
+    if (filters.personId) params.set('personId', filters.personId);
     params.set('page', String(filters.page ?? 1));
     params.set('pageSize', String(filters.pageSize ?? 25));
     return this.request(
