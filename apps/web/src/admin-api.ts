@@ -30,6 +30,7 @@ import {
   statusTypeListSchema,
   personStatusAssignmentListSchema,
   personStatusAssignmentCreatedSchema,
+  manualAdjustmentResponseSchema,
   personActivityResponseSchema,
   scoringPreviewResponseSchema,
   seasonListSchema,
@@ -98,6 +99,8 @@ import {
   type StatusAssignment,
   type PersonStatusAssignmentList,
   type PersonStatusAssignmentCreated,
+  type ManualAdjustmentRequest,
+  type ManualAdjustmentResponse,
   type PersonActivityResponse,
   type ScoringPreviewRequest,
   type ScoringPreviewResponse,
@@ -400,6 +403,16 @@ export class AdminApiClient {
       `/admin/people/${encodeURIComponent(personId)}/activity`,
       { method: 'GET' },
       personActivityResponseSchema,
+    );
+  }
+
+  public createManualAdjustment(
+    values: ManualAdjustmentRequest,
+  ): Promise<ManualAdjustmentResponse> {
+    return this.request(
+      '/admin/activity/score-adjustments',
+      { method: 'POST', body: JSON.stringify(values) },
+      manualAdjustmentResponseSchema,
     );
   }
 

@@ -1033,6 +1033,167 @@ def test_manual_adjustment_rejects_changed_idempotency_payload(
         )
 
 
+def test_manual_adjustment_decimal_exactness_and_negative_values(
+    client: TestClient,
+) -> None:
+    """Stage 4.4: proves two things end to end, using a fractional
+    (non-integer) 4-decimal-place value on both ends of the sign, exactly as
+    the Manual Adjustment admin UI will send: (1) a negative adjustment is
+    accepted and correctly reduces the season total (no separate limit was
+    invented here beyond the backend's own), and (2) the persisted/returned
+    value round-trips EXACTLY as sent through person_activity's
+    scoreTransactions - this is the regression test for a real,
+    pre-existing gap this batch found and fixed: scoreTransactions[].points
+    was the one Decimal field in that response NOT wrapped in
+    decimal_string(), so FastAPI's default jsonable_encoder would silently
+    turn it into an unsafe JSON float instead of the canonical fixed-4-
+    decimal string every sibling field already used. Also proves no scoring
+    formula/rule is ever consulted - the exact typed value is what comes
+    back, not a recalculated one.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Decimal exactness event")
+    _, person_id = create_registration_for_person(
+        database, event_id, "decimal-exactness"
+    )
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"DECIMAL_{uuid4().hex[:8].upper()}",
+            "name": "Decimal exactness season",
+            "startsAt": "2026-01-01T00:00:00Z",
+            "endsAt": "2026-12-31T23:59:59Z",
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    season_id = season.json()["id"]
+
+    positive = client.post(
+        "/admin/activity/score-adjustments",
+        headers=headers,
+        json={
+            "requestId": str(uuid4()),
+            "personId": person_id,
+            "seasonId": season_id,
+            "points": "12.3456",
+            "reason": "Fractional positive adjustment",
+        },
+    )
+    assert positive.status_code == 201, positive.text
+    negative = client.post(
+        "/admin/activity/score-adjustments",
+        headers=headers,
+        json={
+            "requestId": str(uuid4()),
+            "personId": person_id,
+            "seasonId": season_id,
+            "points": "-4.1000",
+            "reason": "Fractional negative adjustment",
+        },
+    )
+    assert negative.status_code == 201, negative.text
+
+    activity = client.get(f"/admin/people/{person_id}/activity", headers=headers)
+    assert activity.status_code == 200, activity.text
+    body = activity.json()
+    ledger_points = {item["id"]: item["points"] for item in body["scoreTransactions"]}
+    assert isinstance(ledger_points[positive.json()["id"]], str), (
+        "points must be a canonical decimal STRING, never a JSON number"
+    )
+    assert ledger_points[positive.json()["id"]] == "12.3456"
+    assert ledger_points[negative.json()["id"]] == "-4.1000"
+    summary = next(
+        item for item in body["scoreSummary"] if item["seasonId"] == season_id
+    )
+    assert summary["points"] == "8.2456", "12.3456 + (-4.1000) = 8.2456 exactly"
+
+
+def test_manual_adjustment_requires_super_admin(client: TestClient) -> None:
+    """N21 proof (targeted assertion the existing suite was missing): an
+    ORGANIZER can perform the existing rule-bound Participation confirmation
+    (the "fact confirmation under published rules" side of the documented
+    permission model - see the N21 section of this batch's review), but
+    cannot POST an arbitrary manual ledger adjustment. SUPER_ADMIN can.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="N21 permission event")
+    registration_id, person_id = create_registration_for_person(
+        database, event_id, "n21-permission"
+    )
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"N21_{uuid4().hex[:8].upper()}",
+            "name": "N21 permission season",
+            "startsAt": "2026-01-01T00:00:00Z",
+            "endsAt": "2026-12-31T23:59:59Z",
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    season_id = season.json()["id"]
+    scope = create_cross_scope(database)
+    organizer_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a1"], role="ORGANIZER"
+    )
+
+    confirmed = client.post(
+        f"/admin/events/{event_id}/participations/confirm",
+        headers=organizer_headers,
+        json={"registrationIds": [registration_id], "roleId": role["id"]},
+    )
+    assert confirmed.status_code == 200, (
+        "ORGANIZER can confirm Participation under published scoring rules"
+    )
+
+    denied = client.post(
+        "/admin/activity/score-adjustments",
+        headers=organizer_headers,
+        json={
+            "requestId": str(uuid4()),
+            "personId": person_id,
+            "seasonId": season_id,
+            "points": "100",
+            "reason": "Should be denied to ORGANIZER",
+        },
+    )
+    assert denied.status_code == 403, denied.text
+    with database.connect() as connection:
+        manual_count = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM score_transactions WHERE person_id=:person AND season_id=:season"
+            ),
+            {"person": person_id, "season": season_id},
+        ).scalar_one()
+    assert manual_count == 0, "a denied manual adjustment must not insert anything"
+
+    # login_as_scope() above moved the client's session cookie away from the
+    # original owner staff; log back in before reusing `headers`.
+    headers = login(client)
+    allowed = client.post(
+        "/admin/activity/score-adjustments",
+        headers=headers,
+        json={
+            "requestId": str(uuid4()),
+            "personId": person_id,
+            "seasonId": season_id,
+            "points": "100",
+            "reason": "SUPER_ADMIN manual adjustment",
+        },
+    )
+    assert allowed.status_code == 201, allowed.text
+
+
 def test_profile_and_consent_concurrency_is_serialized(client: TestClient) -> None:
     headers = login(client)
     database: Database = client.app.state.database

@@ -7,6 +7,8 @@ import {
   attendanceSyncRequestSchema,
   excelImportCommitRequestSchema,
   healthResponseSchema,
+  manualAdjustmentPointsSchema,
+  manualAdjustmentRequestSchema,
   passwordResetRequestSchema,
   participationConfirmRequestSchema,
   policyVersionDetailSchema,
@@ -298,5 +300,77 @@ describe('healthResponseSchema', () => {
     expect(() =>
       policyVersionDetailSchema.parse({ id: 'not-a-uuid' }),
     ).toThrow();
+  });
+
+  it('accepts exactly the range the backend Manual Adjustment Decimal(ge=-1_000_000, le=1_000_000, decimal_places=4) allows', () => {
+    for (const value of [
+      '0.0001',
+      '-0.0001',
+      '999999.9999',
+      '1000000',
+      '1000000.0000',
+      '-1000000.0000',
+      '5',
+      '0.5',
+      '-0.5000',
+    ]) {
+      expect(
+        manualAdjustmentPointsSchema.safeParse(value).success,
+        `expected ${value} to PASS`,
+      ).toBe(true);
+    }
+    for (const value of [
+      '0',
+      '0.0000',
+      '-0.0000',
+      '1000000.0001',
+      '-1000000.0001',
+      '1000001',
+      '-1000001',
+      '1.00000',
+      '00.5',
+      '000001',
+      'not-a-number',
+    ]) {
+      expect(
+        manualAdjustmentPointsSchema.safeParse(value).success,
+        `expected ${value} to FAIL`,
+      ).toBe(false);
+    }
+  });
+
+  it('requires the full Manual Adjustment request (points AND reason) to pass before a request is considered valid', () => {
+    const base = {
+      requestId: '11111111-1111-4111-8111-111111111111',
+      personId: '22222222-2222-4222-8222-222222222222',
+      seasonId: '33333333-3333-4333-8333-333333333333',
+      points: '5.0000',
+      reason: 'Подтверждённая ручная корректировка',
+    };
+    expect(manualAdjustmentRequestSchema.safeParse(base).success).toBe(true);
+    expect(
+      manualAdjustmentRequestSchema.safeParse({ ...base, reason: 'ab' })
+        .success,
+    ).toBe(false);
+    expect(
+      manualAdjustmentRequestSchema.safeParse({ ...base, reason: 'abc' })
+        .success,
+    ).toBe(true);
+    expect(
+      manualAdjustmentRequestSchema.safeParse({
+        ...base,
+        reason: 'x'.repeat(500),
+      }).success,
+    ).toBe(true);
+    expect(
+      manualAdjustmentRequestSchema.safeParse({
+        ...base,
+        reason: 'x'.repeat(501),
+      }).success,
+    ).toBe(false);
+    expect(
+      manualAdjustmentRequestSchema.safeParse({ ...base, points: '1000001' })
+        .success,
+    ).toBe(false);
   });
 });

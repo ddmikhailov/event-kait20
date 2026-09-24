@@ -1807,7 +1807,18 @@ def person_activity(
                 "seasonId": item["season_id"],
                 "seasonName": item["season_name"],
                 "type": item["transaction_type"],
-                "points": item["points"],
+                # Stage 4.4: this was the one Decimal field in this response
+                # NOT wrapped in decimal_string() - FastAPI's default
+                # jsonable_encoder turns a bare Decimal into an unsafe JSON
+                # float (confirmed: Decimal('5.0000') -> 5.0), unlike every
+                # sibling decimal field here (scoreSummary.points,
+                # Participation.scoreAwarded), which already use this same
+                # helper to produce the canonical fixed-4-decimal STRING the
+                # rest of the codebase (and the ledger UI reading it) relies
+                # on. Pre-existing gap, fixed as a one-line alignment with
+                # the established convention two lines below - not a new
+                # business rule.
+                "points": decimal_string(item["points"]),
                 "reason": item["reason"],
                 "participationId": item["participation_id"],
                 "createdAt": serial(item["created_at"]),

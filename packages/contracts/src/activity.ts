@@ -384,16 +384,43 @@ export type AchievementDecisionRequest = z.infer<
   typeof achievementDecisionRequestSchema
 >;
 
+// Stage 4.4: reads and displays the ledger, so this is now precisely typed
+// (was `z.record()`) - matching only the fields the Manual Adjustment admin
+// actually uses, not a full re-model of every score_transactions column.
+export const scoreTransactionTypeSchema = z.enum([
+  'AWARD',
+  'REVERSAL',
+  'MANUAL_ADJUSTMENT',
+]);
+export const personScoreTransactionSchema = z
+  .object({
+    id: uuidSchema,
+    seasonId: uuidSchema,
+    seasonName: z.string(),
+    type: scoreTransactionTypeSchema,
+    points: decimalScoreSchema,
+    reason: z.string().nullable(),
+    participationId: uuidSchema.nullable(),
+    createdAt: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+export type PersonScoreTransaction = z.infer<
+  typeof personScoreTransactionSchema
+>;
+export const personScoreSummarySchema = z
+  .object({
+    seasonId: uuidSchema,
+    seasonName: z.string(),
+    points: decimalScoreSchema,
+  })
+  .strict();
+export type PersonScoreSummary = z.infer<typeof personScoreSummarySchema>;
+
 export const personActivityResponseSchema = z
   .object({
     participations: z.array(personActivityParticipationSchema),
-    // The Simulator only reads `participations`; score ledger/summary is
-    // left loosely typed rather than fully modeled, so a future backend
-    // change to those sections can't silently break parsing of the parts
-    // this app actually uses. Achievements ARE precisely typed (Stage 4.3
-    // reads and displays that field), unlike the two above.
-    scoreTransactions: z.array(z.record(z.string(), z.unknown())),
-    scoreSummary: z.array(z.record(z.string(), z.unknown())),
+    scoreTransactions: z.array(personScoreTransactionSchema),
+    scoreSummary: z.array(personScoreSummarySchema),
     achievements: z.array(personAchievementSchema),
     page: z.number().int().positive(),
     pageSize: z.number().int().positive(),
@@ -404,4 +431,75 @@ export type PersonActivityParticipation = z.infer<
 >;
 export type PersonActivityResponse = z.infer<
   typeof personActivityResponseSchema
+>;
+
+// A decimal string, never a JS number - the same convention as every other
+// canonical score value in this file. Every check here (zero, decimal
+// places, magnitude) is regex/string-comparison based, never
+// `Number(value)`/`parseFloat`, so no floating-point conversion ever
+// touches the value being validated.
+//
+// Mirrors the backend's actual Pydantic constraint exactly:
+// `ManualAdjustmentRequest.points: Decimal = Field(ge=-1_000_000,
+// le=1_000_000, decimal_places=4)`, plus a non-zero `model_validator`. The
+// integer part is capped at 7 digits with no leading zero (so it can only
+// ever be "0" or "1000000"-"9999999" as raw digit strings) specifically so
+// magnitude can be compared as same-length digit strings - a magnitude
+// this big is always exactly 7 digits once it reaches 1,000,000, so no
+// numeric parsing is needed to decide "is this over the limit". The
+// frontend is deliberately STRICTER than the backend on formatting
+// (no "00.5", no "1.00000" with more than 4 fraction digits) - it never
+// accepts anything the backend would reject, which is the only invariant
+// that matters here.
+const MANUAL_ADJUSTMENT_DECIMAL_PATTERN =
+  /^(-)?(0|[1-9]\d{0,6})(?:\.(\d{1,4}))?$/;
+
+const isAllZeroDigits = (digits: string): boolean => /^0*$/.test(digits);
+
+const isManualAdjustmentZero = (
+  integerDigits: string,
+  fractionDigits: string,
+): boolean => integerDigits === '0' && isAllZeroDigits(fractionDigits);
+
+// integerDigits/fractionDigits here are the UNSIGNED magnitude's digit
+// strings (the sign is stripped and irrelevant, since the backend's bound
+// is symmetric: ge=-1_000_000, le=1_000_000). Any integer part under 7
+// digits is always < 1,000,000, so it needs no further check; a 7-digit
+// integer part can only be "1000000" through "9999999" per the pattern
+// above (no leading zero), so only "1000000" itself can possibly be in
+// range, and only when its fraction is entirely zero.
+const isManualAdjustmentWithinMagnitude = (
+  integerDigits: string,
+  fractionDigits: string,
+): boolean => {
+  if (integerDigits.length < 7) return true;
+  if (integerDigits !== '1000000') return false;
+  return isAllZeroDigits(fractionDigits);
+};
+
+export const manualAdjustmentPointsSchema = z.string().refine((value) => {
+  const match = MANUAL_ADJUSTMENT_DECIMAL_PATTERN.exec(value);
+  if (!match) return false;
+  const [, , integerDigits, fractionDigits = ''] = match;
+  if (isManualAdjustmentZero(integerDigits!, fractionDigits)) return false;
+  return isManualAdjustmentWithinMagnitude(integerDigits!, fractionDigits);
+}, 'Adjustment must be a non-zero decimal between -1,000,000 and 1,000,000 with at most 4 decimal places');
+
+export const manualAdjustmentRequestSchema = z
+  .object({
+    requestId: uuidSchema,
+    personId: uuidSchema,
+    seasonId: uuidSchema,
+    points: manualAdjustmentPointsSchema,
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict();
+export type ManualAdjustmentRequest = z.infer<
+  typeof manualAdjustmentRequestSchema
+>;
+export const manualAdjustmentResponseSchema = z
+  .object({ id: uuidSchema, accepted: z.literal(true) })
+  .strict();
+export type ManualAdjustmentResponse = z.infer<
+  typeof manualAdjustmentResponseSchema
 >;
