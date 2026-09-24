@@ -507,6 +507,13 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
         params={"seasonId": season.json()["id"]},
     )
     assert leaderboard.status_code == 200, leaderboard.text
+    assert (
+        client.get(
+            "/public/leaderboard",
+            params={"seasonId": season.json()["id"], "offset": 10_001},
+        ).status_code
+        == 400
+    )
     assert all("personId" not in item for item in leaderboard.json()["items"])
     leaderboard_item = next(
         item for item in leaderboard.json()["items"] if item["publicSlug"] == slug

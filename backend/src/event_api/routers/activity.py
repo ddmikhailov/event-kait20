@@ -2324,7 +2324,7 @@ def leaderboard(
     db: Annotated[Database, Depends(database)],
     season_id: Annotated[UUID, Query(alias="seasonId")],
     limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0, le=100_000),
+    offset: int = Query(0, ge=0, le=10_000),
 ) -> dict[str, Any]:
     with db.connect() as connection:
         scope = default_tenant_scope(connection)
@@ -2441,7 +2441,7 @@ def group_leaderboard(
     db: Annotated[Database, Depends(database)],
     season_id: Annotated[UUID, Query(alias="seasonId")],
     limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0, le=100_000),
+    offset: int = Query(0, ge=0, le=10_000),
 ) -> dict[str, Any]:
     return membership_leaderboard(db, str(season_id), "study_group", limit, offset)
 
@@ -2451,6 +2451,6 @@ def department_leaderboard(
     db: Annotated[Database, Depends(database)],
     season_id: Annotated[UUID, Query(alias="seasonId")],
     limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0, le=100_000),
+    offset: int = Query(0, ge=0, le=10_000),
 ) -> dict[str, Any]:
     return membership_leaderboard(db, str(season_id), "department", limit, offset)

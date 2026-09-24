@@ -462,7 +462,7 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
   and fields allowed by each student's active publication consent. Students
   without scores can still appear. No authentication is required.
 - `GET /public/leaderboard`, `/public/leaderboard/groups`,
-  `/public/leaderboard/departments`
+  `/public/leaderboard/departments` (offset at most 10000)
 
 Global configuration, publication and manual score adjustments are SUPER_ADMIN
 operations. Participation operations accept SUPER_ADMIN/ORGANIZER. Scanner is
