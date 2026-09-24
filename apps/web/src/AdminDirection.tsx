@@ -311,11 +311,13 @@ export const DirectionAdmin = ({
   role: SessionResponse['user']['role'];
   onBack: () => void;
 }) => {
-  // Matches the backend's own csrf_administrator dependency on create/
-  // update/deactivate - Stage 1's Direction CRUD predates the Stage 4.4
-  // N21 principle (structural config = SUPER_ADMIN only) and was not
-  // changed here; see the PRODUCT QUESTION in this batch's review.
-  const canManage = role === 'SUPER_ADMIN' || role === 'ORGANIZER';
+  // Stage 4 Final Cleanup: ActivityDirection is structural configuration,
+  // resolved per the Stage 4.4 N21 principle - mutations require
+  // SUPER_ADMIN, matching the backend's now-changed csrf_super_admin
+  // dependency. ORGANIZER keeps read access to this screen (list stays
+  // `administrator`); the screen is never hidden from them, only its
+  // mutation controls.
+  const canManage = role === 'SUPER_ADMIN';
   const [directions, setDirections] = useState<ActivityDirection[]>([]);
   const [mode, setMode] = useState<Mode>('idle');
   const [editingDirection, setEditingDirection] = useState<ActivityDirection>();

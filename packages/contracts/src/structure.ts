@@ -24,7 +24,11 @@ export const departmentSchema = z
     code: structureCodeSchema,
     name: z.string().min(1).max(150),
     active: z.boolean(),
-    sortOrder: z.number().int().nonnegative(),
+    // Mirrors the backend's actual bound exactly:
+    // DepartmentValues/DepartmentUpdate.sort_order = Field(ge=0, le=100_000)
+    // - same fix as activityDirectionSchema.sortOrder (Stage 4.5
+    // correction), applied here per the Stage 4 Final Cleanup audit.
+    sortOrder: z.number().int().nonnegative().max(100_000),
   })
   .strict();
 export const departmentListSchema = z

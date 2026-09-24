@@ -667,7 +667,18 @@ def test_event_purge_rejects_confirmed_activity_and_preserves_history(
             text("SELECT person_id FROM registrations WHERE event_id=:event LIMIT 1"),
             {"event": event_id},
         ).scalar_one()
-    profile = client.get(f"/admin/people/{person_id}/profile")
+    # N05 (accepted Security Boundary Gate) made GET .../profile
+    # side-effect-free - it no longer creates a StudentProfile row (see
+    # test_admin_profile_get_has_no_side_effect). This test's own purpose
+    # is unrelated (Event purge history preservation), so it now creates
+    # the profile explicitly via the actual mutation endpoint that is
+    # supposed to create one, rather than depending on a GET's old,
+    # removed side effect.
+    profile = client.patch(
+        f"/admin/people/{person_id}/profile",
+        headers=headers,
+        json={"visibility": "PRIVATE"},
+    )
     assert profile.status_code == 200, profile.text
     archived = client.post(f"/admin/events/{event_id}/archive", headers=headers)
     assert archived.status_code == 201, archived.text

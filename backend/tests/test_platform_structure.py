@@ -445,6 +445,117 @@ def test_direction_create_and_edit_are_reflected_canonically(
     )
 
 
+def test_direction_mutations_require_super_admin(client: TestClient) -> None:
+    """Stage 4 Final Cleanup (item D): ActivityDirection is structural
+    configuration per the accepted Stage 4.4 N21 principle - create/update/
+    deactivate now require SUPER_ADMIN; list/read stays at the
+    `administrator` bar, so ORGANIZER keeps read access to the screen.
+    """
+    from event_api.security import hash_password
+
+    headers = login(client)
+    database: Database = client.app.state.database
+    with database.connect() as connection:
+        tenant_id, organization_id = connection.execute(
+            text(
+                "SELECT tenant_id,organization_id FROM staff_users WHERE email='admin@example.com'"
+            )
+        ).one()
+
+    organizer_id = str(uuid4())
+    organizer_email = f"organizer-{organizer_id[:12]}@example.com"
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO staff_users
+                (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,
+                 active,password_changed_at,created_at,updated_at)
+                VALUES (:id,:tenant,:organization,:email,:email,:password,'ORGANIZER',true,
+                        UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+            ),
+            {
+                "id": organizer_id,
+                "tenant": tenant_id,
+                "organization": organization_id,
+                "email": organizer_email,
+                "password": hash_password("organizer permission password"),
+            },
+        )
+    client.cookies.clear()
+    organizer_login = client.post(
+        "/auth/login",
+        headers=ORIGIN,
+        json={"email": organizer_email, "password": "organizer permission password"},
+    )
+    assert organizer_login.status_code == 200, organizer_login.text
+    organizer_headers = {**ORIGIN, "X-CSRF-Token": organizer_login.json()["csrfToken"]}
+
+    listed = client.get("/admin/structure/directions", headers=organizer_headers)
+    assert listed.status_code == 200, listed.text
+
+    denied_create = client.post(
+        "/admin/structure/directions",
+        headers=organizer_headers,
+        json={"code": f"ORG_DENIED_{uuid4().hex[:8].upper()}", "name": "Denied"},
+    )
+    assert denied_create.status_code == 403, denied_create.text
+
+    # login_as_scope-equivalent above moved the client's session cookie
+    # away from the original owner staff; log back in before reusing
+    # `headers` to set up a target Direction for the PATCH/DELETE checks.
+    headers = login(client)
+    seeded = client.post(
+        "/admin/structure/directions",
+        headers=headers,
+        json={"code": f"ORG_TARGET_{uuid4().hex[:8].upper()}", "name": "Target"},
+    )
+    assert seeded.status_code == 201, seeded.text
+    direction_id = seeded.json()["id"]
+
+    client.cookies.clear()
+    organizer_relogin = client.post(
+        "/auth/login",
+        headers=ORIGIN,
+        json={"email": organizer_email, "password": "organizer permission password"},
+    )
+    assert organizer_relogin.status_code == 200, organizer_relogin.text
+    organizer_headers = {
+        **ORIGIN,
+        "X-CSRF-Token": organizer_relogin.json()["csrfToken"],
+    }
+
+    denied_update = client.patch(
+        f"/admin/structure/directions/{direction_id}",
+        headers=organizer_headers,
+        json={"name": "Should be denied"},
+    )
+    assert denied_update.status_code == 403, denied_update.text
+
+    denied_deactivate = client.delete(
+        f"/admin/structure/directions/{direction_id}", headers=organizer_headers
+    )
+    assert denied_deactivate.status_code == 403, denied_deactivate.text
+
+    with database.connect() as connection:
+        row = connection.execute(
+            text("SELECT name,active FROM activity_directions WHERE id=:id"),
+            {"id": direction_id},
+        ).one()
+    assert row[0] == "Target", "a denied update must not change the Direction"
+    assert bool(row[1]), "a denied deactivate must not change the Direction"
+
+    # SUPER_ADMIN mutation happy path still works (re-login as owner - the
+    # organizer login above moved the cookie again).
+    headers = login(client)
+    allowed = client.patch(
+        f"/admin/structure/directions/{direction_id}",
+        headers=headers,
+        json={"name": "Renamed by SUPER_ADMIN"},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["name"] == "Renamed by SUPER_ADMIN"
+
+
 def test_inactive_direction_is_rejected_for_id_and_legacy_text(
     client: TestClient,
 ) -> None:

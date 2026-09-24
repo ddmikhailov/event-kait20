@@ -645,7 +645,15 @@ export const activityError = (error: unknown): Notice => {
       MEMBERSHIP_ALREADY_CLOSED: 'Эта принадлежность уже завершена.',
       MEMBERSHIP_PERIOD_OVERLAP:
         'Периоды учебной принадлежности пересекаются. Обратитесь к администратору для сверки истории.',
-      CONFLICT: 'Выбранная группа уже указана как текущая принадлежность.',
+      // Deliberately NOT mapping the generic `CONFLICT` code here (Stage 4
+      // Final Cleanup, closing the Stage 4.2 debt note): `CONFLICT` is
+      // reused by many unrelated backend endpoints across this codebase
+      // (event slug, staff account, stream limits, ...) - giving it one
+      // fixed, Membership-specific message in this SHARED mapper was
+      // fragile and wrong for every other caller. Membership's own
+      // no-op-transfer CONFLICT now has its own mapping in
+      // AdminMembership.tsx; every other caller falls back to the
+      // backend's own message below, same as any other unmapped code.
       ACHIEVEMENT_NOT_FOUND: 'Достижение не найдено.',
       // Achievement-specific, deliberately not reusing the shared CONFLICT
       // mapping above (Stage 4.2 debt note) - this code means something

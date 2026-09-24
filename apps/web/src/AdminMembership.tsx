@@ -7,8 +7,23 @@ import type {
 import { Button } from '@event-registration/ui';
 import { useCallback, useState } from 'react';
 
-import { adminApi } from './admin-api.js';
+import { AdminApiError, adminApi } from './admin-api.js';
 import { activityError } from './AdminActivity.js';
+
+// Membership-specific, deliberately NOT relying on the shared
+// activityError()'s CONFLICT mapping (removed in Stage 4 Final Cleanup -
+// see AdminActivity.tsx) - `CONFLICT` is reused by many unrelated backend
+// endpoints, so only Membership's own no-op-transfer case gets this
+// message; everything else falls back to the shared mapper.
+export const membershipError = (error: unknown) => {
+  if (error instanceof AdminApiError && error.code === 'CONFLICT') {
+    return {
+      kind: 'error' as const,
+      text: 'Выбранная группа уже является текущей принадлежностью.',
+    };
+  }
+  return activityError(error);
+};
 
 type Notice = { kind: 'error' | 'success'; text: string };
 
@@ -374,7 +389,7 @@ export const MembershipAdmin = ({
         setMemberships((await adminApi.memberships(personId)).items);
         return true;
       } catch (error) {
-        setNotice(activityError(error));
+        setNotice(membershipError(error));
         return false;
       }
     },
@@ -389,7 +404,7 @@ export const MembershipAdmin = ({
       setPersonResults((await adminApi.people(query)).items);
       setHasSearchedPeople(true);
     } catch (error) {
-      setNotice(activityError(error));
+      setNotice(membershipError(error));
     } finally {
       setSearchBusy(false);
     }
@@ -408,7 +423,7 @@ export const MembershipAdmin = ({
       setMemberships(membershipResult.items);
       setStudyGroups(groupResult.items);
     } catch (error) {
-      setNotice(activityError(error));
+      setNotice(membershipError(error));
     } finally {
       setSearchBusy(false);
     }
@@ -458,7 +473,7 @@ export const MembershipAdmin = ({
       setMode('idle');
       await afterMutation('Принадлежность назначена.');
     } catch (error) {
-      setNotice(activityError(error));
+      setNotice(membershipError(error));
     } finally {
       setMutationBusy(false);
     }
@@ -489,7 +504,7 @@ export const MembershipAdmin = ({
       setMode('idle');
       await afterMutation('Перевод сохранён.');
     } catch (error) {
-      setNotice(activityError(error));
+      setNotice(membershipError(error));
     } finally {
       setMutationBusy(false);
     }
@@ -514,7 +529,7 @@ export const MembershipAdmin = ({
       setMode('idle');
       await afterMutation('Принадлежность завершена.');
     } catch (error) {
-      setNotice(activityError(error));
+      setNotice(membershipError(error));
     } finally {
       setMutationBusy(false);
     }

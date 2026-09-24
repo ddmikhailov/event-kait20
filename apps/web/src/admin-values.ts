@@ -11,8 +11,37 @@ import {
 
 const MOSCOW_TIMEZONE = 'Europe/Moscow';
 
-export const eventValues = (form: FormData): CreateEventRequest => {
+// `currentDirectionId` is `undefined` for a brand-new Event (create - the
+// field is always included, legacy `direction` is never sent from this UI
+// at all - Stage 4 Final Cleanup, item C) and `event.directionId ?? null`
+// for an existing one (update). When editing, the `directionId` key is
+// only included in the parsed request if the admin actually changed the
+// selection - omitted entirely otherwise, so an untouched Event whose
+// Direction has since been deactivated never re-triggers the backend's
+// resolve_direction() validation (which would reject it with
+// DIRECTION_INACTIVE) just because an unrelated field was edited.
+//
+// Critical HTML form-submission detail: a `<select>`'s currently-selected
+// `<option>` is NOT included in the submitted FormData if that option is
+// `disabled` - which is exactly the case for the current, since-deactivated
+// Direction's option (see EventForm). So `form.has('directionId')` being
+// false does not mean "no Direction" - it means "the field was never a
+// successful form control", which on UPDATE must read as "unchanged",
+// never as "detach". Only an explicitly PRESENT-but-empty field (the admin
+// picked the real "Без направления" option, which is never disabled) means
+// the admin explicitly cleared it - that must still send `directionId: null`.
+export const eventValues = (
+  form: FormData,
+  currentDirectionId?: string | null,
+): CreateEventRequest => {
   const timezone = 'Europe/Moscow';
+  const hasDirectionField = form.has('directionId');
+  const directionId = hasDirectionField
+    ? optionalText(form, 'directionId')
+    : (currentDirectionId ?? null);
+  const directionUnchanged =
+    currentDirectionId !== undefined &&
+    (!hasDirectionField || (currentDirectionId ?? '') === (directionId ?? ''));
   return createEventRequestSchema.parse({
     seasonId: optionalText(form, 'seasonId'),
     categoryId: optionalText(form, 'categoryId'),
@@ -24,7 +53,7 @@ export const eventValues = (form: FormData): CreateEventRequest => {
     title: text(form, 'title'),
     slug: text(form, 'slug'),
     description: optionalText(form, 'description'),
-    direction: optionalText(form, 'direction'),
+    ...(directionUnchanged ? {} : { directionId }),
     startAt: zonedLocalToIso(text(form, 'startAt'), timezone),
     endAt: zonedLocalToIso(text(form, 'endAt'), timezone),
     timezone,
@@ -75,7 +104,7 @@ export const eventDefaults = (event?: EventResponse) => ({
   title: event?.title ?? '',
   slug: event?.slug ?? '',
   description: event?.description ?? '',
-  direction: event?.direction ?? '',
+  directionId: event?.directionId ?? '',
   startAt: event ? isoToZonedLocal(event.startAt, 'Europe/Moscow') : '',
   endAt: event ? isoToZonedLocal(event.endAt, 'Europe/Moscow') : '',
   timezone: 'Europe/Moscow',

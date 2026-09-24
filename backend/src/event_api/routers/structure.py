@@ -6,7 +6,13 @@ from sqlalchemy.engine import Connection, RowMapping
 from sqlalchemy.exc import IntegrityError
 
 from ..database import Database, execute, row, rows
-from ..dependencies import Staff, administrator, csrf_administrator, database
+from ..dependencies import (
+    Staff,
+    administrator,
+    csrf_administrator,
+    csrf_super_admin,
+    database,
+)
 from ..errors import ApiError
 from ..service_utils import audit
 from ..structure_schemas import (
@@ -406,7 +412,11 @@ def list_directions(
 @router.post("/directions", status_code=201)
 def create_direction(
     values: DirectionValues,
-    staff: Annotated[Staff, Depends(csrf_administrator)],
+    # Stage 4 Final Cleanup: ActivityDirection is structural configuration
+    # (per the accepted Stage 4.4 N21 principle), so its mutations require
+    # SUPER_ADMIN - unlike Department/StudyGroup CRUD below, which are
+    # unchanged. Read (list_directions) stays at the `administrator` bar.
+    staff: Annotated[Staff, Depends(csrf_super_admin)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     identity = str(uuid4())
@@ -446,7 +456,7 @@ def create_direction(
 def update_direction(
     identity: UUID,
     values: DirectionUpdate,
-    staff: Annotated[Staff, Depends(csrf_administrator)],
+    staff: Annotated[Staff, Depends(csrf_super_admin)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     try:
@@ -490,7 +500,7 @@ def update_direction(
 @router.delete("/directions/{identity}")
 def deactivate_direction(
     identity: UUID,
-    staff: Annotated[Staff, Depends(csrf_administrator)],
+    staff: Annotated[Staff, Depends(csrf_super_admin)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, bool]:
     with db.transaction() as connection:

@@ -1,4 +1,5 @@
 import type {
+  ActivityDirection,
   ActivityReference,
   EventResponse,
   FormFieldResponse,
@@ -452,6 +453,7 @@ const EventEditor = ({
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [categories, setCategories] = useState<ActivityReference[]>([]);
   const [levels, setLevels] = useState<ActivityReference[]>([]);
+  const [directions, setDirections] = useState<ActivityDirection[]>([]);
   const archived = savedEvent?.status === 'ARCHIVED';
 
   const loadFields = useCallback(async (eventId: string) => {
@@ -471,11 +473,13 @@ const EventEditor = ({
       adminApi.seasons(),
       adminApi.activityCategories(),
       adminApi.activityLevels(),
+      adminApi.directions(true),
     ])
-      .then(([seasonList, categoryList, levelList]) => {
+      .then(([seasonList, categoryList, levelList, directionList]) => {
         setSeasons(seasonList.items);
         setCategories(categoryList.items.filter((item) => item.active));
         setLevels(levelList.items.filter((item) => item.active));
+        setDirections(directionList.items);
       })
       .catch((error: unknown) => setNotice(errorNotice(error)));
   }, []);
@@ -484,7 +488,10 @@ const EventEditor = ({
     setBusy(true);
     setNotice(undefined);
     try {
-      const values = eventValues(form);
+      const values = eventValues(
+        form,
+        savedEvent ? (savedEvent.directionId ?? null) : undefined,
+      );
       let result = savedEvent
         ? await adminApi.updateEvent(savedEvent.id, values)
         : await adminApi.createEvent(values);
@@ -624,6 +631,7 @@ const EventEditor = ({
             seasons={seasons}
             categories={categories}
             levels={levels}
+            directions={directions}
           />
           {savedEvent && !archived && (
             <button
@@ -693,6 +701,7 @@ export const EventForm = ({
   seasons = [],
   categories = [],
   levels = [],
+  directions = [],
 }: {
   event?: EventResponse | undefined;
   busy: boolean;
@@ -702,8 +711,20 @@ export const EventForm = ({
   seasons?: Season[];
   categories?: ActivityReference[];
   levels?: ActivityReference[];
+  directions?: ActivityDirection[];
 }) => {
   const values = eventDefaults(event);
+  // `directions` is already active-only (adminApi.directions(true)); an
+  // existing Event's current Direction may since have been deactivated -
+  // it must still be shown (never silently dropped), just not offered as a
+  // NEW selection for this or any other Event. The readable name comes
+  // from the Event's own legacy `direction` snapshot field, already loaded
+  // with the Event - no extra request needed.
+  const currentDirectionInactive =
+    event?.directionId &&
+    !directions.some((item) => item.id === event.directionId)
+      ? { id: event.directionId, name: event.direction ?? event.directionId }
+      : undefined;
   const [coverPreview, setCoverPreview] = useState<string>();
   const statuses: EventResponse['status'][] = event
     ? allowedStatuses(event.status)
@@ -774,14 +795,32 @@ export const EventForm = ({
           required
           disabled={readOnly}
         />
-        <AdminText
-          name="direction"
-          label="Направление"
-          value={values.direction}
-          maxLength={80}
-          placeholder="Например: Профориентация"
-          disabled={readOnly}
-        />
+        <label>
+          <span>Направление</span>
+          <select
+            name="directionId"
+            defaultValue={values.directionId}
+            disabled={readOnly}
+          >
+            <option value="">Без направления</option>
+            {directions.map((direction) => (
+              <option key={direction.id} value={direction.id}>
+                {direction.name}
+              </option>
+            ))}
+            {currentDirectionInactive && (
+              <option value={currentDirectionInactive.id} disabled>
+                {currentDirectionInactive.name} (неактивно)
+              </option>
+            )}
+          </select>
+          {event && !event.directionId && event.direction && (
+            <p className="muted">
+              Текущее legacy-направление: {event.direction}. Выберите
+              направление из списка, чтобы привязать его явно.
+            </p>
+          )}
+        </label>
         <label>
           <span>Сезон активности</span>
           <select

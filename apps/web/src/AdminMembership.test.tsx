@@ -6,8 +6,10 @@ import type {
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
+import { AdminApiError } from './admin-api.js';
 import {
   MembershipPanel,
+  membershipError,
   membershipState,
   transferConfirmationText,
 } from './AdminMembership.js';
@@ -274,5 +276,19 @@ describe('membership admin', () => {
     );
     expect(markup).not.toContain(target.id as string);
     expect(markup).not.toContain(target.organizationId as string);
+  });
+
+  it('membershipError: maps the no-op-transfer CONFLICT to a Membership-specific message (Stage 4 Final Cleanup)', () => {
+    const notice = membershipError(new AdminApiError('CONFLICT', 409, 'raw'));
+    expect(notice.text).toBe(
+      'Выбранная группа уже является текущей принадлежностью.',
+    );
+  });
+
+  it('membershipError: falls back to the shared mapper for any other code', () => {
+    const notice = membershipError(
+      new AdminApiError('STUDY_GROUP_NOT_FOUND', 404, 'raw'),
+    );
+    expect(notice.text).toBe('Учебная группа не найдена или недоступна.');
   });
 });
