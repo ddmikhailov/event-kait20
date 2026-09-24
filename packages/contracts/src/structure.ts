@@ -70,6 +70,7 @@ export const studyGroupUpdateSchema = studyGroupValuesSchema
   .partial()
   .refine((value) => Object.keys(value).length > 0);
 export type StudyGroup = z.infer<typeof studyGroupSchema>;
+export type StudyGroupList = z.infer<typeof studyGroupListSchema>;
 export type StudyGroupValues = z.infer<typeof studyGroupValuesSchema>;
 export type StudyGroupUpdate = z.infer<typeof studyGroupUpdateSchema>;
 

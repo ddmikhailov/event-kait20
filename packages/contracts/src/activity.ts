@@ -239,6 +239,32 @@ export type StudentMembershipValues = z.infer<
   typeof studentMembershipValuesSchema
 >;
 export type StudentMembership = z.infer<typeof studentMembershipSchema>;
+export type StudentMembershipList = z.infer<typeof studentMembershipListSchema>;
+
+export const studentMembershipTransferRequestSchema = z
+  .object({
+    studyGroupId: uuidSchema,
+    effectiveFrom: z.iso.date(),
+  })
+  .strict();
+export const studentMembershipTransferResponseSchema = z
+  .object({
+    previous: studentMembershipSchema,
+    current: studentMembershipSchema,
+  })
+  .strict();
+export const studentMembershipCloseRequestSchema = z
+  .object({ lastValidOn: z.iso.date() })
+  .strict();
+export type StudentMembershipTransferRequest = z.infer<
+  typeof studentMembershipTransferRequestSchema
+>;
+export type StudentMembershipTransferResponse = z.infer<
+  typeof studentMembershipTransferResponseSchema
+>;
+export type StudentMembershipCloseRequest = z.infer<
+  typeof studentMembershipCloseRequestSchema
+>;
 
 export const publicProfileSchema = z
   .object({

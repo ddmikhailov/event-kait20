@@ -185,6 +185,15 @@ class StudentMembershipValues(Contract):
         return self
 
 
+class StudentMembershipTransferRequest(Contract):
+    study_group_id: UUID
+    effective_from: date
+
+
+class StudentMembershipCloseRequest(Contract):
+    last_valid_on: date
+
+
 class AchievementValues(Contract):
     person_id: UUID
     event_id: UUID | None = None

@@ -33,6 +33,10 @@ import {
   scoringPreviewResponseSchema,
   seasonListSchema,
   seasonSchema,
+  studentMembershipListSchema,
+  studentMembershipSchema,
+  studentMembershipTransferResponseSchema,
+  studyGroupListSchema,
   staffInvitationResponseSchema,
   staffInvitationListResponseSchema,
   staffListResponseSchema,
@@ -97,6 +101,13 @@ import {
   type SeasonList,
   type SeasonValues,
   type SessionResponse,
+  type StudentMembership,
+  type StudentMembershipCloseRequest,
+  type StudentMembershipList,
+  type StudentMembershipTransferRequest,
+  type StudentMembershipTransferResponse,
+  type StudentMembershipValues,
+  type StudyGroupList,
   type StaffInvitationRequest,
   type StaffInvitationResponse,
   type StaffInvitationListResponse,
@@ -327,6 +338,56 @@ export class AdminApiClient {
       `/admin/activity/scoring-v2/people/${encodeURIComponent(personId)}/statuses/${encodeURIComponent(assignmentId)}`,
       { method: 'DELETE' },
       activityOperationResponseSchema,
+    );
+  }
+
+  public memberships(personId: string): Promise<StudentMembershipList> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/memberships`,
+      { method: 'GET' },
+      studentMembershipListSchema,
+    );
+  }
+
+  public createMembership(
+    personId: string,
+    values: StudentMembershipValues,
+  ): Promise<StudentMembership> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/memberships`,
+      { method: 'POST', body: JSON.stringify(values) },
+      studentMembershipSchema,
+    );
+  }
+
+  public transferMembership(
+    personId: string,
+    values: StudentMembershipTransferRequest,
+  ): Promise<StudentMembershipTransferResponse> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/memberships/transfer`,
+      { method: 'POST', body: JSON.stringify(values) },
+      studentMembershipTransferResponseSchema,
+    );
+  }
+
+  public closeMembership(
+    personId: string,
+    values: StudentMembershipCloseRequest,
+  ): Promise<StudentMembership> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/memberships/close`,
+      { method: 'POST', body: JSON.stringify(values) },
+      studentMembershipSchema,
+    );
+  }
+
+  public studyGroups(active?: boolean): Promise<StudyGroupList> {
+    const query = active === undefined ? '' : `?active=${active}`;
+    return this.request(
+      `/admin/structure/groups${query}`,
+      { method: 'GET' },
+      studyGroupListSchema,
     );
   }
 

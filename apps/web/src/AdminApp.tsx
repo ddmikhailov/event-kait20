@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { AdminApiError, adminApi } from './admin-api.js';
 import { ActivitySettings } from './AdminActivity.js';
 import { ParticipationsAdmin } from './AdminActivityAdmin.js';
+import { MembershipAdmin } from './AdminMembership.js';
 import { ScoringAdmin } from './AdminScoring.js';
 import { publicMediaUrl } from './api-client.js';
 import { EventParticipants, PeopleDirectory } from './AdminParticipants.js';
@@ -123,6 +124,7 @@ const AdminWorkspace = ({
     | 'access'
     | 'activity'
     | 'participations'
+    | 'membership'
     | 'scoring'
   >('events');
   const [selected, setSelected] = useState<EventResponse>();
@@ -233,6 +235,14 @@ const AdminWorkspace = ({
       />
     );
   }
+  if (view === 'membership') {
+    return (
+      <MembershipAdmin
+        role={session.user.role}
+        onBack={() => setView('events')}
+      />
+    );
+  }
 
   return (
     <main className="admin-shell">
@@ -264,6 +274,12 @@ const AdminWorkspace = ({
               onClick={() => setView('participations')}
             >
               Участия
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => setView('membership')}
+            >
+              Учебная принадлежность
             </button>
             <button
               className="secondary-button"

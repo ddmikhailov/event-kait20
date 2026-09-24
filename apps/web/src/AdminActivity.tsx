@@ -638,6 +638,14 @@ export const activityError = (error: unknown): Notice => {
       PARTICIPATION_ROLE_REQUIRED: 'Укажите роль участия.',
       INVALID_REFERENCE: 'Указанная роль или результат недоступны.',
       EVENT_NOT_FOUND: 'Мероприятие не найдено.',
+      PERSON_NOT_FOUND: 'Человек не найден.',
+      STUDY_GROUP_NOT_FOUND: 'Учебная группа не найдена или недоступна.',
+      MEMBERSHIP_NOT_FOUND:
+        'Действующая принадлежность в этой организации не найдена.',
+      MEMBERSHIP_ALREADY_CLOSED: 'Эта принадлежность уже завершена.',
+      MEMBERSHIP_PERIOD_OVERLAP:
+        'Периоды учебной принадлежности пересекаются. Обратитесь к администратору для сверки истории.',
+      CONFLICT: 'Выбранная группа уже указана как текущая принадлежность.',
     };
     return { kind: 'error', text: messages[error.code] ?? error.message };
   }

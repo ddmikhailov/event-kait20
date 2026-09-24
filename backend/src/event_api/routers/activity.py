@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from datetime import timedelta
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -22,6 +23,8 @@ from ..activity_schemas import (
     ReferenceValues,
     ScoringRuleValues,
     SeasonValues,
+    StudentMembershipCloseRequest,
+    StudentMembershipTransferRequest,
     StudentMembershipValues,
 )
 from ..activity_service import (
@@ -1340,6 +1343,13 @@ def withdraw_profile_consent(
     return {"accepted": True}
 
 
+MEMBERSHIP_SELECT = """SELECT sm.*,o.name AS organization
+FROM student_memberships sm
+JOIN organizations o ON o.id=sm.organization_id
+LEFT JOIN study_groups sg ON sg.id=sm.study_group_id
+LEFT JOIN departments d ON d.id=sm.department_id"""
+
+
 def membership_response(item: RowMapping) -> dict[str, Any]:
     return {
         "id": item["id"],
@@ -1362,6 +1372,11 @@ def list_memberships(
     staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
+    # StudentMembership belongs to Organization (Event/StudyGroup/Department
+    # do too; Person itself is Tenant-canonical - see the Security Boundary
+    # Gate). Scoping this history to staff.organization_id keeps Organization
+    # A from seeing Organization B's membership rows for a Person just
+    # because the Person identity happens to be shared tenant-wide.
     with db.connect() as connection:
         if not row(
             connection,
@@ -1371,14 +1386,10 @@ def list_memberships(
             raise ApiError(404, "PERSON_NOT_FOUND", "Person not found")
         items = rows(
             connection,
-            """SELECT sm.*,o.name AS organization
-            FROM student_memberships sm
-            JOIN organizations o ON o.id=sm.organization_id
-            LEFT JOIN study_groups sg ON sg.id=sm.study_group_id
-            LEFT JOIN departments d ON d.id=sm.department_id
-            WHERE sm.person_id=:person
-            ORDER BY valid_from DESC,id""",
-            {"person": str(person_id)},
+            MEMBERSHIP_SELECT
+            + " WHERE sm.person_id=:person AND sm.organization_id=:organization"
+            " ORDER BY valid_from DESC,id",
+            {"person": str(person_id), "organization": staff.organization_id},
         )
     return {"items": [membership_response(item) for item in items]}
 
@@ -1459,13 +1470,222 @@ def create_membership(
             identity,
             {"validFrom": values.valid_from.isoformat()},
         )
-        item = row(
+        item = row(connection, MEMBERSHIP_SELECT + " WHERE sm.id=:id", {"id": identity})
+    assert item is not None
+    return membership_response(item)
+
+
+def assert_membership_history_unambiguous(
+    connection: Connection, person_id: str
+) -> None:
+    """Data Integrity Gate proved the API's own writes can never create an
+    overlapping pair, but pre-existing/legacy data could still be ambiguous.
+    Shared by every membership lifecycle mutation (transfer, close, ...) so
+    none of them ever guesses, picks a row, or partially repairs corrupted
+    history - they all refuse outright instead. Deliberately Person-wide
+    (not scoped to staff.organization_id): the N18 overlap invariant is
+    Tenant-wide per Person, so an overlap involving a foreign Organization's
+    membership is still an integrity conflict for this Person, even though
+    its details are never disclosed to the caller. Call this AFTER the
+    Person row lock, so concurrent writes for the same Person stay
+    serialized against this guard.
+    """
+    corrupted = row(
+        connection,
+        """SELECT sm1.id FROM student_memberships sm1
+        JOIN student_memberships sm2 ON sm2.person_id=sm1.person_id AND sm2.id<>sm1.id
+        WHERE sm1.person_id=:person
+          AND sm1.valid_from<=COALESCE(sm2.valid_to,DATE('9999-12-31'))
+          AND (sm1.valid_to IS NULL OR sm1.valid_to>=sm2.valid_from)
+        LIMIT 1""",
+        {"person": person_id},
+    )
+    if corrupted:
+        raise ApiError(
+            409,
+            "MEMBERSHIP_PERIOD_OVERLAP",
+            "Membership history requires reconciliation before it can be changed",
+        )
+
+
+@person_admin.post("/{person_id}/memberships/transfer")
+def transfer_membership(
+    person_id: UUID,
+    values: StudentMembershipTransferRequest,
+    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.transaction() as connection:
+        # The Person row lock is the same serialization point
+        # create_membership already uses - no second locking mechanism.
+        require_person_in_tenant(connection, str(person_id), staff.tenant_id, lock=True)
+        assert_membership_history_unambiguous(connection, str(person_id))
+        # The membership being transferred must belong to the caller's own
+        # Organization - a Person's open-ended membership elsewhere (a
+        # different Organization in the same Tenant) is invisible here, same
+        # as list_memberships above.
+        source = row(
             connection,
-            """SELECT sm.*,o.name AS organization
-            FROM student_memberships sm JOIN organizations o ON o.id=sm.organization_id
-            LEFT JOIN study_groups sg ON sg.id=sm.study_group_id
-            LEFT JOIN departments d ON d.id=sm.department_id WHERE sm.id=:id""",
-            {"id": identity},
+            """SELECT * FROM student_memberships
+            WHERE person_id=:person AND organization_id=:organization AND valid_to IS NULL
+            LIMIT 1 FOR UPDATE""",
+            {"person": str(person_id), "organization": staff.organization_id},
+        )
+        if not source:
+            raise ApiError(
+                404,
+                "MEMBERSHIP_NOT_FOUND",
+                "No current membership found for this organization",
+            )
+        if values.effective_from <= source["valid_from"]:
+            raise ApiError(
+                400,
+                "VALIDATION_ERROR",
+                "Transfer date must be after the current membership's start",
+            )
+        group = row(
+            connection,
+            """SELECT sg.id,sg.organization_id,sg.department_id,sg.name,sg.course,
+            d.name AS department FROM study_groups sg
+            JOIN organizations o ON o.id=sg.organization_id
+            JOIN departments d ON d.id=sg.department_id
+            WHERE sg.id=:id AND sg.organization_id=:organization AND sg.active=true
+              AND d.active=true FOR UPDATE""",
+            {"id": str(values.study_group_id), "organization": staff.organization_id},
+        )
+        if not group or group["course"] is None:
+            raise ApiError(404, "STUDY_GROUP_NOT_FOUND", "Study group not found")
+        if str(group["id"]) == str(source["study_group_id"]):
+            raise ApiError(
+                409,
+                "CONFLICT",
+                "Target study group matches the current membership",
+            )
+        # The old period will end at effective_from-1 (checked below via the
+        # UPDATE), so it can never overlap the new [effective_from, NULL)
+        # period by construction - exclude it here and check every OTHER
+        # membership instead, in case a future-dated row already exists.
+        conflict = row(
+            connection,
+            """SELECT id FROM student_memberships
+            WHERE person_id=:person AND id<>:source
+              AND (valid_to IS NULL OR valid_to>=:effective_from)
+            LIMIT 1 FOR UPDATE""",
+            {
+                "person": str(person_id),
+                "source": source["id"],
+                "effective_from": values.effective_from,
+            },
+        )
+        if conflict:
+            raise ApiError(
+                409,
+                "MEMBERSHIP_PERIOD_OVERLAP",
+                "The new period conflicts with an existing membership",
+            )
+        old_valid_to = values.effective_from - timedelta(days=1)
+        execute(
+            connection,
+            "UPDATE student_memberships SET valid_to=:valid_to,updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
+            {"valid_to": old_valid_to, "id": source["id"]},
+        )
+        new_id = str(uuid4())
+        execute(
+            connection,
+            """INSERT INTO student_memberships
+            (id,person_id,organization_id,department_id,study_group_id,course,
+             study_group,department,valid_from,valid_to,created_at,updated_at)
+            VALUES (:id,:person,:organization,:department_id,:study_group_id,:course,
+                    :study_group,:department,:valid_from,NULL,
+                    UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
+            {
+                "id": new_id,
+                "person": str(person_id),
+                "organization": group["organization_id"],
+                "department_id": group["department_id"],
+                "study_group_id": group["id"],
+                "course": group["course"],
+                "study_group": group["name"],
+                "department": group["department"],
+                "valid_from": values.effective_from,
+            },
+        )
+        audit(
+            connection,
+            staff.id,
+            "STUDENT_MEMBERSHIP_TRANSFERRED",
+            "StudentMembership",
+            new_id,
+            {
+                "oldMembershipId": source["id"],
+                "newMembershipId": new_id,
+                "effectiveFrom": values.effective_from.isoformat(),
+                "oldStudyGroupId": source["study_group_id"],
+                "newStudyGroupId": str(group["id"]),
+            },
+        )
+        previous_item = row(
+            connection, MEMBERSHIP_SELECT + " WHERE sm.id=:id", {"id": source["id"]}
+        )
+        current_item = row(
+            connection, MEMBERSHIP_SELECT + " WHERE sm.id=:id", {"id": new_id}
+        )
+    assert previous_item is not None
+    assert current_item is not None
+    return {
+        "previous": membership_response(previous_item),
+        "current": membership_response(current_item),
+    }
+
+
+@person_admin.post("/{person_id}/memberships/close")
+def close_membership(
+    person_id: UUID,
+    values: StudentMembershipCloseRequest,
+    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.transaction() as connection:
+        require_person_in_tenant(connection, str(person_id), staff.tenant_id, lock=True)
+        assert_membership_history_unambiguous(connection, str(person_id))
+        current = row(
+            connection,
+            """SELECT * FROM student_memberships
+            WHERE person_id=:person AND organization_id=:organization
+            ORDER BY valid_from DESC,id LIMIT 1 FOR UPDATE""",
+            {"person": str(person_id), "organization": staff.organization_id},
+        )
+        if not current:
+            raise ApiError(
+                404,
+                "MEMBERSHIP_NOT_FOUND",
+                "No current membership found for this organization",
+            )
+        if current["valid_to"] is not None:
+            raise ApiError(
+                409, "MEMBERSHIP_ALREADY_CLOSED", "This membership is already closed"
+            )
+        if values.last_valid_on < current["valid_from"]:
+            raise ApiError(
+                400,
+                "VALIDATION_ERROR",
+                "Membership end cannot be before its start",
+            )
+        execute(
+            connection,
+            "UPDATE student_memberships SET valid_to=:valid_to,updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
+            {"valid_to": values.last_valid_on, "id": current["id"]},
+        )
+        audit(
+            connection,
+            staff.id,
+            "STUDENT_MEMBERSHIP_CLOSED",
+            "StudentMembership",
+            current["id"],
+            {"lastValidOn": values.last_valid_on.isoformat()},
+        )
+        item = row(
+            connection, MEMBERSHIP_SELECT + " WHERE sm.id=:id", {"id": current["id"]}
         )
     assert item is not None
     return membership_response(item)

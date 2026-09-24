@@ -3,8 +3,11 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from datetime import date, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -2901,3 +2904,625 @@ def test_ambiguous_legacy_membership_blocks_award_and_is_audited(
         ).scalar_one()
     assert award is None, "an ambiguous match must not silently pick one membership"
     assert ambiguous_audit == 1
+
+
+def _moscow_today() -> date:
+    return datetime.now(ZoneInfo("Europe/Moscow")).date()
+
+
+def test_membership_transfer_closes_old_opens_new_and_scoring_follows_boundary(
+    client: TestClient,
+) -> None:
+    """N19: the required example - Old 2026-09-01..NULL (Group A), transfer to
+    Group B effective 2026-10-01. Expected: Old becomes 2026-09-01..2026-09-30,
+    New is 2026-10-01..NULL, and confirming a Participation on either side of
+    the boundary attributes to the correct membership via the real
+    membership_for_activity scoring path (not re-derived in the test).
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"XFER_{uuid4().hex[:8].upper()}",
+            "name": "Transfer lifecycle season",
+            "startsAt": "2026-01-01T00:00:00Z",
+            "endsAt": "2026-12-31T23:59:59Z",
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    rule = client.post(
+        "/admin/activity/scoring-rules",
+        headers=headers,
+        json={
+            "seasonId": season.json()["id"],
+            "participationRoleId": role["id"],
+            "points": 7,
+            "priority": 501,
+            "active": True,
+            "validFrom": None,
+            "validTo": None,
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    before_event, _ = create_event(
+        client,
+        headers,
+        title="Transfer lifecycle before",
+        start_at="2026-09-30T10:00:00Z",
+        end_at="2026-09-30T11:00:00Z",
+        season_id=season.json()["id"],
+    )
+    after_event, _ = create_event(
+        client,
+        headers,
+        title="Transfer lifecycle after",
+        start_at="2026-10-01T10:00:00Z",
+        end_at="2026-10-01T11:00:00Z",
+        season_id=season.json()["id"],
+    )
+    before_registration, person_id = create_registration_for_person(
+        database, before_event, "xfer-lifecycle"
+    )
+    after_registration, _ = create_registration_for_person(
+        database, after_event, "xfer-lifecycle", person_id
+    )
+    group_a = create_study_group(client, headers, "XFER_A", "XFER_DEPT", 1)
+    group_b = create_study_group(client, headers, "XFER_B", "XFER_DEPT", 1)
+    initial = client.post(
+        f"/admin/people/{person_id}/memberships",
+        headers=headers,
+        json={"studyGroupId": group_a, "validFrom": "2026-09-01", "validTo": None},
+    )
+    assert initial.status_code == 201, initial.text
+
+    transfer = client.post(
+        f"/admin/people/{person_id}/memberships/transfer",
+        headers=headers,
+        json={"studyGroupId": group_b, "effectiveFrom": "2026-10-01"},
+    )
+    assert transfer.status_code == 200, transfer.text
+    body = transfer.json()
+    assert body["previous"]["validFrom"] == "2026-09-01"
+    assert body["previous"]["validTo"] == "2026-09-30"
+    assert body["current"]["validFrom"] == "2026-10-01"
+    assert body["current"]["validTo"] is None
+    assert body["current"]["studyGroupId"] == group_b
+
+    for event_id, registration_id in (
+        (before_event, before_registration),
+        (after_event, after_registration),
+    ):
+        confirmed = client.post(
+            f"/admin/events/{event_id}/participations/confirm",
+            headers=headers,
+            json={"registrationIds": [registration_id], "roleId": role["id"]},
+        )
+        assert confirmed.status_code == 200, confirmed.text
+    with database.connect() as connection:
+        attributed = connection.execute(
+            text("""SELECT e.title,st.membership_id FROM score_transactions st
+            JOIN participations p ON p.id=st.participation_id
+            JOIN events e ON e.id=p.event_id
+            WHERE st.person_id=:person AND st.transaction_type='AWARD'
+            ORDER BY e.start_at"""),
+            {"person": person_id},
+        ).all()
+    assert [row[1] for row in attributed] == [
+        body["previous"]["id"],
+        body["current"]["id"],
+    ]
+
+
+def test_membership_transfer_failure_after_close_rolls_back_both_statements(
+    client: TestClient, monkeypatch
+) -> None:
+    """N19: a failure between closing the old period and inserting the new
+    one must roll back the WHOLE transaction, not leave the old membership
+    closed with no replacement. No natural DB constraint sits between these
+    two statements (both use already-validated, mutually consistent data),
+    so this uses a small, targeted monkeypatch on the router's own `execute`
+    - not a fault-injection framework - to make only the INSERT fail.
+    """
+    import event_api.routers.activity as activity_module
+
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Transfer rollback event")
+    _, person_id = create_registration_for_person(database, event_id, "xfer-rollback")
+    group_a = create_study_group(client, headers, "XFER_RB_A", "XFER_RB_DEPT", 1)
+    group_b = create_study_group(client, headers, "XFER_RB_B", "XFER_RB_DEPT", 1)
+    initial = client.post(
+        f"/admin/people/{person_id}/memberships",
+        headers=headers,
+        json={"studyGroupId": group_a, "validFrom": "2026-09-01", "validTo": None},
+    )
+    assert initial.status_code == 201, initial.text
+    original_id = initial.json()["id"]
+
+    original_execute = activity_module.execute
+
+    def failing_execute(connection, query, params=None):
+        if "INSERT INTO student_memberships" in query:
+            raise RuntimeError("simulated failure between close and insert")
+        return original_execute(connection, query, params)
+
+    monkeypatch.setattr(activity_module, "execute", failing_execute)
+    # TestClient's default raise_server_exceptions=True re-raises an
+    # unhandled error into the test even though the app's own generic
+    # exception handler still turns it into a 500 for a real client - the
+    # point under test is the rollback, not the HTTP framing.
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        client.post(
+            f"/admin/people/{person_id}/memberships/transfer",
+            headers=headers,
+            json={"studyGroupId": group_b, "effectiveFrom": "2026-10-01"},
+        )
+    monkeypatch.undo()
+
+    with database.connect() as connection:
+        rows = connection.execute(
+            text("SELECT id,valid_to FROM student_memberships WHERE person_id=:person"),
+            {"person": person_id},
+        ).all()
+    assert len(rows) == 1, "the failed transfer must not leave a partial state"
+    assert rows[0][0] == original_id
+    assert rows[0][1] is None, "the old membership must still be open after rollback"
+
+
+def test_membership_transfer_rejects_cross_organization_study_group(
+    client: TestClient,
+) -> None:
+    """N19: a same-Tenant/different-Organization StudyGroup must be rejected
+    the same way create_membership already rejects it - 404, no group name
+    disclosed, and the caller's own current membership is left untouched.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    scope = create_cross_scope(database)
+    event_id, _ = create_event(client, headers, title="Transfer cross-org event")
+    _, person_id = create_registration_for_person(database, event_id, "xfer-cross-org")
+    group_a = create_study_group(client, headers, "XFER_XORG_A", "XFER_XORG_DEPT", 1)
+    initial = client.post(
+        f"/admin/people/{person_id}/memberships",
+        headers=headers,
+        json={"studyGroupId": group_a, "validFrom": "2026-09-01", "validTo": None},
+    )
+    assert initial.status_code == 201, initial.text
+
+    foreign_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a2"]
+    )
+    foreign_group = create_study_group(
+        client, foreign_headers, "XFER_XORG_B", "XFER_XORG_FOREIGN_DEPT", 1
+    )
+
+    headers = login(client)
+    rejected = client.post(
+        f"/admin/people/{person_id}/memberships/transfer",
+        headers=headers,
+        json={"studyGroupId": foreign_group, "effectiveFrom": "2026-10-01"},
+    )
+    assert rejected.status_code == 404, rejected.text
+    assert rejected.json()["error"]["code"] == "STUDY_GROUP_NOT_FOUND"
+    with database.connect() as connection:
+        still_open = connection.execute(
+            text("SELECT valid_to FROM student_memberships WHERE person_id=:person"),
+            {"person": person_id},
+        ).scalar_one()
+    assert still_open is None
+
+
+def test_concurrent_membership_transfer_same_effective_date_serializes(
+    client: TestClient,
+) -> None:
+    """N19: two concurrent transfers of the same Person to the same effective
+    date must serialize on the Person row lock, never both create a "current"
+    membership. Because the second racer freshly re-resolves "current" under
+    the lock (rather than working from stale pre-lock data), it sees the
+    first racer's brand-new membership as its own source - and since both
+    share the same effective date, `effectiveFrom > source.validFrom` fails
+    for the second one, a deterministic, real rejection rather than a
+    fabricated one.
+    """
+    from event_api.main import create_app
+
+    owner_headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, owner_headers, title="Transfer race event")
+    _, person_id = create_registration_for_person(database, event_id, "xfer-race")
+    group_a = create_study_group(
+        client, owner_headers, "XFER_RACE_A", "XFER_RACE_DEPT", 1
+    )
+    group_b = create_study_group(
+        client, owner_headers, "XFER_RACE_B", "XFER_RACE_DEPT", 2
+    )
+    group_c = create_study_group(
+        client, owner_headers, "XFER_RACE_C", "XFER_RACE_DEPT", 3
+    )
+    initial = client.post(
+        f"/admin/people/{person_id}/memberships",
+        headers=owner_headers,
+        json={"studyGroupId": group_a, "validFrom": "2026-09-01", "validTo": None},
+    )
+    assert initial.status_code == 201, initial.text
+    barrier = threading.Barrier(2)
+
+    with ExitStack() as stack:
+        staff_clients = [
+            stack.enter_context(TestClient(create_app(client.app.state.settings)))
+            for _ in range(2)
+        ]
+        race_headers = [login(staff_client) for staff_client in staff_clients]
+        targets = (group_b, group_c)
+
+        def attempt(index: int) -> int:
+            barrier.wait(timeout=10)
+            return (
+                staff_clients[index]
+                .post(
+                    f"/admin/people/{person_id}/memberships/transfer",
+                    headers=race_headers[index],
+                    json={
+                        "studyGroupId": targets[index],
+                        "effectiveFrom": "2026-10-01",
+                    },
+                )
+                .status_code
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            statuses = list(pool.map(attempt, range(2)))
+
+    assert sorted(statuses) == [200, 400], statuses
+    with database.connect() as connection:
+        current_count = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM student_memberships WHERE person_id=:person AND valid_to IS NULL"
+            ),
+            {"person": person_id},
+        ).scalar_one()
+        overlap = connection.execute(
+            text(
+                """SELECT COUNT(*) FROM student_memberships sm1
+                JOIN student_memberships sm2 ON sm2.person_id=sm1.person_id AND sm2.id<>sm1.id
+                WHERE sm1.person_id=:person
+                  AND sm1.valid_from<=COALESCE(sm2.valid_to,DATE('9999-12-31'))
+                  AND (sm1.valid_to IS NULL OR sm1.valid_to>=sm2.valid_from)"""
+            ),
+            {"person": person_id},
+        ).scalar_one()
+    assert current_count == 1, "exactly one current membership must survive the race"
+    assert overlap == 0, "final history must be non-overlapping"
+
+
+def test_retroactive_membership_transfer_does_not_rewrite_scored_history(
+    client: TestClient,
+) -> None:
+    """N19: retroactively correcting affiliation must never touch an already
+    -persisted score_transactions row. The key invariant this gate protects.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    today = _moscow_today()
+    membership_start = (today - timedelta(days=120)).isoformat()
+    event_date = today - timedelta(days=90)
+    transfer_effective = (today - timedelta(days=30)).isoformat()
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"RETRO_{uuid4().hex[:8].upper()}",
+            "name": "Retroactive transfer season",
+            "startsAt": f"{(today - timedelta(days=365)).isoformat()}T00:00:00Z",
+            "endsAt": f"{(today + timedelta(days=365)).isoformat()}T00:00:00Z",
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    role = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    rule = client.post(
+        "/admin/activity/scoring-rules",
+        headers=headers,
+        json={
+            "seasonId": season.json()["id"],
+            "participationRoleId": role["id"],
+            "points": 11,
+            "priority": 502,
+            "active": True,
+            "validFrom": None,
+            "validTo": None,
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    event_id, _ = create_event(
+        client,
+        headers,
+        title="Retroactive transfer scored event",
+        start_at=f"{event_date.isoformat()}T10:00:00Z",
+        end_at=f"{event_date.isoformat()}T11:00:00Z",
+        season_id=season.json()["id"],
+    )
+    registration_id, person_id = create_registration_for_person(
+        database, event_id, "xfer-retro"
+    )
+    group_a = create_study_group(client, headers, "RETRO_A", "RETRO_DEPT", 1)
+    group_b = create_study_group(client, headers, "RETRO_B", "RETRO_DEPT", 2)
+    initial = client.post(
+        f"/admin/people/{person_id}/memberships",
+        headers=headers,
+        json={"studyGroupId": group_a, "validFrom": membership_start, "validTo": None},
+    )
+    assert initial.status_code == 201, initial.text
+    confirmed = client.post(
+        f"/admin/events/{event_id}/participations/confirm",
+        headers=headers,
+        json={"registrationIds": [registration_id], "roleId": role["id"]},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    participation_id = confirmed.json()["participationIds"][0]
+    with database.connect() as connection:
+        before = connection.execute(
+            text(
+                "SELECT membership_id,points FROM score_transactions WHERE participation_id=:id AND transaction_type='AWARD'"
+            ),
+            {"id": participation_id},
+        ).one()
+    assert before[0] is not None
+
+    transfer = client.post(
+        f"/admin/people/{person_id}/memberships/transfer",
+        headers=headers,
+        json={"studyGroupId": group_b, "effectiveFrom": transfer_effective},
+    )
+    assert transfer.status_code == 200, transfer.text
+
+    with database.connect() as connection:
+        after = connection.execute(
+            text(
+                "SELECT membership_id,points FROM score_transactions WHERE participation_id=:id AND transaction_type='AWARD'"
+            ),
+            {"id": participation_id},
+        ).one()
+        transaction_count = connection.execute(
+            text("SELECT COUNT(*) FROM score_transactions WHERE participation_id=:id"),
+            {"id": participation_id},
+        ).scalar_one()
+    assert after == before, "retroactive transfer must not rewrite the persisted award"
+    assert transaction_count == 1, "no reversal/re-award may be triggered automatically"
+
+
+def test_membership_transfer_rejects_ambiguous_legacy_history(
+    client: TestClient,
+) -> None:
+    """N19: pre-existing overlapping data (never possible via the API itself,
+    per the Data Integrity Gate) must block a transfer outright, never be
+    auto-repaired or silently picked from.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Ambiguous transfer event")
+    _, person_id = create_registration_for_person(database, event_id, "xfer-ambiguous")
+    group_a = create_study_group(client, headers, "AMBIG_XFER_A", "AMBIG_XFER_DEPT", 1)
+    group_b = create_study_group(client, headers, "AMBIG_XFER_B", "AMBIG_XFER_DEPT", 2)
+    group_c = create_study_group(client, headers, "AMBIG_XFER_C", "AMBIG_XFER_DEPT", 3)
+    with database.transaction() as connection:
+        for study_group_id in (group_a, group_b):
+            group = (
+                connection.execute(
+                    text(
+                        "SELECT organization_id,department_id,course,name FROM study_groups WHERE id=:id"
+                    ),
+                    {"id": study_group_id},
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO student_memberships
+                    (id,person_id,organization_id,department_id,study_group_id,course,
+                     study_group,department,valid_from,valid_to,created_at,updated_at)
+                    VALUES (:id,:person,:organization,:department,:study_group,:course,
+                            :study_group_name,'Ambiguous',:valid_from,:valid_to,
+                            UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+                ),
+                {
+                    "id": str(uuid4()),
+                    "person": person_id,
+                    "organization": group["organization_id"],
+                    "department": group["department_id"],
+                    "study_group": study_group_id,
+                    "course": group["course"],
+                    "study_group_name": group["name"],
+                    "valid_from": "2026-06-01",
+                    "valid_to": "2026-06-30",
+                },
+            )
+    rejected = client.post(
+        f"/admin/people/{person_id}/memberships/transfer",
+        headers=headers,
+        json={"studyGroupId": group_c, "effectiveFrom": "2026-10-01"},
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["error"]["code"] == "MEMBERSHIP_PERIOD_OVERLAP"
+    with database.connect() as connection:
+        total = connection.execute(
+            text("SELECT COUNT(*) FROM student_memberships WHERE person_id=:person"),
+            {"person": person_id},
+        ).scalar_one()
+    assert total == 2, "a rejected transfer must not touch the corrupted rows"
+
+
+def test_membership_close_rejects_ambiguous_legacy_history(
+    client: TestClient,
+) -> None:
+    """N19 correction: close must use the same ambiguity guard as transfer -
+    pre-existing overlapping data must block a close outright, never let
+    close_membership's own `ORDER BY valid_from DESC,id LIMIT 1` pick and
+    mutate one of the conflicting rows. Membership B is deliberately the
+    open-ended, most-recent-by-valid_from row - exactly the one the old,
+    unguarded close_membership would have selected and closed.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Ambiguous close event")
+    _, person_id = create_registration_for_person(database, event_id, "close-ambiguous")
+    group_a = create_study_group(
+        client, headers, "AMBIG_CLOSE_A", "AMBIG_CLOSE_DEPT", 1
+    )
+    group_b = create_study_group(
+        client, headers, "AMBIG_CLOSE_B", "AMBIG_CLOSE_DEPT", 2
+    )
+    periods = {group_a: ("2026-06-01", "2026-07-31"), group_b: ("2026-06-15", None)}
+    with database.transaction() as connection:
+        for study_group_id, (valid_from, valid_to) in periods.items():
+            group = (
+                connection.execute(
+                    text(
+                        "SELECT organization_id,department_id,course,name FROM study_groups WHERE id=:id"
+                    ),
+                    {"id": study_group_id},
+                )
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO student_memberships
+                    (id,person_id,organization_id,department_id,study_group_id,course,
+                     study_group,department,valid_from,valid_to,created_at,updated_at)
+                    VALUES (:id,:person,:organization,:department,:study_group,:course,
+                            :study_group_name,'Ambiguous',:valid_from,:valid_to,
+                            UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""
+                ),
+                {
+                    "id": str(uuid4()),
+                    "person": person_id,
+                    "organization": group["organization_id"],
+                    "department": group["department_id"],
+                    "study_group": study_group_id,
+                    "course": group["course"],
+                    "study_group_name": group["name"],
+                    "valid_from": valid_from,
+                    "valid_to": valid_to,
+                },
+            )
+    with database.connect() as connection:
+        before = connection.execute(
+            text(
+                "SELECT id,valid_from,valid_to FROM student_memberships WHERE person_id=:person ORDER BY valid_from"
+            ),
+            {"person": person_id},
+        ).all()
+    assert len(before) == 2
+
+    rejected = client.post(
+        f"/admin/people/{person_id}/memberships/close",
+        headers=headers,
+        json={"lastValidOn": "2026-08-31"},
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["error"]["code"] == "MEMBERSHIP_PERIOD_OVERLAP"
+
+    with database.connect() as connection:
+        after = connection.execute(
+            text(
+                "SELECT id,valid_from,valid_to FROM student_memberships WHERE person_id=:person ORDER BY valid_from"
+            ),
+            {"person": person_id},
+        ).all()
+        audit_count = connection.execute(
+            text(
+                """SELECT COUNT(*) FROM audit_log
+                WHERE action='STUDENT_MEMBERSHIP_CLOSED' AND entity_id IN (:id_a,:id_b)"""
+            ),
+            {"id_a": before[0][0], "id_b": before[1][0]},
+        ).scalar_one()
+    assert after == before, "a rejected close must not mutate either conflicting row"
+    assert audit_count == 0, "a rejected close must not create a close audit event"
+
+
+def test_membership_close_sets_valid_to_and_rejects_second_close(
+    client: TestClient,
+) -> None:
+    headers = login(client)
+    database: Database = client.app.state.database
+    event_id, _ = create_event(client, headers, title="Close lifecycle event")
+    _, person_id = create_registration_for_person(database, event_id, "close-lifecycle")
+    group_a = create_study_group(client, headers, "CLOSE_A", "CLOSE_DEPT", 1)
+    initial = client.post(
+        f"/admin/people/{person_id}/memberships",
+        headers=headers,
+        json={"studyGroupId": group_a, "validFrom": "2026-01-01", "validTo": None},
+    )
+    assert initial.status_code == 201, initial.text
+
+    closed = client.post(
+        f"/admin/people/{person_id}/memberships/close",
+        headers=headers,
+        json={"lastValidOn": "2026-06-30"},
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["validTo"] == "2026-06-30"
+
+    second_close = client.post(
+        f"/admin/people/{person_id}/memberships/close",
+        headers=headers,
+        json={"lastValidOn": "2026-07-31"},
+    )
+    assert second_close.status_code == 409, second_close.text
+    assert second_close.json()["error"]["code"] == "MEMBERSHIP_ALREADY_CLOSED"
+    with database.connect() as connection:
+        total = connection.execute(
+            text("SELECT COUNT(*) FROM student_memberships WHERE person_id=:person"),
+            {"person": person_id},
+        ).scalar_one()
+    assert total == 1, "close must not create a new membership row"
+
+
+def test_membership_list_is_scoped_to_the_current_organization(
+    client: TestClient,
+) -> None:
+    """N19's own GET audit: StudentMembership belongs to Organization, so
+    Organization A's admin must not see Organization B's membership rows for
+    a Person even though Person itself is Tenant-canonical.
+    """
+    headers = login(client)
+    database: Database = client.app.state.database
+    scope = create_cross_scope(database)
+    event_id, _ = create_event(client, headers, title="Membership scope event")
+    _, person_id = create_registration_for_person(
+        database, event_id, "membership-scope"
+    )
+    group_a = create_study_group(client, headers, "SCOPE_A", "SCOPE_DEPT", 1)
+    created = client.post(
+        f"/admin/people/{person_id}/memberships",
+        headers=headers,
+        json={"studyGroupId": group_a, "validFrom": "2026-09-01", "validTo": None},
+    )
+    assert created.status_code == 201, created.text
+
+    foreign_headers = login_as_scope(
+        database, client, scope["tenant_a"], scope["organization_a2"]
+    )
+    foreign_list = client.get(
+        f"/admin/people/{person_id}/memberships", headers=foreign_headers
+    )
+    assert foreign_list.status_code == 200, foreign_list.text
+    assert foreign_list.json()["items"] == []
+
+    headers = login(client)
+    owner_list = client.get(f"/admin/people/{person_id}/memberships", headers=headers)
+    assert len(owner_list.json()["items"]) == 1
