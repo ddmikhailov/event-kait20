@@ -8,12 +8,16 @@ import {
 } from './admin-values.js';
 
 describe('admin form values', () => {
-  it('builds a contract-valid event payload', () => {
+  it('builds a contract-valid event payload using the canonical Direction id, never legacy free text', () => {
+    // Stage 4 Final Cleanup (item C): EventForm sends `directionId` only -
+    // the legacy `direction` free-text field is never produced by this
+    // serializer anymore, for create or update.
+    const directionId = '80000000-0000-4000-8000-000000000001';
     const form = new FormData();
     form.set('title', 'День открытых дверей');
     form.set('slug', 'open-day');
     form.set('description', 'Описание');
-    form.set('direction', 'Профориентация');
+    form.set('directionId', directionId);
     form.set('startAt', '2026-09-10T10:00');
     form.set('endAt', '2026-09-10T13:00');
     form.set('registrationDeadline', '2026-09-10T09:00');
@@ -24,7 +28,8 @@ describe('admin form values', () => {
 
     const values = eventValues(form);
     expect(values.capacity).toBe(250);
-    expect(values.direction).toBe('Профориентация');
+    expect(values.directionId).toBe(directionId);
+    expect('direction' in values).toBe(false);
     expect(values.startAt).toBe('2026-09-10T07:00:00.000Z');
   });
 
