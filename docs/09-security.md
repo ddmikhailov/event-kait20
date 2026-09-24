@@ -226,6 +226,16 @@ internal score reasons or audit metadata. Withdrawing consent immediately hides
 the profile. Scanner has no Activity administration permission; manual score
 adjustment and global configuration remain SUPER_ADMIN-only.
 
+The public MosActive directory lists only KAIT student profiles explicitly set
+to PUBLIC with active NAME consent. It is accessible to anyone on the Internet,
+including people who are not students. Names are reduced to surname and initials;
+group, scores, participations and achievements each require their own consent
+field. Free-form achievement descriptions and Person organization are not public.
+The public activity API has a shared request-rate limit. Never infer publication
+consent from Event registration consent or from presence in an imported roster.
+Public directory, profile and leaderboard responses use `Cache-Control: no-store`
+so a withdrawn profile is not retained by HTTP caches.
+
 Consent is field-level: NAME and SCORES permit leaderboard identity/points only;
 participation and achievement counters require their own allowed fields and are
 omitted otherwise. A generated unique key enforces at most one non-withdrawn

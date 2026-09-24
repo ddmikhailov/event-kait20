@@ -44,9 +44,22 @@ a {
   color: var(--kait-color-blue);
 }
 .site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
   width: min(100%, 88rem);
   margin: 0 auto;
   padding: clamp(0.9rem, 2vw, 1.4rem) clamp(1rem, 4vw, 3rem) 0;
+}
+.site-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  font-weight: 700;
+}
+.site-header nav a {
+  text-decoration: none;
 }
 .global-brand {
   display: block;
@@ -145,6 +158,109 @@ a {
   border-radius: 999px;
   padding: 0.7rem 1rem;
   background: white;
+}
+.mos-active-promo {
+  display: grid;
+  gap: 0.4rem;
+  max-width: 56rem;
+  margin: 0 0 3rem;
+  border-top: 1px solid #d8d2e4;
+  padding-top: 2rem;
+}
+.mos-active-promo h2 {
+  margin-bottom: 0;
+  color: #292857;
+  font-size: clamp(1.65rem, 3vw, 2.4rem);
+}
+.mos-active-promo .catalog-link {
+  justify-self: start;
+  margin-top: 0.5rem;
+}
+.mos-active-search {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 38rem;
+  margin-bottom: 2rem;
+  font-weight: 700;
+}
+.mos-active-search > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.mos-active-search input {
+  flex: 1 1 16rem;
+  min-width: 0;
+  border: 1px solid #bdb4cd;
+  border-radius: 0.7rem;
+  padding: 0.8rem 1rem;
+}
+.mos-active-search button,
+.mos-active-pages button {
+  border: 1px solid #554191;
+  border-radius: 0.7rem;
+  padding: 0.8rem 1.2rem;
+  background: #554191;
+  color: white;
+  cursor: pointer;
+}
+.mos-active-pages button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.mos-active-list,
+.mos-active-section ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mos-active-list li,
+.mos-active-section li {
+  border-bottom: 1px solid #e2ddeb;
+}
+.mos-active-list a {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 1.2rem;
+  padding: 1rem 0;
+  text-decoration: none;
+}
+.mos-active-list strong {
+  min-width: 12rem;
+}
+.mos-active-list span,
+.mos-active-section span {
+  color: #68677b;
+}
+.mos-active-pages {
+  display: flex;
+  gap: 0.7rem;
+  margin: 1.5rem 0 2rem;
+}
+.mos-active-total {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  color: #2b2c7c;
+}
+.mos-active-total strong {
+  font-size: clamp(2.6rem, 6vw, 4rem);
+}
+.mos-active-section {
+  margin: 2rem 0 3rem;
+}
+.mos-active-section h2 {
+  color: #292857;
+}
+.mos-active-section li {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.95rem 0;
+}
+.mos-active-section li p {
+  margin-bottom: 0;
 }
 .compact-event-list {
   overflow: hidden;

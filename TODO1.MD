@@ -257,14 +257,16 @@ registration signature fingerprint tied to `session_secret`.
 
 ## Process
 
-### N39. Public profile/leaderboard routes exist ahead of Stage 5/6
+### N39. Public publication workflow and privacy review remain incomplete
 
-Eight unauthenticated `/public/*` routes for profiles, achievements, and
-leaderboards already work in `activity.py`, gated correctly by consent and
-`allowed_fields`/visibility. They were never product-reviewed because they
-were assumed unstarted. Open questions: no rate limit on these routes (and
-`offset` allows up to 100000), and there is still no admin or self-service
-UI to grant/withdraw publication consent — only direct API calls.
+Public MosActive catalogue and profile routes now use a bounded request-rate
+limit and expose surname with initials. Publication still requires a separate
+active field-level consent. There is no admin/self-service UI to record or
+withdraw publication consent and no dedicated cohort import. Before real-data
+launch, verify the signed dissemination-consent version and field permissions
+for each person, add an auditable roster import with preview/match decisions,
+and review small group/department aggregates. Keep real rosters off the
+synthetic Amvera beta.
 
 ### N40. Contracts/CI/deploy review pass incomplete
 

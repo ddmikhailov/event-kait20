@@ -271,7 +271,6 @@ export const publicProfileSchema = z
     publicSlug: z.string(),
     displayName: z.string().optional(),
     studyGroup: z.string().nullable().optional(),
-    organization: z.string().nullable().optional(),
     totalPoints: z
       .string()
       .regex(/^-?\d+\.\d{4}$/)
@@ -281,6 +280,60 @@ export const publicProfileSchema = z
   .strict();
 export type PublicProfile = z.infer<typeof publicProfileSchema>;
 
+export const publicStudentSchema = publicProfileSchema.extend({
+  displayName: z.string(),
+  achievements: z.number().int().nonnegative().optional(),
+});
+export const publicStudentListSchema = z
+  .object({
+    items: z.array(publicStudentSchema),
+    limit: z.number().int().positive(),
+    offset: z.number().int().nonnegative(),
+  })
+  .strict();
+export type PublicStudentList = z.infer<typeof publicStudentListSchema>;
+
+export const publicParticipationListSchema = z
+  .object({
+    items: z.array(
+      z
+        .object({
+          eventTitle: z.string(),
+          eventStartAt: z.string(),
+          role: z.string().nullable(),
+          result: z.string().nullable(),
+          points: z
+            .string()
+            .regex(/^-?\d+\.\d{4}$/)
+            .nullable(),
+        })
+        .strict(),
+    ),
+    page: z.number().int().positive(),
+    pageSize: z.number().int().positive(),
+  })
+  .strict();
+export type PublicParticipationList = z.infer<
+  typeof publicParticipationListSchema
+>;
+
+export const publicAchievementListSchema = z
+  .object({
+    items: z.array(
+      z
+        .object({
+          title: z.string(),
+          type: z.string(),
+          occurredAt: z.string(),
+        })
+        .strict(),
+    ),
+    page: z.number().int().positive(),
+    pageSize: z.number().int().positive(),
+  })
+  .strict();
+export type PublicAchievementList = z.infer<typeof publicAchievementListSchema>;
+
 export const leaderboardResponseSchema = z
   .object({
     items: z.array(
@@ -289,6 +342,7 @@ export const leaderboardResponseSchema = z
           rank: z.number().int().positive(),
           publicSlug: z.string(),
           displayName: z.string(),
+          studyGroup: z.string().nullable().optional(),
           points: z.string().regex(/^-?\d+\.\d{4}$/),
           confirmedParticipations: z.number().int().nonnegative().optional(),
           achievements: z.number().int().nonnegative().optional(),

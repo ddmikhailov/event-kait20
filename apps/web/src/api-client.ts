@@ -3,11 +3,19 @@ import {
   publicEventResponseSchema,
   publicEventListResponseSchema,
   publicRegistrationResponseSchema,
+  publicAchievementListSchema,
+  publicParticipationListSchema,
+  publicProfileSchema,
+  publicStudentListSchema,
   ticketResponseSchema,
   type PublicEventResponse,
   type PublicEventListResponse,
   type PublicRegistrationRequest,
   type PublicRegistrationResponse,
+  type PublicAchievementList,
+  type PublicParticipationList,
+  type PublicProfile,
+  type PublicStudentList,
   type TicketResponse,
   type AcceptedResponse,
 } from '@event-registration/contracts';
@@ -32,6 +40,46 @@ export class PublicApiError extends Error {
 }
 
 export class PublicApiClient {
+  public students(query = '', offset = 0): Promise<PublicStudentList> {
+    const params = new URLSearchParams({ limit: '24', offset: String(offset) });
+    if (query.trim().length >= 2) params.set('q', query.trim());
+    return this.request(
+      `/public/students?${params.toString()}`,
+      { method: 'GET', cache: 'no-store' },
+      publicStudentListSchema,
+    );
+  }
+
+  public student(slug: string): Promise<PublicProfile> {
+    return this.request(
+      `/public/profiles/${encodeURIComponent(slug)}`,
+      { method: 'GET', cache: 'no-store' },
+      publicProfileSchema,
+    );
+  }
+
+  public studentParticipations(
+    slug: string,
+    page = 1,
+  ): Promise<PublicParticipationList> {
+    return this.request(
+      `/public/profiles/${encodeURIComponent(slug)}/participations?page=${page}&pageSize=25`,
+      { method: 'GET', cache: 'no-store' },
+      publicParticipationListSchema,
+    );
+  }
+
+  public studentAchievements(
+    slug: string,
+    page = 1,
+  ): Promise<PublicAchievementList> {
+    return this.request(
+      `/public/profiles/${encodeURIComponent(slug)}/achievements?page=${page}&pageSize=25`,
+      { method: 'GET', cache: 'no-store' },
+      publicAchievementListSchema,
+    );
+  }
+
   public events(): Promise<PublicEventListResponse> {
     return this.request(
       '/public/events',

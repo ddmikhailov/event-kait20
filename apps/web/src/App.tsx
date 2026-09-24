@@ -11,6 +11,7 @@ import {
   ConsentCheckbox,
 } from '@event-registration/ui';
 import { StreamSelector } from './EventStreams.js';
+import { MosActiveCatalog, MosActiveProfile } from './PublicMosActive.js';
 import { defaultSystemFields } from '@event-registration/contracts';
 import {
   lazy,
@@ -30,6 +31,8 @@ import {
 type Route =
   | { kind: 'admin' }
   | { kind: 'events' }
+  | { kind: 'mos-active' }
+  | { kind: 'mos-active-profile'; slug: string }
   | { kind: 'event'; slug: string }
   | { kind: 'ticket'; publicId: string; signature: string }
   | { kind: 'password-reset'; token: string }
@@ -47,6 +50,9 @@ export const App = () => {
       </Suspense>
     );
   } else if (route.kind === 'events') page = <EventCatalogPage />;
+  else if (route.kind === 'mos-active') page = <MosActiveCatalog />;
+  else if (route.kind === 'mos-active-profile')
+    page = <MosActiveProfile slug={route.slug} />;
   else if (route.kind === 'event') page = <EventPage slug={route.slug} />;
   else if (route.kind === 'ticket')
     page = <TicketPage publicId={route.publicId} signature={route.signature} />;
@@ -67,6 +73,10 @@ const BrandLogo = () => (
     <a className="global-brand" href="/" aria-label="На главную КАИТ №20">
       <img src="/kait20-logo.png" alt="КАИТ №20" />
     </a>
+    <nav aria-label="Разделы сайта">
+      <a href="/events">Мероприятия</a>
+      <a href="/mos-active">МосАктив</a>
+    </nav>
   </header>
 );
 
@@ -599,6 +609,14 @@ const HomePage = () => {
           </div>
         )}
       </section>
+      <section className="mos-active-promo" aria-labelledby="mos-active-title">
+        <p className="eyebrow">МосАктив</p>
+        <h2 id="mos-active-title">Достижения студентов</h2>
+        <p>Узнайте об участии в мероприятиях и набранных баллах.</p>
+        <a className="catalog-link" href="/mos-active">
+          Открыть МосАктив <span aria-hidden="true">→</span>
+        </a>
+      </section>
       <footer className="calendar-footer">
         КАИТ №20 · Мастерство и профессионализм
       </footer>
@@ -945,6 +963,10 @@ const currentRoute = (): Route => {
       ? []
       : window.location.pathname.split('/').filter(Boolean);
   if (parts[0] === 'admin') return { kind: 'admin' };
+  if (parts[0] === 'mos-active' && parts[1] === 'students' && parts[2]) {
+    return { kind: 'mos-active-profile', slug: decodeURIComponent(parts[2]) };
+  }
+  if (parts[0] === 'mos-active' && !parts[1]) return { kind: 'mos-active' };
   if (parts[0] === 'events' && !parts[1]) return { kind: 'events' };
   if (parts[0] === 'events' && parts[1]) {
     return { kind: 'event', slug: decodeURIComponent(parts[1]) };

@@ -78,7 +78,16 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
             "camera=(), microphone=(), geolocation=()"
         )
         if request.url.path.startswith(
-            ("/auth", "/admin", "/scanner", "/tickets", "/public/events")
+            (
+                "/auth",
+                "/admin",
+                "/scanner",
+                "/tickets",
+                "/public/events",
+                "/public/students",
+                "/public/profiles",
+                "/public/leaderboard",
+            )
         ):
             response.headers["Cache-Control"] = "no-store"
         if production:

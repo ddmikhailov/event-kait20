@@ -464,6 +464,7 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
     profile = client.get(f"/admin/people/{person_id}/profile")
     assert profile.json()["visibility"] == "PRIVATE"
     assert client.get("/public/profiles/not-a-real-profile").status_code == 404
+    assert client.get("/public/students").json()["items"] == []
     consent = client.post(
         f"/admin/people/{person_id}/profile/consent",
         headers=headers,
@@ -483,7 +484,24 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
     slug = published.json()["publicSlug"]
     public_profile = client.get(f"/public/profiles/{slug}")
     assert public_profile.status_code == 200
+    assert public_profile.headers["cache-control"] == "no-store"
     assert "email" not in public_profile.json() and "phone" not in public_profile.json()
+    assert public_profile.json()["displayName"] == "Тестов У."
+    assert "organization" not in public_profile.json()
+    directory = client.get("/public/students", params={"q": "Тестов"})
+    assert directory.status_code == 200, directory.text
+    assert directory.headers["cache-control"] == "no-store"
+    student = next(
+        item for item in directory.json()["items"] if item["publicSlug"] == slug
+    )
+    assert student["displayName"] == "Тестов У."
+    assert student["totalPoints"] == public_profile.json()["totalPoints"]
+    assert "studyGroup" not in student
+    assert client.get("/public/students", params={"q": "ИС-21"}).json()["items"] == []
+    assert (
+        client.get("/public/students", params={"q": "Неизвестный"}).json()["items"]
+        == []
+    )
     leaderboard = client.get(
         "/public/leaderboard",
         params={"seasonId": season.json()["id"]},
@@ -493,6 +511,7 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
     leaderboard_item = next(
         item for item in leaderboard.json()["items"] if item["publicSlug"] == slug
     )
+    assert leaderboard_item["displayName"] == "Тестов У."
     assert "confirmedParticipations" not in leaderboard_item
     assert "achievements" not in leaderboard_item
 
@@ -501,11 +520,13 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
         headers=headers,
         json={
             "consentVersion": "active-test-v2",
-            "allowedFields": ["NAME", "SCORES", "PARTICIPATIONS"],
+            "allowedFields": ["NAME", "STUDY_GROUP", "SCORES", "PARTICIPATIONS"],
             "source": "ADMIN",
         },
     )
     assert participation_consent.status_code == 201, participation_consent.text
+    assert client.get("/public/students").json()["items"][0]["studyGroup"] == "ИС-21"
+    assert client.get("/public/students", params={"q": "ИС-21"}).json()["items"]
     participation_item = next(
         item
         for item in client.get(
@@ -543,6 +564,10 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
         == 200
     )
     assert client.get(f"/public/profiles/{slug}").status_code == 404
+    assert all(
+        item["publicSlug"] != slug
+        for item in client.get("/public/students").json()["items"]
+    )
     assert all(
         item["publicSlug"] != slug
         for item in client.get(

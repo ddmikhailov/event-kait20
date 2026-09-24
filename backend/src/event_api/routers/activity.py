@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.engine import Connection, RowMapping
 from sqlalchemy.exc import IntegrityError
 
@@ -49,13 +49,42 @@ from ..dependencies import (
 from ..errors import ApiError
 from ..scoring_v2 import decimal_string
 from ..service_utils import audit, db_json, json_value, naive_utc, serial
-from ..tenant_scope import require_event_for_staff, require_person_in_tenant
+from ..tenant_scope import (
+    default_tenant_scope,
+    require_event_for_staff,
+    require_person_in_tenant,
+)
 from .participants import search_pattern
 
 admin = APIRouter(prefix="/admin/activity", tags=["activity"])
 event_admin = APIRouter(prefix="/admin/events", tags=["participations"])
 person_admin = APIRouter(prefix="/admin/people", tags=["person-activity"])
-public = APIRouter(prefix="/public", tags=["active-public"])
+
+
+def limit_public_activity(request: Request) -> None:
+    request.app.state.rate_limiter.consume(
+        "public-activity",
+        request.client.host if request.client else "unknown",
+        maximum=120,
+    )
+
+
+public = APIRouter(
+    prefix="/public",
+    tags=["active-public"],
+    dependencies=[Depends(limit_public_activity)],
+)
+
+
+def public_display_name(item: RowMapping) -> str:
+    """Show the surname and initials, never a student's full given names."""
+    surname = str(item["last_name"]).strip()
+    initials = [
+        f"{str(item[key]).strip()[0].upper()}."
+        for key in ("first_name", "middle_name")
+        if item[key] and str(item[key]).strip()
+    ]
+    return " ".join([surname, *initials])
 
 
 def reference_response(item: RowMapping) -> dict[str, Any]:
@@ -2016,19 +2045,93 @@ def decide_achievement(
 def public_profile_row(
     connection: Connection, slug: str
 ) -> tuple[RowMapping, set[str]]:
+    scope = default_tenant_scope(connection)
     item = row(
         connection,
         """SELECT sp.*,p.last_name,p.first_name,p.middle_name,p.study_group,p.organization,
         pc.allowed_fields FROM student_profiles sp JOIN persons p ON p.id=sp.person_id
         JOIN profile_publication_consents pc ON pc.person_id=sp.person_id AND pc.withdrawn_at IS NULL
         WHERE sp.public_slug=:slug AND sp.visibility IN ('LINK_ONLY','PUBLIC')
+          AND p.tenant_id=:tenant AND p.person_type='KAIT_STUDENT'
+          AND p.merged_into_id IS NULL
         ORDER BY pc.accepted_at DESC LIMIT 1""",
-        {"slug": slug},
+        {"slug": slug, "tenant": scope.tenant_id},
     )
     if not item:
         raise ApiError(404, "PROFILE_NOT_FOUND", "Profile not found")
     allowed = json_value(item["allowed_fields"])
     return item, set(allowed if isinstance(allowed, list) else [])
+
+
+@public.get("/students")
+def public_students(
+    db: Annotated[Database, Depends(database)],
+    q: str | None = Query(None, min_length=2, max_length=80),
+    limit: int = Query(24, ge=1, le=50),
+    offset: int = Query(0, ge=0, le=10_000),
+) -> dict[str, Any]:
+    """List only KAIT students whose named profile was explicitly published."""
+    with db.connect() as connection:
+        scope = default_tenant_scope(connection)
+        items = rows(
+            connection,
+            """SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,p.study_group,
+              pc.allowed_fields,
+              (SELECT COALESCE(SUM(st.points),0) FROM score_transactions st
+               WHERE st.person_id=p.id) AS points,
+              (SELECT COUNT(*) FROM participations pa
+               WHERE pa.person_id=p.id AND pa.status='CONFIRMED') AS participations,
+              (SELECT COUNT(*) FROM achievements a
+               WHERE a.person_id=p.id AND a.status='VERIFIED') AS achievements
+            FROM student_profiles sp
+            JOIN persons p ON p.id=sp.person_id AND p.tenant_id=:tenant
+              AND p.merged_into_id IS NULL AND p.person_type='KAIT_STUDENT'
+            JOIN profile_publication_consents pc ON pc.person_id=p.id
+              AND pc.withdrawn_at IS NULL
+            WHERE sp.visibility='PUBLIC'
+              AND JSON_CONTAINS(pc.allowed_fields,JSON_QUOTE('NAME'))
+              AND (:query IS NULL OR p.last_name LIKE :query
+                   OR (p.study_group LIKE :query
+                       AND JSON_CONTAINS(pc.allowed_fields,JSON_QUOTE('STUDY_GROUP'))))
+            ORDER BY p.last_name,p.first_name,p.middle_name,p.id
+            LIMIT :limit OFFSET :offset""",
+            {
+                "tenant": scope.tenant_id,
+                "query": search_pattern(q.strip()) if q else None,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+    result = []
+    for item in items:
+        allowed = set(json_value(item["allowed_fields"]) or [])
+        result.append(
+            {
+                "publicSlug": item["public_slug"],
+                "displayName": public_display_name(item),
+                **(
+                    {"studyGroup": item["study_group"]}
+                    if "STUDY_GROUP" in allowed
+                    else {}
+                ),
+                **(
+                    {"totalPoints": decimal_string(item["points"])}
+                    if "SCORES" in allowed
+                    else {}
+                ),
+                **(
+                    {"confirmedParticipations": int(item["participations"])}
+                    if "PARTICIPATIONS" in allowed
+                    else {}
+                ),
+                **(
+                    {"achievements": int(item["achievements"])}
+                    if "ACHIEVEMENTS" in allowed
+                    else {}
+                ),
+            }
+        )
+    return {"items": result, "limit": limit, "offset": offset}
 
 
 @public.get("/profiles/{slug}")
@@ -2050,15 +2153,9 @@ def public_profile(
         )
     response: dict[str, Any] = {"publicSlug": item["public_slug"]}
     if "NAME" in allowed:
-        response["displayName"] = " ".join(
-            part
-            for part in (item["last_name"], item["first_name"], item["middle_name"])
-            if part
-        )
+        response["displayName"] = public_display_name(item)
     if "STUDY_GROUP" in allowed:
         response["studyGroup"] = item["study_group"]
-    if "ORGANIZATION" in allowed:
-        response["organization"] = item["organization"]
     if "SCORES" in allowed:
         response["totalPoints"] = decimal_string(total["points"] if total else 0)
     if "PARTICIPATIONS" in allowed:
@@ -2129,7 +2226,7 @@ def public_achievements(
             )
         items = rows(
             connection,
-            """SELECT title,description,achievement_type,occurred_at FROM achievements
+            """SELECT title,achievement_type,occurred_at FROM achievements
             WHERE person_id=:person AND status='VERIFIED'
             ORDER BY occurred_at DESC,id DESC LIMIT :limit OFFSET :offset""",
             {
@@ -2142,7 +2239,6 @@ def public_achievements(
         "items": [
             {
                 "title": item["title"],
-                "description": item["description"],
                 "type": item["achievement_type"],
                 "occurredAt": serial(item["occurred_at"]),
             }
@@ -2231,10 +2327,11 @@ def leaderboard(
     offset: int = Query(0, ge=0, le=100_000),
 ) -> dict[str, Any]:
     with db.connect() as connection:
+        scope = default_tenant_scope(connection)
         reference(connection, "seasons", str(season_id), active=False)
         items = rows(
             connection,
-            """SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,pc.allowed_fields,
+            """SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,p.study_group,pc.allowed_fields,
             SUM(st.points) AS points,
             (SELECT COUNT(*) FROM participations pa JOIN events pe ON pe.id=pa.event_id
              WHERE pa.person_id=p.id AND pa.status='CONFIRMED' AND pe.season_id=:season) AS participations,
@@ -2245,31 +2342,34 @@ def leaderboard(
             FROM score_transactions st JOIN persons p ON p.id=st.person_id
             JOIN student_profiles sp ON sp.person_id=p.id AND sp.visibility='PUBLIC'
             JOIN profile_publication_consents pc ON pc.person_id=p.id AND pc.withdrawn_at IS NULL
-            WHERE st.season_id=:season
+            WHERE st.season_id=:season AND p.tenant_id=:tenant
+              AND p.person_type='KAIT_STUDENT' AND p.merged_into_id IS NULL
               AND JSON_CONTAINS(pc.allowed_fields, JSON_QUOTE('NAME'))
               AND JSON_CONTAINS(pc.allowed_fields, JSON_QUOTE('SCORES'))
               AND pc.accepted_at=(SELECT MAX(pc2.accepted_at) FROM profile_publication_consents pc2
                                   WHERE pc2.person_id=p.id AND pc2.withdrawn_at IS NULL)
-            GROUP BY p.id,sp.public_slug,p.last_name,p.first_name,p.middle_name,pc.allowed_fields
+            GROUP BY p.id,sp.public_slug,p.last_name,p.first_name,p.middle_name,p.study_group,pc.allowed_fields
             HAVING points<>0 ORDER BY points DESC,p.last_name,p.first_name,p.id
             LIMIT :limit OFFSET :offset""",
-            {"season": str(season_id), "limit": limit, "offset": offset},
+            {
+                "season": str(season_id),
+                "tenant": scope.tenant_id,
+                "limit": limit,
+                "offset": offset,
+            },
         )
     return {
         "items": [
             {
                 "rank": offset + index + 1,
                 "publicSlug": item["public_slug"],
-                "displayName": " ".join(
-                    part
-                    for part in (
-                        item["last_name"],
-                        item["first_name"],
-                        item["middle_name"],
-                    )
-                    if part
-                ),
+                "displayName": public_display_name(item),
                 "points": decimal_string(item["points"]),
+                **(
+                    {"studyGroup": item["study_group"]}
+                    if "STUDY_GROUP" in set(json_value(item["allowed_fields"]) or [])
+                    else {}
+                ),
                 **(
                     {"confirmedParticipations": int(item["participations"])}
                     if "PARTICIPATIONS" in set(json_value(item["allowed_fields"]) or [])

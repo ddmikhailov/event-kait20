@@ -456,6 +456,11 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
 - `GET/POST /admin/people/:personId/memberships`
 - `POST/PATCH /admin/people/:personId/achievements`
 - `GET /public/profiles/:slug` and consent-gated child resources
+- `GET /public/students?q=&limit=&offset=` — bounded directory of published
+  KAIT student profiles; `q` searches surname or group, `limit` is at most 50,
+  `offset` is at most 10000. It returns only opaque slugs, surname with initials,
+  and fields allowed by each student's active publication consent. Students
+  without scores can still appear. No authentication is required.
 - `GET /public/leaderboard`, `/public/leaderboard/groups`,
   `/public/leaderboard/departments`
 
@@ -464,6 +469,12 @@ operations. Participation operations accept SUPER_ADMIN/ORGANIZER. Scanner is
 explicitly excluded. Public responses use opaque slugs and omit internal Person
 IDs and contact data. Exact request/response schemas are shared through
 `packages/contracts/src/activity.ts`.
+
+Public profile and personal leaderboard names use surname plus initials, never
+full given names. The public profile omits organization; achievement responses
+omit the free-form description. Public activity requests share a bounded
+per-client rate limit. An absent or withdrawn consent immediately removes a
+student from the directory and makes the profile unavailable.
 
 The public personal leaderboard requires PUBLIC visibility plus an active consent
 containing NAME and SCORES. `confirmedParticipations` and `achievements` are optional

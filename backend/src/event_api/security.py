@@ -135,8 +135,9 @@ class RateLimiter:
             self.secret.encode(), material.encode(), hashlib.sha256
         ).hexdigest()
 
-    def consume(self, scope: str, client: str) -> None:
+    def consume(self, scope: str, client: str, *, maximum: int | None = None) -> None:
         key = self._key(scope, client)
+        ceiling = maximum if maximum is not None else self.max
         with self.database.transaction() as connection:
             connection.exec_driver_sql(
                 "DELETE FROM security_rate_limits WHERE expires_at <= UTC_TIMESTAMP(3) LIMIT 100"
@@ -152,11 +153,11 @@ class RateLimiter:
                            DATE_ADD(UTC_TIMESTAMP(3), INTERVAL :window SECOND),expires_at),
                          updated_at=UTC_TIMESTAMP(3)"""
                 ),
-                {"key": key, "window": self.window, "ceiling": self.max + 1},
+                {"key": key, "window": self.window, "ceiling": ceiling + 1},
             )
             attempts = connection.execute(
                 text("SELECT attempts FROM security_rate_limits WHERE bucket_key=:key"),
                 {"key": key},
             ).scalar_one()
-            if int(attempts) > self.max:
+            if int(attempts) > ceiling:
                 raise ApiError(429, "RATE_LIMITED", "Too many requests")
