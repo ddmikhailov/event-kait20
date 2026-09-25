@@ -817,6 +817,7 @@ export const EventForm = ({
       }}
     >
       <div className="form-grid">
+        <h2 className="form-group-heading">Основное</h2>
         <AdminText
           name="title"
           label="Название"
@@ -826,12 +827,13 @@ export const EventForm = ({
         />
         <AdminText
           name="slug"
-          label="Адрес страницы (slug)"
+          label="Адрес страницы"
           value={values.slug}
           required
           pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
           disabled={readOnly}
         />
+        <h2 className="form-group-heading">Время и места</h2>
         <AdminText
           name="startAt"
           label="Начало"
@@ -874,6 +876,10 @@ export const EventForm = ({
           required
           disabled={readOnly}
         />
+        <p className="form-group-hint">
+          Все даты и время — московские (UTC+3).
+        </p>
+        <h2 className="form-group-heading">Баллы МосАктив</h2>
         <label>
           <span>Направление</span>
           <select
@@ -959,7 +965,7 @@ export const EventForm = ({
             <option value="3.0">×3</option>
           </select>
         </label>
-        <p className="muted">Все даты и время — московские (UTC+3).</p>
+        <h2 className="form-group-heading">Публикация и регистрация</h2>
         <input type="hidden" name="visibilityConfigured" value="1" />
         <label className="checkbox-row">
           <input
@@ -1011,6 +1017,7 @@ export const EventForm = ({
           </select>
         </label>
       </div>
+      <h2 className="form-group-heading">Обложка и описание</h2>
       <div className="cover-editor">
         <div className="cover-preview">
           {coverPreview || event?.coverObjectKey ? (
