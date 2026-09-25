@@ -1,11 +1,9 @@
 import type {
-  PublicAchievementList,
   PublicParticipationList,
   PublicProfile,
   PublicStudentList,
   PublicLeaderboardSeasons,
   LeaderboardResponse,
-  PublicScoreTransactionList,
 } from '@event-registration/contracts';
 import { useEffect, useState, type FormEvent } from 'react';
 
@@ -100,7 +98,7 @@ const MosActiveLeaderboard = () => {
         <p className="calendar-state">Загружаем рейтинг…</p>
       )}
       {ranking && ranking.items.length === 0 && (
-        <p>В этом сезоне опубликованных баллов пока нет.</p>
+        <p>Опубликованных профилей пока нет.</p>
       )}
       {ranking && ranking.items.length > 0 && (
         <>
@@ -113,7 +111,6 @@ const MosActiveLeaderboard = () => {
                   <strong>
                     {item.rank}. {item.displayName}
                   </strong>
-                  {item.studyGroup && <span>{item.studyGroup}</span>}
                   <span>{pointsText(item.points)} баллов</span>
                 </a>
               </li>
@@ -196,7 +193,7 @@ export const MosActiveCatalog = () => {
       <header className="catalog-hero">
         <p className="eyebrow">КАИТ №20</p>
         <h1>МосАктив</h1>
-        <p>Достижения, участие в мероприятиях и баллы студентов.</p>
+        <p>Рейтинг студентов и баллы за мероприятия.</p>
       </header>
       <MosActiveLeaderboard />
       <form className="mos-active-search" onSubmit={search}>
@@ -236,10 +233,6 @@ export const MosActiveCatalog = () => {
                   href={`/mos-active/students/${encodeURIComponent(student.publicSlug)}`}
                 >
                   <strong>{student.displayName}</strong>
-                  {student.studyGroup && <span>{student.studyGroup}</span>}
-                  {student.totalPoints !== undefined && (
-                    <span>{pointsText(student.totalPoints)} баллов</span>
-                  )}
                 </a>
               </li>
             ))}
@@ -276,12 +269,7 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
   const [profile, setProfile] = useState<PublicProfile>();
   const [participations, setParticipations] =
     useState<PublicParticipationList>();
-  const [achievements, setAchievements] = useState<PublicAchievementList>();
-  const [scoreTransactions, setScoreTransactions] =
-    useState<PublicScoreTransactionList>();
   const [participationPage, setParticipationPage] = useState(1);
-  const [achievementPage, setAchievementPage] = useState(1);
-  const [scorePage, setScorePage] = useState(1);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -324,42 +312,6 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
     };
   }, [profile, slug, participationPage]);
 
-  useEffect(() => {
-    if (!profile) return;
-    let cancelled = false;
-    publicApi
-      .studentAchievements(slug, achievementPage)
-      .then((result) => {
-        if (!cancelled) setAchievements(result);
-      })
-      .catch((caught: unknown) => {
-        if (
-          !cancelled &&
-          !(caught instanceof PublicApiError && caught.status === 404)
-        )
-          setError(loadError(caught));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [profile, slug, achievementPage]);
-
-  useEffect(() => {
-    if (!profile || profile.totalPoints === undefined) return;
-    let cancelled = false;
-    publicApi
-      .studentScoreTransactions(slug, scorePage)
-      .then((result) => {
-        if (!cancelled) setScoreTransactions(result);
-      })
-      .catch((caught: unknown) => {
-        if (!cancelled) setError(loadError(caught));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [profile, slug, scorePage]);
-
   return (
     <main className="catalog-page mos-active-page">
       <a className="back-link" href="/mos-active">
@@ -377,53 +329,21 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
         <>
           <header className="catalog-hero">
             <p className="eyebrow">МосАктив · студент КАИТ №20</p>
-            <h1>{profile.displayName ?? 'Профиль студента'}</h1>
-            {profile.studyGroup && <p>Группа {profile.studyGroup}</p>}
+            <h1>{profile.displayName}</h1>
+            <p>Учебная группа: {profile.studyGroup ?? 'не указана'}</p>
+            <p>Отделение/площадка: {profile.campus ?? 'не указана'}</p>
           </header>
-          {profile.totalPoints !== undefined && (
-            <section className="mos-active-total" aria-label="Баллы">
-              <strong>{pointsText(profile.totalPoints)}</strong>
-              <span>баллов за всё время</span>
-            </section>
-          )}
-          {achievements && (
-            <section className="mos-active-section">
-              <h2>Достижения</h2>
-              {achievements.items.length === 0 && (
-                <p>Подтверждённых достижений пока нет.</p>
-              )}
-              <ul>
-                {achievements.items.map((item, index) => (
-                  <li key={`${item.title}-${item.occurredAt}-${index}`}>
-                    <strong>{item.title}</strong>
-                  </li>
-                ))}
-              </ul>
-              <PageControls
-                page={achievementPage}
-                hasNext={achievements.items.length === achievements.pageSize}
-                onPage={setAchievementPage}
-              />
-            </section>
-          )}
           {participations && (
             <section className="mos-active-section">
-              <h2>Участие в мероприятиях</h2>
+              <h2>Баллы за мероприятия</h2>
               {participations.items.length === 0 && (
-                <p>Подтверждённых участий пока нет.</p>
+                <p>Начислений за мероприятия пока нет.</p>
               )}
               <ul>
                 {participations.items.map((item, index) => (
-                  <li key={`${item.eventTitle}-${item.eventStartAt}-${index}`}>
+                  <li key={`${item.eventTitle}-${index}`}>
                     <strong>{item.eventTitle}</strong>
-                    <span>
-                      {new Date(item.eventStartAt).toLocaleDateString('ru-RU')}
-                    </span>
-                    {item.role && <span>{item.role}</span>}
-                    {item.result && <span>{item.result}</span>}
-                    {item.points !== null && (
-                      <span>{pointsText(item.points)} баллов</span>
-                    )}
+                    <span>{pointsText(item.points)} баллов</span>
                   </li>
                 ))}
               </ul>
@@ -433,55 +353,6 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
                   participations.items.length === participations.pageSize
                 }
                 onPage={setParticipationPage}
-              />
-            </section>
-          )}
-          {scoreTransactions && (
-            <section className="mos-active-section">
-              <h2>Как начислены баллы</h2>
-              {scoreTransactions.items.length === 0 && (
-                <p>Начислений пока нет.</p>
-              )}
-              <ul>
-                {scoreTransactions.items.map((item, index) => (
-                  <li key={`${item.createdAt}-${index}`}>
-                    <strong>
-                      {item.eventTitle ??
-                        (item.type === 'LEGACY_IMPORT'
-                          ? 'Перенесённые баллы'
-                          : item.type === 'MANUAL_ADJUSTMENT'
-                            ? 'Корректировка баллов'
-                            : 'Начисление за участие')}
-                    </strong>
-                    <span>
-                      {item.type === 'AWARD'
-                        ? 'Начисление'
-                        : item.type === 'REVERSAL'
-                          ? 'Отмена начисления'
-                          : item.type === 'MANUAL_ADJUSTMENT'
-                            ? 'Ручная корректировка'
-                            : 'Перенос баллов'}
-                    </span>
-                    <span>
-                      {item.seasonName} ·{' '}
-                      {new Date(item.createdAt).toLocaleDateString('ru-RU')}
-                    </span>
-                    <span>
-                      {item.points.startsWith('-') ? '' : '+'}
-                      {pointsText(item.points)} баллов
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <PageControls
-                page={scorePage}
-                hasNext={
-                  scoreTransactions.items.length === scoreTransactions.pageSize
-                }
-                onPage={(page) => {
-                  setScoreTransactions(undefined);
-                  setScorePage(page);
-                }}
               />
             </section>
           )}

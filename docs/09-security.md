@@ -219,34 +219,23 @@ Before first live Event, explicitly review/test:
 
 ## Activity profile privacy
 
-StudentProfile starts PRIVATE and is never published without an active,
-versioned ProfilePublicationConsent. Public routes resolve an opaque random slug,
-apply a response-field allowlist and never return Person ID, email, phone,
-internal score reasons or audit metadata. Withdrawing consent immediately hides
-the profile. Scanner has no Activity administration permission; manual score
-adjustment and global configuration remain SUPER_ADMIN-only.
+Importing a verified roster creates PUBLIC StudentProfiles with opaque random
+slugs; SUPER_ADMIN may hide individual profiles. Publication consent records are
+collected outside the platform. The old `profile_publication_consents` table is
+retained as historical data but no longer read or written by the application.
+This change does not remove the separate Event registration consent flow.
 
-The public MosActive directory lists only KAIT student profiles explicitly set
-to PUBLIC with active NAME consent. It is accessible to anyone on the Internet,
-including people who are not students. Names are reduced to surname and initials;
-group, scores, participations and achievements each require their own consent
-field. Free-form achievement descriptions and Person organization are not public.
-The public activity API has a shared request-rate limit. Never infer publication
-consent from Event registration consent or from presence in an imported roster.
-Public directory, profile and leaderboard responses use `Cache-Control: no-store`
-so a withdrawn profile is not retained by HTTP caches.
-Public score history includes a participation's Event title only when the active
-consent permits PARTICIPATIONS as well as SCORES. It never returns the stored
-calculation snapshot or an internal adjustment reason. The SUPER_ADMIN records
-the consent version and allowed fields in the Person card before publishing.
-
-Consent is field-level: NAME and SCORES permit leaderboard identity/points only;
-participation and achievement counters require their own allowed fields and are
-omitted otherwise. A generated unique key enforces at most one non-withdrawn
-consent per Person. Public group/department aggregates include only PUBLIC profiles
-with active SCORES consent and historically attributed score transactions. They
-expose no Person IDs. Small aggregate cohorts currently have no k-anonymity
-suppression and must pass a separate privacy review before broad public launch.
+Public routes require a KAIT student in the roster with PUBLIC visibility and
+apply fixed response allowlists. The directory returns only surname and initials;
+the season ranking adds the sum of Event participation points. A profile adds
+the current study group, roster campus and Event titles with positive net points.
+These routes never return full given names, Person ID, email, phone, role,
+result, achievements, manual adjustments, internal score reasons or audit data.
+Legacy public achievement, score-ledger and group/department ranking routes are
+removed. Public activity requests retain a shared rate limit and responses use
+`Cache-Control: no-store` so a hidden profile is not retained by HTTP caches.
+Scanner has no Activity administration permission; manual score adjustment and
+global configuration remain SUPER_ADMIN-only.
 
 ScoringPolicy lifecycle, Season policy assignment and Person Status writes are
 SUPER_ADMIN-only and derive Organization from authenticated staff context.

@@ -81,8 +81,9 @@ email-dependent registration, recovery and invitation flows are unverified.
 
 The `Начальный` MySQL tariff has no managed backups. Before importing real
 roster data, implement and verify an encrypted backup and restore procedure,
-restrict staff access, confirm the approved consent version and processing
-conditions, and review the one-origin Web/Scanner risk. Real registrations and
-event operations additionally require working SMTP and the remaining production
-security gate. Import creates private zero-score profiles; separate signed
-publication consent must be recorded for each public profile.
+restrict staff access, confirm the separately collected publication basis and
+processing conditions, and review the one-origin Web/Scanner risk. Real
+registrations and event operations additionally require working SMTP, the exact
+registration consent version and the remaining production security gate. Roster
+import now immediately publishes zero-score profiles with the fixed public
+field set; preview the file and its student count before committing the import.

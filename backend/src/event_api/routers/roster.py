@@ -1,9 +1,10 @@
-"""Preview and import the student roster without publishing profiles."""
+"""Preview and import student profiles for the public MosActive directory."""
 
 from __future__ import annotations
 
 import hashlib
 import io
+import secrets
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
@@ -217,9 +218,13 @@ async def import_roster(
             )
             execute(
                 connection,
-                """INSERT INTO student_profiles(id,person_id,visibility,created_at,updated_at)
-                VALUES (UUID(),:person,'PRIVATE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
-                {"person": person_id},
+                """INSERT INTO student_profiles
+                (id,person_id,public_slug,visibility,created_at,updated_at)
+                VALUES (UUID(),:person,:slug,'PUBLIC',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
+                {
+                    "person": person_id,
+                    "slug": "active-" + secrets.token_urlsafe(18).rstrip("="),
+                },
             )
         audit(
             connection,

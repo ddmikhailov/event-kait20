@@ -172,7 +172,7 @@ def create_registration_for_person(
     return registration_id, resolved_person_id
 
 
-def test_roster_import_creates_private_zero_profiles_and_rejects_duplicates(
+def test_roster_import_creates_public_zero_profiles_and_rejects_duplicates(
     client: TestClient,
 ) -> None:
     headers = login(client)
@@ -199,16 +199,22 @@ def test_roster_import_creates_private_zero_profiles_and_rejects_duplicates(
     database: Database = client.app.state.database
     with database.connect() as connection:
         student = connection.execute(
-            text("""SELECT p.id,p.study_group,sp.visibility FROM student_roster_members rm
+            text("""SELECT p.id,p.study_group,sp.visibility,sp.public_slug FROM student_roster_members rm
             JOIN persons p ON p.id=rm.person_id
             JOIN student_profiles sp ON sp.person_id=p.id
             WHERE p.last_name='Демонстрационный'""")
         ).one()
-    assert student[1:] == ("ТЕСТ-1", "PRIVATE")
-    assert not any(
+    assert student[1:3] == ("ТЕСТ-1", "PUBLIC")
+    assert any(
         item["displayName"].startswith("Демонстрационный")
         for item in client.get("/public/students").json()["items"]
     )
+    assert client.get(f"/public/profiles/{student[3]}").json() == {
+        "publicSlug": student[3],
+        "displayName": "Демонстрационный С. П.",
+        "studyGroup": "ТЕСТ-1",
+        "campus": None,
+    }
     repeated = client.post(
         "/admin/activity/roster/preview", headers=headers, files=file
     )
@@ -227,34 +233,17 @@ def test_roster_import_creates_private_zero_profiles_and_rejects_duplicates(
         },
     )
     assert season.status_code == 201, season.text
-    consent = client.post(
-        f"/admin/people/{student[0]}/profile/consent",
-        headers=headers,
-        json={
-            "consentVersion": "synthetic-v1",
-            "allowedFields": ["NAME", "SCORES"],
-            "source": "ADMIN",
-        },
-    )
-    assert consent.status_code == 201, consent.text
-    published = client.patch(
-        f"/admin/people/{student[0]}/profile",
-        headers=headers,
-        json={"visibility": "PUBLIC"},
-    )
-    assert published.status_code == 200, published.text
     ranking = client.get(
         "/public/leaderboard", params={"seasonId": season.json()["id"]}
     )
     assert ranking.status_code == 200, ranking.text
     assert any(
-        item["publicSlug"] == published.json()["publicSlug"]
-        and float(item["points"]) == 0
+        item["publicSlug"] == student[3] and float(item["points"]) == 0
         for item in ranking.json()["items"]
     )
 
 
-def test_college_register_import_keeps_private_metadata(client: TestClient) -> None:
+def test_college_register_import_keeps_admin_metadata(client: TestClient) -> None:
     headers = login(client)
     workbook = Workbook()
     sheet = workbook.active
@@ -305,14 +294,14 @@ def test_college_register_import_keeps_private_metadata(client: TestClient) -> N
     database: Database = client.app.state.database
     with database.connect() as connection:
         student = connection.execute(
-            text("""SELECT p.last_name,p.first_name,p.middle_name,
+            text("""SELECT p.id,p.last_name,p.first_name,p.middle_name,
             p.study_group,m.education_status,m.campus_address,m.course_label,
             m.program_name,m.program_code,sp.visibility
             FROM student_roster_members m JOIN persons p ON p.id=m.person_id
             JOIN student_profiles sp ON sp.person_id=p.id
             WHERE p.last_name='Примерова'""")
         ).one()
-    assert student == (
+    assert student[1:] == (
         "Примерова",
         "Анна",
         "Ивановна",
@@ -322,9 +311,29 @@ def test_college_register_import_keeps_private_metadata(client: TestClient) -> N
         "2",
         "Тестовая программа",
         "00.00.00",
-        "PRIVATE",
+        "PUBLIC",
     )
-    assert not any(
+    admin_detail = client.get(f"/admin/people/{student[0]}", headers=headers)
+    assert admin_detail.status_code == 200
+    assert admin_detail.json()["roster"] == {
+        "educationStatus": "Обучается",
+        "campusAddress": "Учебная площадка",
+        "course": "2",
+        "programName": "Тестовая программа",
+        "programCode": "00.00.00",
+    }
+    public_slug = next(
+        item["publicSlug"]
+        for item in client.get("/public/students").json()["items"]
+        if item["displayName"].startswith("Примерова")
+    )
+    assert client.get(f"/public/profiles/{public_slug}").json() == {
+        "publicSlug": public_slug,
+        "displayName": "Примерова А. И.",
+        "studyGroup": "ТЕСТ-2",
+        "campus": "Учебная площадка",
+    }
+    assert any(
         item["displayName"].startswith("Примерова")
         for item in client.get("/public/students").json()["items"]
     )
@@ -733,6 +742,25 @@ def test_completed_event_waits_for_published_policy_before_approval(
         f"/admin/events/{event_id}/review/approve", headers=organizer_headers
     )
     assert repeated.status_code == 409
+    client.cookies.clear()
+    admin_headers = login(client)
+    published_profile = client.patch(
+        f"/admin/people/{person_id}/profile",
+        headers=admin_headers,
+        json={"visibility": "PUBLIC"},
+    )
+    assert published_profile.status_code == 200, published_profile.text
+    slug = published_profile.json()["publicSlug"]
+    leaderboard = client.get(
+        "/public/leaderboard", params={"seasonId": season.json()["id"]}
+    )
+    item = next(row for row in leaderboard.json()["items"] if row["publicSlug"] == slug)
+    assert set(item) == {"rank", "publicSlug", "displayName", "points"}
+    assert item["points"] == "30.0000"
+    awarded_events = client.get(f"/public/profiles/{slug}/participations")
+    assert awarded_events.json()["items"] == [
+        {"eventTitle": event.json()["title"], "points": "30.0000"}
+    ]
 
 
 def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> None:
@@ -1045,20 +1073,22 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
     profile = client.get(f"/admin/people/{person_id}/profile")
     assert profile.json()["visibility"] == "PRIVATE"
     assert client.get("/public/profiles/not-a-real-profile").status_code == 404
-    assert all(
-        item["displayName"] != "Тестов У."
-        for item in client.get("/public/students").json()["items"]
+    assert (
+        client.post(
+            f"/admin/people/{person_id}/profile/consent", headers=headers, json={}
+        ).status_code
+        == 404
     )
-    consent = client.post(
-        f"/admin/people/{person_id}/profile/consent",
-        headers=headers,
-        json={
-            "consentVersion": "active-test-v1",
-            "allowedFields": ["NAME", "SCORES"],
-            "source": "ADMIN",
-        },
+    assert (
+        client.patch(
+            f"/admin/people/{person_id}/profile",
+            headers=headers,
+            json={"visibility": "PUBLIC"},
+        ).json()["error"]["code"]
+        == "ROSTER_STUDENT_REQUIRED"
     )
-    assert consent.status_code == 201, consent.text
+    roster = client.post(f"/admin/people/{person_id}/roster", headers=headers)
+    assert roster.status_code == 201, roster.text
     published = client.patch(
         f"/admin/people/{person_id}/profile",
         headers=headers,
@@ -1069,42 +1099,39 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
     public_profile = client.get(f"/public/profiles/{slug}")
     assert public_profile.status_code == 200
     assert public_profile.headers["cache-control"] == "no-store"
-    assert "email" not in public_profile.json() and "phone" not in public_profile.json()
-    assert public_profile.json()["displayName"] == "Тестов У."
-    assert "organization" not in public_profile.json()
+    assert set(public_profile.json()) == {
+        "publicSlug",
+        "displayName",
+        "studyGroup",
+        "campus",
+    }
+    assert public_profile.json()["campus"] is None
+    assert public_profile.json()["displayName"].startswith(
+        "\u0422\u0435\u0441\u0442\u043e\u0432 "
+    )
+    admin_person = client.get(f"/admin/people/{person_id}", headers=headers)
+    assert admin_person.status_code == 200
+    assert admin_person.json()["firstName"]
     public_seasons = client.get("/public/leaderboard/seasons")
-    assert public_seasons.status_code == 200, public_seasons.text
+    assert public_seasons.status_code == 200
     assert public_seasons.headers["cache-control"] == "no-store"
     assert any(
         item["id"] == season.json()["id"] for item in public_seasons.json()["items"]
     )
-    private_participations = client.get(f"/public/profiles/{slug}/score-transactions")
-    assert private_participations.status_code == 200
-    assert private_participations.json()["items"]
-    assert all(
-        item["eventTitle"] is None for item in private_participations.json()["items"]
+    directory = client.get(
+        "/public/students",
+        params={"q": public_profile.json()["displayName"].split()[0]},
     )
-    assert all(
-        "reason" not in item and "participationId" not in item
-        for item in private_participations.json()["items"]
-    )
-    directory = client.get("/public/students", params={"q": "Тестов"})
-    assert directory.status_code == 200, directory.text
+    assert directory.status_code == 200
     assert directory.headers["cache-control"] == "no-store"
     student = next(
         item for item in directory.json()["items"] if item["publicSlug"] == slug
     )
-    assert student["displayName"] == "Тестов У."
-    assert student["totalPoints"] == public_profile.json()["totalPoints"]
-    assert "studyGroup" not in student
-    assert client.get("/public/students", params={"q": "ИС-21"}).json()["items"] == []
-    assert (
-        client.get("/public/students", params={"q": "Неизвестный"}).json()["items"]
-        == []
-    )
+    assert set(student) == {"publicSlug", "displayName"}
+    old_group = public_profile.json()["studyGroup"]
+    assert client.get("/public/students", params={"q": old_group}).json()["items"]
     leaderboard = client.get(
-        "/public/leaderboard",
-        params={"seasonId": season.json()["id"]},
+        "/public/leaderboard", params={"seasonId": season.json()["id"]}
     )
     assert leaderboard.status_code == 200, leaderboard.text
     assert (
@@ -1114,33 +1141,25 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
         ).status_code
         == 400
     )
-    assert all("personId" not in item for item in leaderboard.json()["items"])
     leaderboard_item = next(
         item for item in leaderboard.json()["items"] if item["publicSlug"] == slug
     )
-    assert leaderboard_item["displayName"] == "Тестов У."
-    assert "confirmedParticipations" not in leaderboard_item
-    assert "achievements" not in leaderboard_item
+    assert set(leaderboard_item) == {"rank", "publicSlug", "displayName", "points"}
+    assert leaderboard_item["points"] == "0.0000"
+    awarded_events = client.get(f"/public/profiles/{slug}/participations")
+    assert awarded_events.status_code == 200
+    assert awarded_events.json()["items"] == []
+    for suffix in ("achievements", "score-summary", "score-transactions"):
+        assert client.get(f"/public/profiles/{slug}/{suffix}").status_code == 404
+    for suffix in ("groups", "departments"):
+        assert (
+            client.get(
+                f"/public/leaderboard/{suffix}",
+                params={"seasonId": season.json()["id"]},
+            ).status_code
+            == 404
+        )
 
-    participation_consent = client.post(
-        f"/admin/people/{person_id}/profile/consent",
-        headers=headers,
-        json={
-            "consentVersion": "active-test-v2",
-            "allowedFields": ["NAME", "STUDY_GROUP", "SCORES", "PARTICIPATIONS"],
-            "source": "ADMIN",
-        },
-    )
-    assert participation_consent.status_code == 201, participation_consent.text
-    assert (
-        next(
-            item
-            for item in client.get("/public/students").json()["items"]
-            if item["publicSlug"] == slug
-        )["studyGroup"]
-        == "ИС-21"
-    )
-    assert client.get("/public/students", params={"q": "ИС-21"}).json()["items"]
     current_group = create_study_group(
         client, headers, "MOS_ACTIVE_CURRENT", "MOS_ACTIVE_DEPT", 1
     )
@@ -1161,51 +1180,20 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
     assert client.get("/public/students", params={"q": "MOS_ACTIVE_CURRENT"}).json()[
         "items"
     ]
-    assert client.get("/public/students", params={"q": "ИС-21"}).json()["items"] == []
-    public_scores = client.get(f"/public/profiles/{slug}/score-transactions")
-    assert public_scores.status_code == 200
-    assert any(
-        item["eventTitle"] is not None and item["type"] == "AWARD"
-        for item in public_scores.json()["items"]
+    assert all(
+        item["publicSlug"] != slug
+        for item in client.get("/public/students", params={"q": old_group}).json()[
+            "items"
+        ]
     )
-    participation_item = next(
-        item
-        for item in client.get(
-            "/public/leaderboard", params={"seasonId": season.json()["id"]}
-        ).json()["items"]
-        if item["publicSlug"] == slug
-    )
-    assert "confirmedParticipations" in participation_item
-    assert "achievements" not in participation_item
-
-    achievement_consent = client.post(
-        f"/admin/people/{person_id}/profile/consent",
+    hidden = client.patch(
+        f"/admin/people/{person_id}/profile",
         headers=headers,
-        json={
-            "consentVersion": "active-test-v3",
-            "allowedFields": ["NAME", "SCORES", "ACHIEVEMENTS"],
-            "source": "ADMIN",
-        },
+        json={"visibility": "PRIVATE"},
     )
-    assert achievement_consent.status_code == 201, achievement_consent.text
-    achievement_item = next(
-        item
-        for item in client.get(
-            "/public/leaderboard", params={"seasonId": season.json()["id"]}
-        ).json()["items"]
-        if item["publicSlug"] == slug
-    )
-    assert "achievements" in achievement_item
-    assert achievement_item["achievements"] == 1
-    assert "confirmedParticipations" not in achievement_item
-    assert (
-        client.delete(
-            f"/admin/people/{person_id}/profile/consent", headers=headers
-        ).status_code
-        == 200
-    )
+    assert hidden.status_code == 200
     assert client.get(f"/public/profiles/{slug}").status_code == 404
-    assert client.get(f"/public/profiles/{slug}/score-transactions").status_code == 404
+    assert client.get(f"/public/profiles/{slug}/participations").status_code == 404
     assert all(
         item["publicSlug"] != slug
         for item in client.get("/public/students").json()["items"]
@@ -1592,35 +1580,34 @@ def test_historical_membership_privacy_and_event_date_scoring(
         )
         assert confirmed.status_code == 200, confirmed.text
 
-    client.get(f"/admin/people/{person_id}/profile")
-    consent = client.post(
-        f"/admin/people/{person_id}/profile/consent",
-        headers=headers,
-        json={
-            "consentVersion": "history-v1",
-            "allowedFields": ["NAME", "SCORES"],
-            "source": "ADMIN",
-        },
-    )
-    assert consent.status_code == 201, consent.text
+    roster = client.post(f"/admin/people/{person_id}/roster", headers=headers)
+    assert roster.status_code == 201, roster.text
     published = client.patch(
         f"/admin/people/{person_id}/profile",
         headers=headers,
         json={"visibility": "PUBLIC"},
     )
     assert published.status_code == 200, published.text
-
-    groups = client.get("/public/leaderboard/groups", params={"seasonId": season_id})
-    assert groups.status_code == 200, groups.text
-    group_points = {item["name"]: item["points"] for item in groups.json()["items"]}
-    assert group_points == {"GROUP_B": "20.0000", "GROUP_A": "10.0000"}
-    departments = client.get(
-        "/public/leaderboard/departments", params={"seasonId": season_id}
+    slug = published.json()["publicSlug"]
+    ranking = client.get("/public/leaderboard", params={"seasonId": season_id})
+    assert ranking.status_code == 200
+    ranked = next(
+        item for item in ranking.json()["items"] if item["publicSlug"] == slug
     )
-    department_points = {
-        item["name"]: item["points"] for item in departments.json()["items"]
-    }
-    assert department_points == {"DEPT_B": "20.0000", "DEPT_A": "10.0000"}
+    assert set(ranked) == {"rank", "publicSlug", "displayName", "points"}
+    assert ranked["points"] == "30.0000"
+    assert (
+        client.get(
+            "/public/leaderboard/groups", params={"seasonId": season_id}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            "/public/leaderboard/departments", params={"seasonId": season_id}
+        ).status_code
+        == 404
+    )
     with database.connect() as connection:
         attributed = connection.execute(
             text("""SELECT sm.study_group,st.points FROM score_transactions st
@@ -1630,19 +1617,13 @@ def test_historical_membership_privacy_and_event_date_scoring(
             {"person": person_id, "season": season_id},
         ).all()
     assert attributed == [("GROUP_A", 10), ("GROUP_B", 20)]
-
-    assert (
-        client.delete(
-            f"/admin/people/{person_id}/profile/consent", headers=headers
-        ).status_code
-        == 200
+    hidden = client.patch(
+        f"/admin/people/{person_id}/profile",
+        headers=headers,
+        json={"visibility": "PRIVATE"},
     )
-    assert (
-        client.get("/public/leaderboard/groups", params={"seasonId": season_id}).json()[
-            "items"
-        ]
-        == []
-    )
+    assert hidden.status_code == 200
+    assert client.get(f"/public/profiles/{slug}").status_code == 404
 
 
 def test_manual_adjustment_rejects_changed_idempotency_payload(
@@ -1872,48 +1853,35 @@ def test_manual_adjustment_requires_super_admin(client: TestClient) -> None:
     assert allowed.status_code == 201, allowed.text
 
 
-def test_profile_and_consent_concurrency_is_serialized(client: TestClient) -> None:
+def test_profile_publication_is_serialized(client: TestClient) -> None:
     headers = login(client)
     database: Database = client.app.state.database
-    event_id, _ = create_event(client, headers, title="Consent concurrency")
-    _, person_id = create_registration_for_person(database, event_id, "consent-race")
+    event_id, _ = create_event(client, headers, title="Profile concurrency")
+    _, person_id = create_registration_for_person(database, event_id, "profile-race")
+    assert (
+        client.post(f"/admin/people/{person_id}/roster", headers=headers).status_code
+        == 201
+    )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        profile_statuses = list(
+        results = list(
             pool.map(
-                lambda _index: (
-                    client.get(f"/admin/people/{person_id}/profile").status_code
+                lambda _index: client.patch(
+                    f"/admin/people/{person_id}/profile",
+                    headers=headers,
+                    json={"visibility": "PUBLIC"},
                 ),
                 range(2),
             )
         )
-    assert profile_statuses == [200, 200]
-
-    def grant(index: int) -> int:
-        return client.post(
-            f"/admin/people/{person_id}/profile/consent",
-            headers=headers,
-            json={
-                "consentVersion": f"concurrent-{index}",
-                "allowedFields": ["NAME", "SCORES"],
-                "source": "ADMIN",
-            },
-        ).status_code
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        consent_statuses = list(pool.map(grant, range(2)))
-    assert consent_statuses == [201, 201]
+    assert [result.status_code for result in results] == [200, 200]
+    assert results[0].json()["publicSlug"] == results[1].json()["publicSlug"]
     with database.connect() as connection:
         profile_count = connection.execute(
             text("SELECT COUNT(*) FROM student_profiles WHERE person_id=:person"),
             {"person": person_id},
         ).scalar_one()
-        consent_count = connection.execute(
-            text("""SELECT COUNT(*) FROM profile_publication_consents
-            WHERE person_id=:person AND withdrawn_at IS NULL"""),
-            {"person": person_id},
-        ).scalar_one()
-    assert (profile_count, consent_count) == (1, 1)
+    assert profile_count == 1
 
 
 def test_achievement_reference_integrity(client: TestClient) -> None:

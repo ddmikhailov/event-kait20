@@ -231,10 +231,10 @@ the private application package itself is reviewed/tested, not a PyPI advisory t
 The real MySQL 8.1.0 suite proves Participation confirmation with and without
 Attendance, deterministic scoring, ambiguous-rule rejection, historical rule
 versioning, cancellation/reversal, idempotent repeat and concurrent confirmation.
-It also covers Scanner denial, field-level leaderboard consent, consent withdrawal,
-PUBLIC-only group/department aggregation, historical membership attribution,
+It also covers Scanner denial, fixed public field allowlists, profile hiding,
+roster-only publication, historical membership attribution,
 event-date scoring, non-overlapping rule periods and concurrent conflict protection,
-manual-adjustment payload idempotency, profile/consent concurrency, Achievement
+manual-adjustment payload idempotency, profile concurrency, Achievement
 reference integrity, and Event purge refusal for DRAFT/confirmed/scored/Achievement
 Activity history while allowing purge of an Activity-free Event.
 Shared contract tests reject public profile PII and require an audit reason for

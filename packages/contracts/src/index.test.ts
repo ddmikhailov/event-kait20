@@ -210,17 +210,22 @@ describe('healthResponseSchema', () => {
     expect(
       publicProfileSchema.parse({
         publicSlug: 'public-profile-slug',
-        displayName: 'Иванов Иван',
-        totalPoints: '25.0000',
+        displayName: 'Иванов И.',
+        studyGroup: 'TEST-1',
+        campus: 'Main campus',
       }),
     ).toEqual({
       publicSlug: 'public-profile-slug',
-      displayName: 'Иванов Иван',
-      totalPoints: '25.0000',
+      displayName: 'Иванов И.',
+      studyGroup: 'TEST-1',
+      campus: 'Main campus',
     });
     expect(() =>
       publicProfileSchema.parse({
         publicSlug: 'public-profile-slug',
+        displayName: 'Иванов И.',
+        studyGroup: 'TEST-1',
+        campus: 'Main campus',
         personId: '22222222-2222-4222-8222-222222222222',
         email: 'student@example.com',
       }),

@@ -3,25 +3,21 @@ import {
   publicEventResponseSchema,
   publicEventListResponseSchema,
   publicRegistrationResponseSchema,
-  publicAchievementListSchema,
   publicParticipationListSchema,
   publicProfileSchema,
   publicStudentListSchema,
   publicLeaderboardSeasonsSchema,
   leaderboardResponseSchema,
-  publicScoreTransactionListSchema,
   ticketResponseSchema,
   type PublicEventResponse,
   type PublicEventListResponse,
   type PublicRegistrationRequest,
   type PublicRegistrationResponse,
-  type PublicAchievementList,
   type PublicParticipationList,
   type PublicProfile,
   type PublicStudentList,
   type PublicLeaderboardSeasons,
   type LeaderboardResponse,
-  type PublicScoreTransactionList,
   type TicketResponse,
   type AcceptedResponse,
 } from '@event-registration/contracts';
@@ -70,17 +66,6 @@ export class PublicApiClient {
     );
   }
 
-  public studentScoreTransactions(
-    slug: string,
-    page = 1,
-  ): Promise<PublicScoreTransactionList> {
-    return this.request(
-      `/public/profiles/${encodeURIComponent(slug)}/score-transactions?page=${page}&pageSize=25`,
-      { method: 'GET', cache: 'no-store' },
-      publicScoreTransactionListSchema,
-    );
-  }
-
   public students(query = '', offset = 0): Promise<PublicStudentList> {
     const params = new URLSearchParams({ limit: '24', offset: String(offset) });
     if (query.trim().length >= 2) params.set('q', query.trim());
@@ -107,17 +92,6 @@ export class PublicApiClient {
       `/public/profiles/${encodeURIComponent(slug)}/participations?page=${page}&pageSize=25`,
       { method: 'GET', cache: 'no-store' },
       publicParticipationListSchema,
-    );
-  }
-
-  public studentAchievements(
-    slug: string,
-    page = 1,
-  ): Promise<PublicAchievementList> {
-    return this.request(
-      `/public/profiles/${encodeURIComponent(slug)}/achievements?page=${page}&pageSize=25`,
-      { method: 'GET', cache: 'no-store' },
-      publicAchievementListSchema,
     );
   }
 

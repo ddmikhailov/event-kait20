@@ -476,23 +476,20 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
 - `POST /admin/events/:eventId/participations/assign|confirm|cancel`
 - `GET /admin/people/:personId/activity`
 - `GET/PATCH /admin/people/:personId/profile`
-- `POST/DELETE /admin/people/:personId/profile/consent`
 - `GET/POST /admin/people/:personId/memberships`
 - `POST/PATCH /admin/people/:personId/achievements`
-- `GET /public/profiles/:slug` and consent-gated child resources
+- `GET /public/profiles/:slug` — опубликованная карточка: фамилия с
+  инициалами, группа и площадка из реестра.
+- `GET /public/profiles/:slug/participations` — только мероприятия с
+  положительным итогом начислений: название и баллы, без роли и результата.
 - `GET /public/students?q=&limit=&offset=` — bounded directory of published
   KAIT student profiles; `q` searches surname or group, `limit` is at most 50,
-  `offset` is at most 10000. It returns only opaque slugs, surname with initials,
-  and fields allowed by each student's active publication consent. Students
-  without scores can still appear. No authentication is required.
-- `GET /public/leaderboard`, `/public/leaderboard/groups`,
-  `/public/leaderboard/departments` (offset at most 10000)
+  `offset` is at most 10000. It returns only opaque slugs and surname with
+  initials. Students without scores can still appear. No authentication is required.
+- `GET /public/leaderboard` (offset at most 10000) — only rank, opaque slug,
+  surname with initials and season total derived from Event participations.
 - `GET /public/leaderboard/seasons` — public season identifiers and names for
   the ranking selector; returns at most 50 seasons in the current organization.
-- `GET /public/profiles/:slug/score-transactions` — paged score ledger with
-  signed points, season, operation type and date. The Event title is included
-  only when active consent also permits PARTICIPATIONS; internal reasons and
-  identifiers are never returned.
 
 Global configuration, publication and manual score adjustments are SUPER_ADMIN
 operations. Participation operations accept SUPER_ADMIN/ORGANIZER. Scanner is
@@ -501,17 +498,10 @@ IDs and contact data. Exact request/response schemas are shared through
 `packages/contracts/src/activity.ts`.
 
 Public profile and personal leaderboard names use surname plus initials, never
-full given names. The public profile omits organization; achievement responses
-omit the free-form description. Public activity requests share a bounded
-per-client rate limit. An absent or withdrawn consent immediately removes a
-student from the directory and makes the profile unavailable.
-
-The public personal leaderboard requires PUBLIC visibility plus an active consent
-containing NAME and SCORES. `confirmedParticipations` and `achievements` are optional
-response properties and are omitted unless their corresponding consent fields are
-present; their values are scoped to the requested Season. Public group/department
-leaderboards require PUBLIC + SCORES but not NAME and aggregate only transactions
-with saved historical membership attribution. Manual-adjustment requestId retries
+full given names. Public activity requests share a bounded per-client rate limit.
+SUPER_ADMIN may hide a profile; its direct link then returns 404. Publication
+consent is collected outside this platform, so no consent endpoint or field-level
+permission controls are exposed. Manual-adjustment requestId retries
 must match personId, seasonId, points and reason; otherwise the API returns
 `409 IDEMPOTENCY_KEY_REUSED` and creates neither a transaction nor audit record.
 

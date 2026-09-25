@@ -850,7 +850,7 @@ export const PeopleDirectory = ({
       );
       setNotice({
         kind: 'success',
-        text: `Создано профилей студентов: ${result.created}. Публикация требует отдельного согласия.`,
+        text: `Создано публичных профилей студентов: ${result.created}.`,
       });
       setRosterPreview(undefined);
       setRosterFile(undefined);
@@ -923,7 +923,7 @@ export const PeopleDirectory = ({
             </p>
             <p>
               Перед загрузкой реальных данных настройте резервное копирование.
-              Профили останутся закрытыми до оформления согласия на публикацию.
+              Все загруженные профили сразу появятся в МосАктиве.
             </p>
             <input
               type="file"
@@ -944,8 +944,7 @@ export const PeopleDirectory = ({
             {rosterPreview && (
               <p>
                 Новых студентов: {rosterPreview.students}. Их профили будут
-                созданы с нулём баллов и останутся закрытыми до оформления
-                публикации.
+                опубликованы с нулём баллов.
               </p>
             )}
             {rosterPreview && (
@@ -1117,6 +1116,16 @@ const PersonDetail = ({
           )}
         </aside>
       </div>
+      {person.roster && (
+        <section className="admin-panel">
+          <h2>Данные контингента</h2>
+          <p>Статус обучения: {person.roster.educationStatus ?? 'Не указан'}</p>
+          <p>Площадка: {person.roster.campusAddress ?? 'Не указана'}</p>
+          <p>Курс: {person.roster.course ?? 'Не указан'}</p>
+          <p>Специальность: {person.roster.programName ?? 'Не указана'}</p>
+          <p>Код специальности: {person.roster.programCode ?? 'Не указан'}</p>
+        </section>
+      )}
       {role === 'SUPER_ADMIN' && person.personType === 'KAIT_STUDENT' && (
         <AdminMosActivePublication personId={person.id} />
       )}

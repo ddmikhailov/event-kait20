@@ -135,10 +135,27 @@ def get_person(
             FROM registrations r JOIN events e ON e.id=r.event_id WHERE r.person_id=:id ORDER BY r.registered_at DESC,r.id""",
             {"id": str(person_id)},
         )
+        roster = row(
+            connection,
+            """SELECT education_status,campus_address,course_label,program_name,program_code
+            FROM student_roster_members WHERE person_id=:id""",
+            {"id": str(person_id)},
+        )
     if not item:
         raise ApiError(404, "NOT_FOUND", "Person not found")
     return {
         **person_response(item),
+        "roster": (
+            {
+                "educationStatus": roster["education_status"],
+                "campusAddress": roster["campus_address"],
+                "course": roster["course_label"],
+                "programName": roster["program_name"],
+                "programCode": roster["program_code"],
+            }
+            if roster
+            else None
+        ),
         "registrations": [
             {
                 "id": entry["id"],

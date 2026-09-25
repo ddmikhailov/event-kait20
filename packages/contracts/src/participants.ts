@@ -56,6 +56,15 @@ const registrationHistoryItemSchema = z.object({
 });
 
 export const personDetailResponseSchema = personSummarySchema.extend({
+  roster: z
+    .object({
+      educationStatus: z.string().nullable(),
+      campusAddress: z.string().nullable(),
+      course: z.string().nullable(),
+      programName: z.string().nullable(),
+      programCode: z.string().nullable(),
+    })
+    .nullable(),
   registrations: z.array(registrationHistoryItemSchema),
 });
 export type PersonDetailResponse = z.infer<typeof personDetailResponseSchema>;

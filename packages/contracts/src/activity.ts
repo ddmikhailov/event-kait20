@@ -348,21 +348,16 @@ export type StudentMembershipCloseRequest = z.infer<
 export const publicProfileSchema = z
   .object({
     publicSlug: z.string(),
-    displayName: z.string().optional(),
-    studyGroup: z.string().nullable().optional(),
-    totalPoints: z
-      .string()
-      .regex(/^-?\d+\.\d{4}$/)
-      .optional(),
-    confirmedParticipations: z.number().int().nonnegative().optional(),
+    displayName: z.string(),
+    studyGroup: z.string().nullable(),
+    campus: z.string().nullable(),
   })
   .strict();
 export type PublicProfile = z.infer<typeof publicProfileSchema>;
 
-export const publicStudentSchema = publicProfileSchema.extend({
-  displayName: z.string(),
-  achievements: z.number().int().nonnegative().optional(),
-});
+export const publicStudentSchema = z
+  .object({ publicSlug: z.string(), displayName: z.string() })
+  .strict();
 export const publicStudentListSchema = z
   .object({
     items: z.array(publicStudentSchema),
@@ -378,13 +373,7 @@ export const publicParticipationListSchema = z
       z
         .object({
           eventTitle: z.string(),
-          eventStartAt: z.string(),
-          role: z.string().nullable(),
-          result: z.string().nullable(),
-          points: z
-            .string()
-            .regex(/^-?\d+\.\d{4}$/)
-            .nullable(),
+          points: z.string().regex(/^-?\d+\.\d{4}$/),
         })
         .strict(),
     ),
@@ -396,23 +385,6 @@ export type PublicParticipationList = z.infer<
   typeof publicParticipationListSchema
 >;
 
-export const publicAchievementListSchema = z
-  .object({
-    items: z.array(
-      z
-        .object({
-          title: z.string(),
-          type: z.string(),
-          occurredAt: z.string(),
-        })
-        .strict(),
-    ),
-    page: z.number().int().positive(),
-    pageSize: z.number().int().positive(),
-  })
-  .strict();
-export type PublicAchievementList = z.infer<typeof publicAchievementListSchema>;
-
 export const leaderboardResponseSchema = z
   .object({
     items: z.array(
@@ -421,10 +393,7 @@ export const leaderboardResponseSchema = z
           rank: z.number().int().positive(),
           publicSlug: z.string(),
           displayName: z.string(),
-          studyGroup: z.string().nullable().optional(),
           points: z.string().regex(/^-?\d+\.\d{4}$/),
-          confirmedParticipations: z.number().int().nonnegative().optional(),
-          achievements: z.number().int().nonnegative().optional(),
         })
         .strict(),
     ),
@@ -447,65 +416,15 @@ export type PublicLeaderboardSeasons = z.infer<
   typeof publicLeaderboardSeasonsSchema
 >;
 
-export const publicScoreTransactionListSchema = z
-  .object({
-    items: z.array(
-      z
-        .object({
-          seasonName: z.string(),
-          type: z.enum([
-            'AWARD',
-            'REVERSAL',
-            'MANUAL_ADJUSTMENT',
-            'LEGACY_IMPORT',
-          ]),
-          points: z.string().regex(/^-?\d+\.\d{4}$/),
-          createdAt: z.string(),
-          eventTitle: z.string().nullable(),
-        })
-        .strict(),
-    ),
-    page: z.number().int().positive(),
-    pageSize: z.number().int().positive(),
-  })
-  .strict();
-export type PublicScoreTransactionList = z.infer<
-  typeof publicScoreTransactionListSchema
->;
-
-export const profilePublicationFieldSchema = z.enum([
-  'NAME',
-  'STUDY_GROUP',
-  'ORGANIZATION',
-  'PARTICIPATIONS',
-  'ACHIEVEMENTS',
-  'SCORES',
-]);
 export const adminStudentProfileSchema = z
   .object({
     id: uuidSchema.nullable(),
     personId: uuidSchema,
     publicSlug: z.string().nullable(),
     visibility: z.enum(['PRIVATE', 'LINK_ONLY', 'PUBLIC']),
-    consent: z
-      .object({
-        consentVersion: z.string(),
-        allowedFields: z.array(profilePublicationFieldSchema),
-        acceptedAt: z.string(),
-      })
-      .strict()
-      .nullable(),
-  })
-  .strict();
-export const profileConsentRequestSchema = z
-  .object({
-    consentVersion: z.string().trim().min(1).max(100),
-    allowedFields: z.array(profilePublicationFieldSchema).min(1).max(6),
-    source: z.literal('ADMIN'),
   })
   .strict();
 export type AdminStudentProfile = z.infer<typeof adminStudentProfileSchema>;
-export type ProfileConsentRequest = z.infer<typeof profileConsentRequestSchema>;
 
 const personActivityRoleRefSchema = z
   .object({ code: z.string(), name: z.string() })

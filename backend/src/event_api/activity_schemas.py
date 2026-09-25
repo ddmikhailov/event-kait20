@@ -156,30 +156,7 @@ class ManualAdjustmentRequest(Contract):
 
 
 class ProfileUpdate(Contract):
-    visibility: Literal["PRIVATE", "LINK_ONLY", "PUBLIC"]
-
-
-class ProfileConsentRequest(Contract):
-    consent_version: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
-    ]
-    allowed_fields: list[
-        Literal[
-            "NAME",
-            "STUDY_GROUP",
-            "ORGANIZATION",
-            "PARTICIPATIONS",
-            "ACHIEVEMENTS",
-            "SCORES",
-        ]
-    ] = Field(min_length=1, max_length=6)
-    source: Literal["ADMIN", "ACTIVE_UI", "IMPORT"] = "ADMIN"
-
-    @model_validator(mode="after")
-    def unique_fields(self) -> "ProfileConsentRequest":
-        if len(self.allowed_fields) != len(set(self.allowed_fields)):
-            raise ValueError("Allowed fields must be unique")
-        return self
+    visibility: Literal["PRIVATE", "PUBLIC"]
 
 
 class StudentMembershipValues(Contract):

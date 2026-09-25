@@ -18,7 +18,6 @@ from ..activity_schemas import (
     ParticipationCancelRequest,
     ParticipationConfirmRequest,
     ParticipationUpdate,
-    ProfileConsentRequest,
     ProfileUpdate,
     ReferenceUpdate,
     ReferenceValues,
@@ -50,7 +49,7 @@ from ..dependencies import (
 from ..errors import ApiError
 from ..event_review import approve_review, review_items, update_review_item
 from ..scoring_v2 import decimal_string
-from ..service_utils import audit, db_json, json_value, naive_utc, serial
+from ..service_utils import audit, naive_utc, serial
 from ..tenant_scope import (
     default_tenant_scope,
     require_event_for_staff,
@@ -1371,27 +1370,16 @@ def manual_adjustment(
     return {"id": identity, "accepted": True}
 
 
-def profile_response(item: RowMapping, consent: RowMapping | None) -> dict[str, Any]:
+def profile_response(item: RowMapping) -> dict[str, Any]:
     return {
         "id": item["id"],
         "personId": item["person_id"],
         "publicSlug": item["public_slug"],
         "visibility": item["visibility"],
-        "consent": (
-            {
-                "consentVersion": consent["consent_version"],
-                "allowedFields": json_value(consent["allowed_fields"]),
-                "acceptedAt": serial(consent["accepted_at"]),
-            }
-            if consent
-            else None
-        ),
     }
 
 
-def load_profile(
-    connection: Connection, person_id: str, tenant_id: str
-) -> tuple[RowMapping, RowMapping | None]:
+def load_profile(connection: Connection, person_id: str, tenant_id: str) -> RowMapping:
     """Upsert-and-read: creates the StudentProfile row (default PRIVATE) if it
     doesn't exist yet, locking it either way. For mutating endpoints only —
     GET must stay read-only, see read_profile() below.
@@ -1411,20 +1399,14 @@ def load_profile(
         {"person": person_id},
     )
     assert profile is not None
-    consent = row(
-        connection,
-        """SELECT * FROM profile_publication_consents
-        WHERE person_id=:person AND withdrawn_at IS NULL ORDER BY accepted_at DESC,id DESC LIMIT 1""",
-        {"person": person_id},
-    )
-    return profile, consent
+    return profile
 
 
 def read_profile(
     connection: Connection, person_id: str, tenant_id: str
-) -> tuple[RowMapping | None, RowMapping | None]:
+) -> RowMapping | None:
     """Read-only counterpart of load_profile(): never creates a row, so GET
-    stays a safe method with no side effect. Returns (None, None) when no
+    stays a safe method with no side effect. Returns None when no
     StudentProfile exists yet for this Person.
     """
     require_person_in_tenant(connection, person_id, tenant_id)
@@ -1433,15 +1415,7 @@ def read_profile(
         "SELECT * FROM student_profiles WHERE person_id=:person",
         {"person": person_id},
     )
-    if not profile:
-        return None, None
-    consent = row(
-        connection,
-        """SELECT * FROM profile_publication_consents
-        WHERE person_id=:person AND withdrawn_at IS NULL ORDER BY accepted_at DESC,id DESC LIMIT 1""",
-        {"person": person_id},
-    )
-    return profile, consent
+    return profile
 
 
 @person_admin.get("/{person_id}/profile")
@@ -1451,16 +1425,15 @@ def get_profile_admin(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        profile, consent = read_profile(connection, str(person_id), staff.tenant_id)
+        profile = read_profile(connection, str(person_id), staff.tenant_id)
         if profile is None:
             return {
                 "id": None,
                 "personId": str(person_id),
                 "publicSlug": None,
                 "visibility": "PRIVATE",
-                "consent": None,
             }
-        return profile_response(profile, consent)
+        return profile_response(profile)
 
 
 @person_admin.patch("/{person_id}/profile")
@@ -1471,10 +1444,15 @@ def update_profile_admin(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
-        profile, consent = load_profile(connection, str(person_id), staff.tenant_id)
-        if values.visibility != "PRIVATE" and not consent:
+        profile = load_profile(connection, str(person_id), staff.tenant_id)
+        if values.visibility == "PUBLIC" and not row(
+            connection,
+            """SELECT 1 FROM student_roster_members rm JOIN persons p ON p.id=rm.person_id
+            WHERE p.id=:person AND p.person_type='KAIT_STUDENT' AND p.study_group IS NOT NULL""",
+            {"person": str(person_id)},
+        ):
             raise ApiError(
-                409, "PUBLICATION_CONSENT_REQUIRED", "Publication consent is required"
+                409, "ROSTER_STUDENT_REQUIRED", "Only roster students can be published"
             )
         slug = profile["public_slug"]
         if values.visibility != "PRIVATE" and not slug:
@@ -1499,84 +1477,8 @@ def update_profile_admin(
             profile["id"],
             {"profileId": profile["id"], "visibility": values.visibility},
         )
-        updated, consent = load_profile(connection, str(person_id), staff.tenant_id)
-        return profile_response(updated, consent)
-
-
-@person_admin.post("/{person_id}/profile/consent", status_code=201)
-def grant_profile_consent(
-    person_id: UUID,
-    values: ProfileConsentRequest,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
-    db: Annotated[Database, Depends(database)],
-) -> dict[str, Any]:
-    with db.transaction() as connection:
-        _profile, _ = load_profile(connection, str(person_id), staff.tenant_id)
-        execute(
-            connection,
-            "UPDATE profile_publication_consents SET withdrawn_at=UTC_TIMESTAMP(3) WHERE person_id=:person AND withdrawn_at IS NULL",
-            {"person": str(person_id)},
-        )
-        consent_id = str(uuid4())
-        execute(
-            connection,
-            """INSERT INTO profile_publication_consents
-            (id,person_id,consent_version,allowed_fields,accepted_at,source,created_at)
-            VALUES (:id,:person,:version,:fields,UTC_TIMESTAMP(3),:source,UTC_TIMESTAMP(3))""",
-            {
-                "id": consent_id,
-                "person": str(person_id),
-                "version": values.consent_version,
-                "fields": db_json(values.allowed_fields),
-                "source": values.source,
-            },
-        )
-        audit(
-            connection,
-            staff.id,
-            "PROFILE_CONSENT_GRANTED",
-            "ProfilePublicationConsent",
-            consent_id,
-            {"allowedFields": values.allowed_fields},
-        )
-        updated, consent = load_profile(connection, str(person_id), staff.tenant_id)
-        return profile_response(updated, consent)
-
-
-@person_admin.delete("/{person_id}/profile/consent")
-def withdraw_profile_consent(
-    person_id: UUID,
-    staff: Annotated[Staff, Depends(csrf_super_admin)],
-    db: Annotated[Database, Depends(database)],
-) -> dict[str, bool]:
-    with db.transaction() as connection:
-        profile, consent = load_profile(connection, str(person_id), staff.tenant_id)
-        if consent:
-            execute(
-                connection,
-                "UPDATE profile_publication_consents SET withdrawn_at=UTC_TIMESTAMP(3) WHERE id=:id",
-                {"id": consent["id"]},
-            )
-        execute(
-            connection,
-            "UPDATE student_profiles SET visibility='PRIVATE',updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
-            {"id": profile["id"]},
-        )
-        audit(
-            connection,
-            staff.id,
-            "PROFILE_CONSENT_WITHDRAWN",
-            "StudentProfile",
-            profile["id"],
-        )
-        outbox(
-            connection,
-            "profile.visibility.changed",
-            "StudentProfile",
-            profile["id"],
-            {"profileId": profile["id"], "visibility": "PRIVATE"},
-        )
-    return {"accepted": True}
+        updated = load_profile(connection, str(person_id), staff.tenant_id)
+        return profile_response(updated)
 
 
 MEMBERSHIP_SELECT = """SELECT sm.*,o.name AS organization
@@ -2241,26 +2143,22 @@ def decide_achievement(
     return {"id": str(achievement_id), "status": values.status}
 
 
-def public_profile_row(
-    connection: Connection, slug: str
-) -> tuple[RowMapping, set[str]]:
+def public_profile_row(connection: Connection, slug: str) -> RowMapping:
     scope = default_tenant_scope(connection)
     item = row(
         connection,
         f"""SELECT sp.*,p.last_name,p.first_name,p.middle_name,
-        {PUBLIC_STUDY_GROUP} AS study_group,p.organization,
-        pc.allowed_fields FROM student_profiles sp JOIN persons p ON p.id=sp.person_id
-        JOIN profile_publication_consents pc ON pc.person_id=sp.person_id AND pc.withdrawn_at IS NULL
-        WHERE sp.public_slug=:slug AND sp.visibility IN ('LINK_ONLY','PUBLIC')
+        {PUBLIC_STUDY_GROUP} AS study_group,rm.campus_address
+        FROM student_profiles sp JOIN persons p ON p.id=sp.person_id
+        JOIN student_roster_members rm ON rm.person_id=p.id
+        WHERE sp.public_slug=:slug AND sp.visibility='PUBLIC'
           AND p.tenant_id=:tenant AND p.person_type='KAIT_STUDENT'
-          AND p.merged_into_id IS NULL
-        ORDER BY pc.accepted_at DESC LIMIT 1""",
+          AND p.merged_into_id IS NULL LIMIT 1""",
         {"slug": slug, "tenant": scope.tenant_id},
     )
     if not item:
         raise ApiError(404, "PROFILE_NOT_FOUND", "Profile not found")
-    allowed = json_value(item["allowed_fields"])
-    return item, set(allowed if isinstance(allowed, list) else [])
+    return item
 
 
 @public.get("/students")
@@ -2270,30 +2168,19 @@ def public_students(
     limit: int = Query(24, ge=1, le=50),
     offset: int = Query(0, ge=0, le=10_000),
 ) -> dict[str, Any]:
-    """List only KAIT students whose named profile was explicitly published."""
+    """List roster students with public profiles, including imported students."""
     with db.connect() as connection:
         scope = default_tenant_scope(connection)
         items = rows(
             connection,
-            f"""SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,
-              {PUBLIC_STUDY_GROUP} AS study_group,
-              pc.allowed_fields,
-              (SELECT COALESCE(SUM(st.points),0) FROM score_transactions st
-               WHERE st.person_id=p.id) AS points,
-              (SELECT COUNT(*) FROM participations pa
-               WHERE pa.person_id=p.id AND pa.status='CONFIRMED') AS participations,
-              (SELECT COUNT(*) FROM achievements a
-               WHERE a.person_id=p.id AND a.status='VERIFIED') AS achievements
+            f"""SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name
             FROM student_profiles sp
             JOIN persons p ON p.id=sp.person_id AND p.tenant_id=:tenant
               AND p.merged_into_id IS NULL AND p.person_type='KAIT_STUDENT'
-            JOIN profile_publication_consents pc ON pc.person_id=p.id
-              AND pc.withdrawn_at IS NULL
+            JOIN student_roster_members rm ON rm.person_id=p.id
             WHERE sp.visibility='PUBLIC'
-              AND JSON_CONTAINS(pc.allowed_fields,JSON_QUOTE('NAME'))
               AND (:query IS NULL OR p.last_name LIKE :query
-                   OR ({PUBLIC_STUDY_GROUP} LIKE :query
-                       AND JSON_CONTAINS(pc.allowed_fields,JSON_QUOTE('STUDY_GROUP'))))
+                   OR {PUBLIC_STUDY_GROUP} LIKE :query)
             ORDER BY p.last_name,p.first_name,p.middle_name,p.id
             LIMIT :limit OFFSET :offset""",
             {
@@ -2303,36 +2190,17 @@ def public_students(
                 "offset": offset,
             },
         )
-    result = []
-    for item in items:
-        allowed = set(json_value(item["allowed_fields"]) or [])
-        result.append(
+    return {
+        "items": [
             {
                 "publicSlug": item["public_slug"],
                 "displayName": public_display_name(item),
-                **(
-                    {"studyGroup": item["study_group"]}
-                    if "STUDY_GROUP" in allowed
-                    else {}
-                ),
-                **(
-                    {"totalPoints": decimal_string(item["points"])}
-                    if "SCORES" in allowed
-                    else {}
-                ),
-                **(
-                    {"confirmedParticipations": int(item["participations"])}
-                    if "PARTICIPATIONS" in allowed
-                    else {}
-                ),
-                **(
-                    {"achievements": int(item["achievements"])}
-                    if "ACHIEVEMENTS" in allowed
-                    else {}
-                ),
             }
-        )
-    return {"items": result, "limit": limit, "offset": offset}
+            for item in items
+        ],
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @public.get("/leaderboard/seasons")
@@ -2363,29 +2231,13 @@ def public_profile(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        item, allowed = public_profile_row(connection, slug)
-        total = row(
-            connection,
-            "SELECT COALESCE(SUM(points),0) AS points FROM score_transactions WHERE person_id=:person",
-            {"person": item["person_id"]},
-        )
-        participation_count = row(
-            connection,
-            "SELECT COUNT(*) AS total FROM participations WHERE person_id=:person AND status='CONFIRMED'",
-            {"person": item["person_id"]},
-        )
-    response: dict[str, Any] = {"publicSlug": item["public_slug"]}
-    if "NAME" in allowed:
-        response["displayName"] = public_display_name(item)
-    if "STUDY_GROUP" in allowed:
-        response["studyGroup"] = item["study_group"]
-    if "SCORES" in allowed:
-        response["totalPoints"] = decimal_string(total["points"] if total else 0)
-    if "PARTICIPATIONS" in allowed:
-        response["confirmedParticipations"] = int(
-            participation_count["total"] if participation_count else 0
-        )
-    return response
+        item = public_profile_row(connection, slug)
+    return {
+        "publicSlug": item["public_slug"],
+        "displayName": public_display_name(item),
+        "studyGroup": item["study_group"],
+        "campus": item["campus_address"],
+    }
 
 
 @public.get("/profiles/{slug}/participations")
@@ -2396,19 +2248,14 @@ def public_participations(
     page_size: int = Query(25, alias="pageSize", ge=1, le=100),
 ) -> dict[str, Any]:
     with db.connect() as connection:
-        profile, allowed = public_profile_row(connection, slug)
-        if "PARTICIPATIONS" not in allowed:
-            raise ApiError(
-                404, "PROFILE_SECTION_NOT_FOUND", "Profile section not found"
-            )
+        profile = public_profile_row(connection, slug)
         items = rows(
             connection,
-            """SELECT e.title,e.start_at,pr.name AS role_name,pres.name AS result_name,
-            COALESCE((SELECT SUM(points) FROM score_transactions st WHERE st.participation_id=p.id),0) AS points
+            """SELECT e.title,e.start_at,p.id,SUM(st.points) AS points
             FROM participations p JOIN events e ON e.id=p.event_id
-            LEFT JOIN participation_roles pr ON pr.id=p.role_id
-            LEFT JOIN participation_results pres ON pres.id=p.result_id
+            JOIN score_transactions st ON st.participation_id=p.id
             WHERE p.person_id=:person AND p.status='CONFIRMED'
+            GROUP BY p.id,e.title,e.start_at HAVING points>0
             ORDER BY e.start_at DESC,p.id DESC LIMIT :limit OFFSET :offset""",
             {
                 "person": profile["person_id"],
@@ -2420,126 +2267,7 @@ def public_participations(
         "items": [
             {
                 "eventTitle": item["title"],
-                "eventStartAt": serial(item["start_at"]),
-                "role": item["role_name"],
-                "result": item["result_name"],
-                "points": decimal_string(item["points"] or 0)
-                if "SCORES" in allowed
-                else None,
-            }
-            for item in items
-        ],
-        "page": page,
-        "pageSize": page_size,
-    }
-
-
-@public.get("/profiles/{slug}/achievements")
-def public_achievements(
-    slug: str,
-    db: Annotated[Database, Depends(database)],
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, alias="pageSize", ge=1, le=100),
-) -> dict[str, Any]:
-    with db.connect() as connection:
-        profile, allowed = public_profile_row(connection, slug)
-        if "ACHIEVEMENTS" not in allowed:
-            raise ApiError(
-                404, "PROFILE_SECTION_NOT_FOUND", "Profile section not found"
-            )
-        items = rows(
-            connection,
-            """SELECT title,achievement_type,occurred_at FROM achievements
-            WHERE person_id=:person AND status='VERIFIED'
-            ORDER BY occurred_at DESC,id DESC LIMIT :limit OFFSET :offset""",
-            {
-                "person": profile["person_id"],
-                "limit": page_size,
-                "offset": (page - 1) * page_size,
-            },
-        )
-    return {
-        "items": [
-            {
-                "title": item["title"],
-                "type": item["achievement_type"],
-                "occurredAt": serial(item["occurred_at"]),
-            }
-            for item in items
-        ],
-        "page": page,
-        "pageSize": page_size,
-    }
-
-
-@public.get("/profiles/{slug}/score-summary")
-def public_score_summary(
-    slug: str,
-    db: Annotated[Database, Depends(database)],
-) -> dict[str, Any]:
-    with db.connect() as connection:
-        profile, allowed = public_profile_row(connection, slug)
-        if "SCORES" not in allowed:
-            raise ApiError(
-                404, "PROFILE_SECTION_NOT_FOUND", "Profile section not found"
-            )
-        items = rows(
-            connection,
-            """SELECT se.code,se.name,COALESCE(SUM(st.points),0) AS points
-            FROM seasons se LEFT JOIN score_transactions st ON st.season_id=se.id AND st.person_id=:person
-            GROUP BY se.id,se.code,se.name,se.starts_at HAVING points<>0 ORDER BY se.starts_at DESC""",
-            {"person": profile["person_id"]},
-        )
-    return {
-        "items": [
-            {
-                "seasonCode": x["code"],
-                "seasonName": x["name"],
-                "points": decimal_string(x["points"]),
-            }
-            for x in items
-        ]
-    }
-
-
-@public.get("/profiles/{slug}/score-transactions")
-def public_score_transactions(
-    slug: str,
-    db: Annotated[Database, Depends(database)],
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, alias="pageSize", ge=1, le=100),
-) -> dict[str, Any]:
-    with db.connect() as connection:
-        profile, allowed = public_profile_row(connection, slug)
-        if "SCORES" not in allowed:
-            raise ApiError(
-                404, "PROFILE_SECTION_NOT_FOUND", "Profile section not found"
-            )
-        items = rows(
-            connection,
-            """SELECT se.name AS season_name,st.transaction_type,st.points,st.created_at,
-            e.title AS event_title
-            FROM score_transactions st JOIN seasons se ON se.id=st.season_id
-            LEFT JOIN participations pa ON pa.id=st.participation_id
-            LEFT JOIN events e ON e.id=pa.event_id
-            WHERE st.person_id=:person ORDER BY st.created_at DESC,st.id DESC
-            LIMIT :limit OFFSET :offset""",
-            {
-                "person": profile["person_id"],
-                "limit": page_size,
-                "offset": (page - 1) * page_size,
-            },
-        )
-    return {
-        "items": [
-            {
-                "seasonName": item["season_name"],
-                "type": item["transaction_type"],
                 "points": decimal_string(item["points"]),
-                "createdAt": serial(item["created_at"]),
-                "eventTitle": item["event_title"]
-                if "PARTICIPATIONS" in allowed
-                else None,
             }
             for item in items
         ],
@@ -2566,25 +2294,18 @@ def leaderboard(
             raise ApiError(404, "SEASON_NOT_FOUND", "Season not found")
         items = rows(
             connection,
-            f"""SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,
-            {PUBLIC_STUDY_GROUP} AS study_group,pc.allowed_fields,
-            COALESCE(SUM(st.points),0) AS points,
-            (SELECT COUNT(*) FROM participations pa JOIN events pe ON pe.id=pa.event_id
-             WHERE pa.person_id=p.id AND pa.status='CONFIRMED' AND pe.season_id=:season) AS participations,
-            (SELECT COUNT(*) FROM achievements a
-             LEFT JOIN participations ap ON ap.id=a.participation_id
-             LEFT JOIN events ae ON ae.id=COALESCE(a.event_id,ap.event_id)
-             WHERE a.person_id=p.id AND a.status='VERIFIED' AND ae.season_id=:season) AS achievements
+            """SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,
+            COALESCE(scored.points,0) AS points
             FROM student_profiles sp JOIN persons p ON p.id=sp.person_id
-            LEFT JOIN score_transactions st ON st.person_id=p.id AND st.season_id=:season
-            JOIN profile_publication_consents pc ON pc.person_id=p.id AND pc.withdrawn_at IS NULL
+            JOIN student_roster_members rm ON rm.person_id=p.id
+            LEFT JOIN (
+                SELECT st.person_id,SUM(st.points) AS points
+                FROM score_transactions st
+                JOIN participations pa ON pa.id=st.participation_id AND pa.status='CONFIRMED'
+                WHERE st.season_id=:season GROUP BY st.person_id
+            ) scored ON scored.person_id=p.id
             WHERE sp.visibility='PUBLIC' AND p.tenant_id=:tenant
               AND p.person_type='KAIT_STUDENT' AND p.merged_into_id IS NULL
-              AND JSON_CONTAINS(pc.allowed_fields, JSON_QUOTE('NAME'))
-              AND JSON_CONTAINS(pc.allowed_fields, JSON_QUOTE('SCORES'))
-              AND pc.accepted_at=(SELECT MAX(pc2.accepted_at) FROM profile_publication_consents pc2
-                                  WHERE pc2.person_id=p.id AND pc2.withdrawn_at IS NULL)
-            GROUP BY p.id,sp.public_slug,p.last_name,p.first_name,p.middle_name,study_group,pc.allowed_fields
             ORDER BY points DESC,p.last_name,p.first_name,p.id
             LIMIT :limit OFFSET :offset""",
             {
@@ -2601,92 +2322,9 @@ def leaderboard(
                 "publicSlug": item["public_slug"],
                 "displayName": public_display_name(item),
                 "points": decimal_string(item["points"]),
-                **(
-                    {"studyGroup": item["study_group"]}
-                    if "STUDY_GROUP" in set(json_value(item["allowed_fields"]) or [])
-                    else {}
-                ),
-                **(
-                    {"confirmedParticipations": int(item["participations"])}
-                    if "PARTICIPATIONS" in set(json_value(item["allowed_fields"]) or [])
-                    else {}
-                ),
-                **(
-                    {"achievements": int(item["achievements"])}
-                    if "ACHIEVEMENTS" in set(json_value(item["allowed_fields"]) or [])
-                    else {}
-                ),
             }
             for index, item in enumerate(items)
         ],
         "limit": limit,
         "offset": offset,
     }
-
-
-def membership_leaderboard(
-    db: Database, season_id: str, dimension: str, limit: int, offset: int
-) -> dict[str, Any]:
-    if dimension not in {"study_group", "department"}:
-        raise RuntimeError("Unsupported membership dimension")
-    identity = "sm.study_group_id" if dimension == "study_group" else "sm.department_id"
-    join = (
-        "JOIN study_groups structure ON structure.id=sm.study_group_id"
-        if dimension == "study_group"
-        else "JOIN departments structure ON structure.id=sm.department_id"
-    )
-    with db.connect() as connection:
-        reference(connection, "seasons", season_id, active=False)
-        items = rows(
-            connection,
-            f"""SELECT {identity} AS structure_id,structure.name AS label,
-            SUM(st.points) AS points,COUNT(DISTINCT st.person_id) AS people
-            FROM score_transactions st
-            JOIN student_memberships sm ON sm.id=st.membership_id
-            {join}
-            JOIN student_profiles sp ON sp.person_id=st.person_id AND sp.visibility='PUBLIC'
-            JOIN profile_publication_consents pc
-              ON pc.person_id=st.person_id AND pc.withdrawn_at IS NULL
-            WHERE st.season_id=:season AND {identity} IS NOT NULL
-              AND JSON_CONTAINS(pc.allowed_fields,JSON_QUOTE('SCORES'))
-            GROUP BY {identity},structure.name
-            ORDER BY points DESC,label LIMIT :limit OFFSET :offset""",
-            {
-                "season": season_id,
-                "limit": limit,
-                "offset": offset,
-            },
-        )
-    return {
-        "items": [
-            {
-                "rank": offset + index + 1,
-                "name": item["label"],
-                "points": decimal_string(item["points"]),
-                "people": int(item["people"]),
-            }
-            for index, item in enumerate(items)
-        ],
-        "limit": limit,
-        "offset": offset,
-    }
-
-
-@public.get("/leaderboard/groups")
-def group_leaderboard(
-    db: Annotated[Database, Depends(database)],
-    season_id: Annotated[UUID, Query(alias="seasonId")],
-    limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0, le=10_000),
-) -> dict[str, Any]:
-    return membership_leaderboard(db, str(season_id), "study_group", limit, offset)
-
-
-@public.get("/leaderboard/departments")
-def department_leaderboard(
-    db: Annotated[Database, Depends(database)],
-    season_id: Annotated[UUID, Query(alias="seasonId")],
-    limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0, le=10_000),
-) -> dict[str, Any]:
-    return membership_leaderboard(db, str(season_id), "department", limit, offset)
