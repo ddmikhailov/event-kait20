@@ -187,7 +187,12 @@ const AdminWorkspace = ({
     );
   }
   if (view === 'people') {
-    return <PeopleDirectory onBack={() => setView('events')} />;
+    return (
+      <PeopleDirectory
+        role={session.user.role}
+        onBack={() => setView('events')}
+      />
+    );
   }
   if (view === 'statistics' && selected) {
     return (

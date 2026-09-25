@@ -355,6 +355,79 @@ export const leaderboardResponseSchema = z
   .strict();
 export type LeaderboardResponse = z.infer<typeof leaderboardResponseSchema>;
 
+export const publicLeaderboardSeasonsSchema = z
+  .object({
+    items: z.array(
+      z
+        .object({ id: uuidSchema, name: z.string(), active: z.boolean() })
+        .strict(),
+    ),
+  })
+  .strict();
+export type PublicLeaderboardSeasons = z.infer<
+  typeof publicLeaderboardSeasonsSchema
+>;
+
+export const publicScoreTransactionListSchema = z
+  .object({
+    items: z.array(
+      z
+        .object({
+          seasonName: z.string(),
+          type: z.enum([
+            'AWARD',
+            'REVERSAL',
+            'MANUAL_ADJUSTMENT',
+            'LEGACY_IMPORT',
+          ]),
+          points: z.string().regex(/^-?\d+\.\d{4}$/),
+          createdAt: z.string(),
+          eventTitle: z.string().nullable(),
+        })
+        .strict(),
+    ),
+    page: z.number().int().positive(),
+    pageSize: z.number().int().positive(),
+  })
+  .strict();
+export type PublicScoreTransactionList = z.infer<
+  typeof publicScoreTransactionListSchema
+>;
+
+export const profilePublicationFieldSchema = z.enum([
+  'NAME',
+  'STUDY_GROUP',
+  'ORGANIZATION',
+  'PARTICIPATIONS',
+  'ACHIEVEMENTS',
+  'SCORES',
+]);
+export const adminStudentProfileSchema = z
+  .object({
+    id: uuidSchema.nullable(),
+    personId: uuidSchema,
+    publicSlug: z.string().nullable(),
+    visibility: z.enum(['PRIVATE', 'LINK_ONLY', 'PUBLIC']),
+    consent: z
+      .object({
+        consentVersion: z.string(),
+        allowedFields: z.array(profilePublicationFieldSchema),
+        acceptedAt: z.string(),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export const profileConsentRequestSchema = z
+  .object({
+    consentVersion: z.string().trim().min(1).max(100),
+    allowedFields: z.array(profilePublicationFieldSchema).min(1).max(6),
+    source: z.literal('ADMIN'),
+  })
+  .strict();
+export type AdminStudentProfile = z.infer<typeof adminStudentProfileSchema>;
+export type ProfileConsentRequest = z.infer<typeof profileConsentRequestSchema>;
+
 const personActivityRoleRefSchema = z
   .object({ code: z.string(), name: z.string() })
   .strict();

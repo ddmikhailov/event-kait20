@@ -235,6 +235,10 @@ The public activity API has a shared request-rate limit. Never infer publication
 consent from Event registration consent or from presence in an imported roster.
 Public directory, profile and leaderboard responses use `Cache-Control: no-store`
 so a withdrawn profile is not retained by HTTP caches.
+Public score history includes a participation's Event title only when the active
+consent permits PARTICIPATIONS as well as SCORES. It never returns the stored
+calculation snapshot or an internal adjustment reason. The SUPER_ADMIN records
+the consent version and allowed fields in the Person card before publishing.
 
 Consent is field-level: NAME and SCORES permit leaderboard identity/points only;
 participation and achievement counters require their own allowed fields and are

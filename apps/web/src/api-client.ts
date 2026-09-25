@@ -7,6 +7,9 @@ import {
   publicParticipationListSchema,
   publicProfileSchema,
   publicStudentListSchema,
+  publicLeaderboardSeasonsSchema,
+  leaderboardResponseSchema,
+  publicScoreTransactionListSchema,
   ticketResponseSchema,
   type PublicEventResponse,
   type PublicEventListResponse,
@@ -16,6 +19,9 @@ import {
   type PublicParticipationList,
   type PublicProfile,
   type PublicStudentList,
+  type PublicLeaderboardSeasons,
+  type LeaderboardResponse,
+  type PublicScoreTransactionList,
   type TicketResponse,
   type AcceptedResponse,
 } from '@event-registration/contracts';
@@ -40,6 +46,41 @@ export class PublicApiError extends Error {
 }
 
 export class PublicApiClient {
+  public leaderboardSeasons(): Promise<PublicLeaderboardSeasons> {
+    return this.request(
+      '/public/leaderboard/seasons',
+      { method: 'GET', cache: 'no-store' },
+      publicLeaderboardSeasonsSchema,
+    );
+  }
+
+  public leaderboard(
+    seasonId: string,
+    offset = 0,
+  ): Promise<LeaderboardResponse> {
+    const params = new URLSearchParams({
+      seasonId,
+      limit: '20',
+      offset: String(offset),
+    });
+    return this.request(
+      `/public/leaderboard?${params.toString()}`,
+      { method: 'GET', cache: 'no-store' },
+      leaderboardResponseSchema,
+    );
+  }
+
+  public studentScoreTransactions(
+    slug: string,
+    page = 1,
+  ): Promise<PublicScoreTransactionList> {
+    return this.request(
+      `/public/profiles/${encodeURIComponent(slug)}/score-transactions?page=${page}&pageSize=25`,
+      { method: 'GET', cache: 'no-store' },
+      publicScoreTransactionListSchema,
+    );
+  }
+
   public students(query = '', offset = 0): Promise<PublicStudentList> {
     const params = new URLSearchParams({ limit: '24', offset: String(offset) });
     if (query.trim().length >= 2) params.set('q', query.trim());

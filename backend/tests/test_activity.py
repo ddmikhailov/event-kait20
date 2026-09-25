@@ -488,6 +488,22 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
     assert "email" not in public_profile.json() and "phone" not in public_profile.json()
     assert public_profile.json()["displayName"] == "Тестов У."
     assert "organization" not in public_profile.json()
+    public_seasons = client.get("/public/leaderboard/seasons")
+    assert public_seasons.status_code == 200, public_seasons.text
+    assert public_seasons.headers["cache-control"] == "no-store"
+    assert any(
+        item["id"] == season.json()["id"] for item in public_seasons.json()["items"]
+    )
+    private_participations = client.get(f"/public/profiles/{slug}/score-transactions")
+    assert private_participations.status_code == 200
+    assert private_participations.json()["items"]
+    assert all(
+        item["eventTitle"] is None for item in private_participations.json()["items"]
+    )
+    assert all(
+        "reason" not in item and "participationId" not in item
+        for item in private_participations.json()["items"]
+    )
     directory = client.get("/public/students", params={"q": "Тестов"})
     assert directory.status_code == 200, directory.text
     assert directory.headers["cache-control"] == "no-store"
@@ -534,6 +550,33 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
     assert participation_consent.status_code == 201, participation_consent.text
     assert client.get("/public/students").json()["items"][0]["studyGroup"] == "ИС-21"
     assert client.get("/public/students", params={"q": "ИС-21"}).json()["items"]
+    current_group = create_study_group(
+        client, headers, "MOS_ACTIVE_CURRENT", "MOS_ACTIVE_DEPT", 1
+    )
+    membership = client.post(
+        f"/admin/people/{person_id}/memberships",
+        headers=headers,
+        json={
+            "studyGroupId": current_group,
+            "validFrom": "2020-01-01",
+            "validTo": None,
+        },
+    )
+    assert membership.status_code == 201, membership.text
+    assert (
+        client.get(f"/public/profiles/{slug}").json()["studyGroup"]
+        == "MOS_ACTIVE_CURRENT"
+    )
+    assert client.get("/public/students", params={"q": "MOS_ACTIVE_CURRENT"}).json()[
+        "items"
+    ]
+    assert client.get("/public/students", params={"q": "ИС-21"}).json()["items"] == []
+    public_scores = client.get(f"/public/profiles/{slug}/score-transactions")
+    assert public_scores.status_code == 200
+    assert any(
+        item["eventTitle"] is not None and item["type"] == "AWARD"
+        for item in public_scores.json()["items"]
+    )
     participation_item = next(
         item
         for item in client.get(
@@ -571,6 +614,7 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
         == 200
     )
     assert client.get(f"/public/profiles/{slug}").status_code == 404
+    assert client.get(f"/public/profiles/{slug}/score-transactions").status_code == 404
     assert all(
         item["publicSlug"] != slug
         for item in client.get("/public/students").json()["items"]

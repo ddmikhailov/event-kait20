@@ -3,6 +3,9 @@ import type {
   PublicParticipationList,
   PublicProfile,
   PublicStudentList,
+  PublicLeaderboardSeasons,
+  LeaderboardResponse,
+  PublicScoreTransactionList,
 } from '@event-registration/contracts';
 import { useEffect, useState, type FormEvent } from 'react';
 
@@ -14,6 +17,137 @@ const loadError = (error: unknown) =>
   error instanceof PublicApiError && error.code === 'RATE_LIMITED'
     ? 'Слишком много запросов. Попробуйте через минуту.'
     : 'Не удалось загрузить данные. Обновите страницу и попробуйте снова.';
+
+const MosActiveLeaderboard = () => {
+  const [seasons, setSeasons] = useState<PublicLeaderboardSeasons>();
+  const [seasonId, setSeasonId] = useState('');
+  const [ranking, setRanking] = useState<LeaderboardResponse>();
+  const [offset, setOffset] = useState(0);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    let cancelled = false;
+    publicApi
+      .leaderboardSeasons()
+      .then((result) => {
+        if (!cancelled) {
+          setSeasons(result);
+          setSeasonId(result.items[0]?.id ?? '');
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) setError(loadError(caught));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!seasonId) return;
+    let cancelled = false;
+    publicApi
+      .leaderboard(seasonId, offset)
+      .then((result) => {
+        if (!cancelled) {
+          setRanking(result);
+          setError(undefined);
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) setError(loadError(caught));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [seasonId, offset]);
+
+  return (
+    <section
+      className="mos-active-section"
+      aria-labelledby="mos-active-ranking-title"
+    >
+      <h2 id="mos-active-ranking-title">Рейтинг студентов</h2>
+      {seasons && seasons.items.length === 0 && (
+        <p>Рейтинг пока не открыт: сезонов нет.</p>
+      )}
+      {seasons && seasons.items.length > 0 && (
+        <>
+          <label htmlFor="mos-active-season">Сезон</label>
+          <select
+            id="mos-active-season"
+            value={seasonId}
+            onChange={(event) => {
+              setRanking(undefined);
+              setOffset(0);
+              setSeasonId(event.target.value);
+            }}
+          >
+            {seasons.items.map((season) => (
+              <option key={season.id} value={season.id}>
+                {season.name}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+      {error && (
+        <p role="alert" className="message error">
+          {error}
+        </p>
+      )}
+      {seasonId && !ranking && !error && (
+        <p className="calendar-state">Загружаем рейтинг…</p>
+      )}
+      {ranking && ranking.items.length === 0 && (
+        <p>В этом сезоне опубликованных баллов пока нет.</p>
+      )}
+      {ranking && ranking.items.length > 0 && (
+        <>
+          <ol className="mos-active-list mos-active-ranking" start={offset + 1}>
+            {ranking.items.map((item) => (
+              <li key={item.publicSlug}>
+                <a
+                  href={`/mos-active/students/${encodeURIComponent(item.publicSlug)}`}
+                >
+                  <strong>
+                    {item.rank}. {item.displayName}
+                  </strong>
+                  {item.studyGroup && <span>{item.studyGroup}</span>}
+                  <span>{pointsText(item.points)} баллов</span>
+                </a>
+              </li>
+            ))}
+          </ol>
+          <div className="mos-active-pages">
+            <button
+              type="button"
+              disabled={offset === 0}
+              onClick={() => {
+                setRanking(undefined);
+                setOffset(Math.max(0, offset - ranking.limit));
+              }}
+            >
+              Назад
+            </button>
+            <button
+              type="button"
+              disabled={
+                ranking.items.length < ranking.limit || offset >= 10_000
+              }
+              onClick={() => {
+                setRanking(undefined);
+                setOffset(offset + ranking.limit);
+              }}
+            >
+              Далее
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+};
 
 export const MosActiveCatalog = () => {
   const [input, setInput] = useState('');
@@ -64,6 +198,7 @@ export const MosActiveCatalog = () => {
         <h1>МосАктив</h1>
         <p>Достижения, участие в мероприятиях и баллы студентов.</p>
       </header>
+      <MosActiveLeaderboard />
       <form className="mos-active-search" onSubmit={search}>
         <label htmlFor="mos-active-query">Найти студента</label>
         <div>
@@ -142,8 +277,11 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
   const [participations, setParticipations] =
     useState<PublicParticipationList>();
   const [achievements, setAchievements] = useState<PublicAchievementList>();
+  const [scoreTransactions, setScoreTransactions] =
+    useState<PublicScoreTransactionList>();
   const [participationPage, setParticipationPage] = useState(1);
   const [achievementPage, setAchievementPage] = useState(1);
+  const [scorePage, setScorePage] = useState(1);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -205,6 +343,22 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
       cancelled = true;
     };
   }, [profile, slug, achievementPage]);
+
+  useEffect(() => {
+    if (!profile || profile.totalPoints === undefined) return;
+    let cancelled = false;
+    publicApi
+      .studentScoreTransactions(slug, scorePage)
+      .then((result) => {
+        if (!cancelled) setScoreTransactions(result);
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) setError(loadError(caught));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profile, slug, scorePage]);
 
   return (
     <main className="catalog-page mos-active-page">
@@ -279,6 +433,55 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
                   participations.items.length === participations.pageSize
                 }
                 onPage={setParticipationPage}
+              />
+            </section>
+          )}
+          {scoreTransactions && (
+            <section className="mos-active-section">
+              <h2>Как начислены баллы</h2>
+              {scoreTransactions.items.length === 0 && (
+                <p>Начислений пока нет.</p>
+              )}
+              <ul>
+                {scoreTransactions.items.map((item, index) => (
+                  <li key={`${item.createdAt}-${index}`}>
+                    <strong>
+                      {item.eventTitle ??
+                        (item.type === 'LEGACY_IMPORT'
+                          ? 'Перенесённые баллы'
+                          : item.type === 'MANUAL_ADJUSTMENT'
+                            ? 'Корректировка баллов'
+                            : 'Начисление за участие')}
+                    </strong>
+                    <span>
+                      {item.type === 'AWARD'
+                        ? 'Начисление'
+                        : item.type === 'REVERSAL'
+                          ? 'Отмена начисления'
+                          : item.type === 'MANUAL_ADJUSTMENT'
+                            ? 'Ручная корректировка'
+                            : 'Перенос баллов'}
+                    </span>
+                    <span>
+                      {item.seasonName} ·{' '}
+                      {new Date(item.createdAt).toLocaleDateString('ru-RU')}
+                    </span>
+                    <span>
+                      {item.points.startsWith('-') ? '' : '+'}
+                      {pointsText(item.points)} баллов
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <PageControls
+                page={scorePage}
+                hasNext={
+                  scoreTransactions.items.length === scoreTransactions.pageSize
+                }
+                onPage={(page) => {
+                  setScoreTransactions(undefined);
+                  setScorePage(page);
+                }}
               />
             </section>
           )}

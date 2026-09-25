@@ -87,6 +87,19 @@ def public_display_name(item: RowMapping) -> str:
     return " ".join([surname, *initials])
 
 
+# Current affiliation comes from StudentMembership when history exists. Legacy
+# Person.study_group remains a fallback only until that history is created.
+PUBLIC_STUDY_GROUP = """CASE WHEN EXISTS (
+    SELECT 1 FROM student_memberships known WHERE known.person_id=p.id
+) THEN (
+    SELECT current_group.study_group FROM student_memberships current_group
+    WHERE current_group.person_id=p.id
+      AND current_group.valid_from<=DATE(UTC_TIMESTAMP() + INTERVAL 3 HOUR)
+      AND (current_group.valid_to IS NULL OR current_group.valid_to>=DATE(UTC_TIMESTAMP() + INTERVAL 3 HOUR))
+    LIMIT 1
+) ELSE p.study_group END"""
+
+
 def reference_response(item: RowMapping) -> dict[str, Any]:
     return {
         "id": item["id"],
@@ -2048,7 +2061,8 @@ def public_profile_row(
     scope = default_tenant_scope(connection)
     item = row(
         connection,
-        """SELECT sp.*,p.last_name,p.first_name,p.middle_name,p.study_group,p.organization,
+        f"""SELECT sp.*,p.last_name,p.first_name,p.middle_name,
+        {PUBLIC_STUDY_GROUP} AS study_group,p.organization,
         pc.allowed_fields FROM student_profiles sp JOIN persons p ON p.id=sp.person_id
         JOIN profile_publication_consents pc ON pc.person_id=sp.person_id AND pc.withdrawn_at IS NULL
         WHERE sp.public_slug=:slug AND sp.visibility IN ('LINK_ONLY','PUBLIC')
@@ -2075,7 +2089,8 @@ def public_students(
         scope = default_tenant_scope(connection)
         items = rows(
             connection,
-            """SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,p.study_group,
+            f"""SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,
+              {PUBLIC_STUDY_GROUP} AS study_group,
               pc.allowed_fields,
               (SELECT COALESCE(SUM(st.points),0) FROM score_transactions st
                WHERE st.person_id=p.id) AS points,
@@ -2091,7 +2106,7 @@ def public_students(
             WHERE sp.visibility='PUBLIC'
               AND JSON_CONTAINS(pc.allowed_fields,JSON_QUOTE('NAME'))
               AND (:query IS NULL OR p.last_name LIKE :query
-                   OR (p.study_group LIKE :query
+                   OR ({PUBLIC_STUDY_GROUP} LIKE :query
                        AND JSON_CONTAINS(pc.allowed_fields,JSON_QUOTE('STUDY_GROUP'))))
             ORDER BY p.last_name,p.first_name,p.middle_name,p.id
             LIMIT :limit OFFSET :offset""",
@@ -2132,6 +2147,28 @@ def public_students(
             }
         )
     return {"items": result, "limit": limit, "offset": offset}
+
+
+@public.get("/leaderboard/seasons")
+def public_leaderboard_seasons(
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    """Expose season labels needed to select a public personal ranking."""
+    with db.connect() as connection:
+        scope = default_tenant_scope(connection)
+        items = rows(
+            connection,
+            """SELECT id,name,active FROM seasons
+            WHERE organization_id=:organization
+            ORDER BY active DESC,starts_at DESC,id DESC LIMIT 50""",
+            {"organization": scope.organization_id},
+        )
+    return {
+        "items": [
+            {"id": item["id"], "name": item["name"], "active": bool(item["active"])}
+            for item in items
+        ]
+    }
 
 
 @public.get("/profiles/{slug}")
@@ -2294,8 +2331,11 @@ def public_score_transactions(
             )
         items = rows(
             connection,
-            """SELECT se.name AS season_name,st.transaction_type,st.points,st.created_at
+            """SELECT se.name AS season_name,st.transaction_type,st.points,st.created_at,
+            e.title AS event_title
             FROM score_transactions st JOIN seasons se ON se.id=st.season_id
+            LEFT JOIN participations pa ON pa.id=st.participation_id
+            LEFT JOIN events e ON e.id=pa.event_id
             WHERE st.person_id=:person ORDER BY st.created_at DESC,st.id DESC
             LIMIT :limit OFFSET :offset""",
             {
@@ -2309,8 +2349,11 @@ def public_score_transactions(
             {
                 "seasonName": item["season_name"],
                 "type": item["transaction_type"],
-                "points": item["points"],
+                "points": decimal_string(item["points"]),
                 "createdAt": serial(item["created_at"]),
+                "eventTitle": item["event_title"]
+                if "PARTICIPATIONS" in allowed
+                else None,
             }
             for item in items
         ],
@@ -2328,10 +2371,17 @@ def leaderboard(
 ) -> dict[str, Any]:
     with db.connect() as connection:
         scope = default_tenant_scope(connection)
-        reference(connection, "seasons", str(season_id), active=False)
+        season = row(
+            connection,
+            "SELECT id FROM seasons WHERE id=:season AND organization_id=:organization",
+            {"season": str(season_id), "organization": scope.organization_id},
+        )
+        if not season:
+            raise ApiError(404, "SEASON_NOT_FOUND", "Season not found")
         items = rows(
             connection,
-            """SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,p.study_group,pc.allowed_fields,
+            f"""SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,
+            {PUBLIC_STUDY_GROUP} AS study_group,pc.allowed_fields,
             SUM(st.points) AS points,
             (SELECT COUNT(*) FROM participations pa JOIN events pe ON pe.id=pa.event_id
              WHERE pa.person_id=p.id AND pa.status='CONFIRMED' AND pe.season_id=:season) AS participations,
@@ -2348,7 +2398,7 @@ def leaderboard(
               AND JSON_CONTAINS(pc.allowed_fields, JSON_QUOTE('SCORES'))
               AND pc.accepted_at=(SELECT MAX(pc2.accepted_at) FROM profile_publication_consents pc2
                                   WHERE pc2.person_id=p.id AND pc2.withdrawn_at IS NULL)
-            GROUP BY p.id,sp.public_slug,p.last_name,p.first_name,p.middle_name,p.study_group,pc.allowed_fields
+            GROUP BY p.id,sp.public_slug,p.last_name,p.first_name,p.middle_name,study_group,pc.allowed_fields
             HAVING points<>0 ORDER BY points DESC,p.last_name,p.first_name,p.id
             LIMIT :limit OFFSET :offset""",
             {

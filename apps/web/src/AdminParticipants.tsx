@@ -16,6 +16,7 @@ import { defaultSystemFields } from '@event-registration/contracts';
 import { useCallback, useEffect, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminMosActivePublication } from './AdminMosActivePublication.js';
 import { EventParticipationWorkspace } from './AdminActivity.js';
 import { downloadEventExcel, EventExcel } from './AdminExcel.js';
 import { OnsiteStreamSelector } from './EventStreams.js';
@@ -804,7 +805,13 @@ const OnsiteField = ({ field }: { field: FormFieldResponse }) => {
   );
 };
 
-export const PeopleDirectory = ({ onBack }: { onBack: () => void }) => {
+export const PeopleDirectory = ({
+  onBack,
+  role,
+}: {
+  onBack: () => void;
+  role: 'SUPER_ADMIN' | 'ORGANIZER' | 'SCANNER';
+}) => {
   const [response, setResponse] = useState<PersonListResponse>();
   const [query, setQuery] = useState('');
   const [draftQuery, setDraftQuery] = useState('');
@@ -839,6 +846,7 @@ export const PeopleDirectory = ({ onBack }: { onBack: () => void }) => {
     return (
       <PersonDetail
         person={selected}
+        role={role}
         onBack={() => {
           setSelected(undefined);
           void load();
@@ -957,10 +965,12 @@ const PeopleTable = ({
 
 const PersonDetail = ({
   person,
+  role,
   onBack,
   onChanged,
 }: {
   person: PersonDetailResponse;
+  role: 'SUPER_ADMIN' | 'ORGANIZER' | 'SCANNER';
   onBack: () => void;
   onChanged: (person: PersonDetailResponse) => void;
 }) => {
@@ -1019,6 +1029,9 @@ const PersonDetail = ({
           )}
         </aside>
       </div>
+      {role === 'SUPER_ADMIN' && person.personType === 'KAIT_STUDENT' && (
+        <AdminMosActivePublication personId={person.id} />
+      )}
     </main>
   );
 };

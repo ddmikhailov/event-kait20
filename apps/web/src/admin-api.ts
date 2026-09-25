@@ -33,6 +33,7 @@ import {
   personStatusAssignmentCreatedSchema,
   manualAdjustmentResponseSchema,
   personActivityResponseSchema,
+  adminStudentProfileSchema,
   scoringPreviewResponseSchema,
   seasonListSchema,
   seasonSchema,
@@ -106,6 +107,8 @@ import {
   type ManualAdjustmentRequest,
   type ManualAdjustmentResponse,
   type PersonActivityResponse,
+  type AdminStudentProfile,
+  type ProfileConsentRequest,
   type ScoringPreviewRequest,
   type ScoringPreviewResponse,
   type Season,
@@ -407,6 +410,44 @@ export class AdminApiClient {
       `/admin/people/${encodeURIComponent(personId)}/activity`,
       { method: 'GET' },
       personActivityResponseSchema,
+    );
+  }
+
+  public studentProfile(personId: string): Promise<AdminStudentProfile> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/profile`,
+      { method: 'GET' },
+      adminStudentProfileSchema,
+    );
+  }
+
+  public grantProfileConsent(
+    personId: string,
+    values: ProfileConsentRequest,
+  ): Promise<AdminStudentProfile> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/profile/consent`,
+      { method: 'POST', body: JSON.stringify(values) },
+      adminStudentProfileSchema,
+    );
+  }
+
+  public setProfileVisibility(
+    personId: string,
+    visibility: 'PRIVATE' | 'PUBLIC',
+  ): Promise<AdminStudentProfile> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/profile`,
+      { method: 'PATCH', body: JSON.stringify({ visibility }) },
+      adminStudentProfileSchema,
+    );
+  }
+
+  public withdrawProfileConsent(personId: string): Promise<AcceptedResponse> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/profile/consent`,
+      { method: 'DELETE' },
+      acceptedResponseSchema,
     );
   }
 

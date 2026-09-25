@@ -257,16 +257,16 @@ registration signature fingerprint tied to `session_secret`.
 
 ## Process
 
-### N39. Public publication workflow and privacy review remain incomplete
+### N39. Cohort import and aggregate privacy review remain incomplete
 
 Public MosActive catalogue and profile routes now use a bounded request-rate
 limit and expose surname with initials. Publication still requires a separate
-active field-level consent. There is no admin/self-service UI to record or
-withdraw publication consent and no dedicated cohort import. Before real-data
-launch, verify the signed dissemination-consent version and field permissions
-for each person, add an auditable roster import with preview/match decisions,
-and review small group/department aggregates. Keep real rosters off the
-synthetic Amvera beta.
+active field-level consent; SUPER_ADMIN now records, publishes, hides and
+withdraws it in the Person card. There is no dedicated cohort import. Before
+real-data launch, verify the signed dissemination-consent version and field
+permissions for each person, add an auditable roster import with preview/match
+decisions, and review small group/department aggregates. Keep real rosters off
+the synthetic Amvera beta.
 
 ### N40. Contracts/CI/deploy review pass incomplete
 

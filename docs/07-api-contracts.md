@@ -463,6 +463,12 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
   without scores can still appear. No authentication is required.
 - `GET /public/leaderboard`, `/public/leaderboard/groups`,
   `/public/leaderboard/departments` (offset at most 10000)
+- `GET /public/leaderboard/seasons` — public season identifiers and names for
+  the ranking selector; returns at most 50 seasons in the current organization.
+- `GET /public/profiles/:slug/score-transactions` — paged score ledger with
+  signed points, season, operation type and date. The Event title is included
+  only when active consent also permits PARTICIPATIONS; internal reasons and
+  identifiers are never returned.
 
 Global configuration, publication and manual score adjustments are SUPER_ADMIN
 operations. Participation operations accept SUPER_ADMIN/ORGANIZER. Scanner is
