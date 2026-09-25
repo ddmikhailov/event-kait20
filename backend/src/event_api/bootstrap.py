@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import os
+import tempfile
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 from pydantic import EmailStr, TypeAdapter, ValidationError
@@ -15,8 +18,10 @@ from .tenant_scope import default_tenant_scope
 BOOTSTRAP_LOCK = "event-registration-super-admin-bootstrap"
 
 
-def create_activation_token(email: str, database: Database, config: Settings) -> str:
-    """Create the only pending first-admin invitation and return its raw token once."""
+def _activation_token(
+    email: str, database: Database, config: Settings, *, recover_pending: bool
+) -> str | None:
+    """Create or recover the first-admin link while holding the bootstrap lock."""
     record_id = str(uuid4())
     expires = mysql_millis(
         datetime.now(UTC).replace(tzinfo=None)
@@ -41,15 +46,29 @@ def create_activation_token(email: str, database: Database, config: Settings) ->
                     )
                 ).scalar_one()
                 if count:
+                    if recover_pending:
+                        return None
                     raise SystemExit("SUPER_ADMIN already exists; bootstrap refused")
                 pending = connection.execute(
                     text(
-                        """SELECT COUNT(*) FROM staff_invitations
+                        """SELECT id,email_normalized,token_hash,expires_at
+                           FROM staff_invitations
                            WHERE role='SUPER_ADMIN' AND invited_by IS NULL
-                             AND accepted_at IS NULL AND expires_at > UTC_TIMESTAMP(3)"""
+                             AND accepted_at IS NULL AND expires_at > UTC_TIMESTAMP(3)
+                           ORDER BY created_at DESC LIMIT 1"""
                     )
-                ).scalar_one()
+                ).mappings().first()
                 if pending:
+                    if recover_pending and pending["email_normalized"] == email:
+                        existing = auth_link_token(
+                            "invitation",
+                            pending["id"],
+                            pending["expires_at"],
+                            config.auth_link_secret,
+                        )
+                        if token_hash(existing) != pending["token_hash"]:
+                            raise SystemExit("Pending activation link cannot be recovered")
+                        return existing
                     raise SystemExit(
                         "A valid SUPER_ADMIN activation link already exists; bootstrap refused"
                     )
@@ -78,9 +97,29 @@ def create_activation_token(email: str, database: Database, config: Settings) ->
     return raw_token
 
 
+def create_activation_token(email: str, database: Database, config: Settings) -> str:
+    """Create the only pending first-admin invitation and return its raw token once."""
+    token = _activation_token(email, database, config, recover_pending=False)
+    assert token is not None
+    return token
+
+
+def _write_private_link(path: Path, link: str) -> None:
+    """Atomically replace a private link file outside the public document root."""
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".bootstrap-", dir=path.parent)
+    try:
+        os.chmod(temporary_name, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(f"{link}\n")
+        os.replace(temporary_name, path)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create the first SUPER_ADMIN safely")
     parser.add_argument("--email", required=True)
+    parser.add_argument("--output-file", type=Path)
     args = parser.parse_args()
     try:
         email = str(TypeAdapter(EmailStr).validate_python(args.email.strip())).lower()
@@ -89,12 +128,23 @@ def main() -> None:
     config = get_settings()
     database = Database(config)
     try:
-        token = create_activation_token(email, database, config)
+        token = _activation_token(
+            email, database, config, recover_pending=args.output_file is not None
+        )
     finally:
         database.dispose()
+    if token is None:
+        if args.output_file is not None:
+            args.output_file.unlink(missing_ok=True)
+            return
+        raise SystemExit("SUPER_ADMIN already exists; bootstrap refused")
     base_url = str(config.auth_link_base_url).rstrip("/")
+    link = f"{base_url}/invitation/{token}"
+    if args.output_file is not None:
+        _write_private_link(args.output_file, link)
+        return
     print("Open this one-time link to set the first SUPER_ADMIN password:")
-    print(f"{base_url}/invitation/{token}")
+    print(link)
     print(
         "The raw activation token is shown only now and is not stored in the database."
     )

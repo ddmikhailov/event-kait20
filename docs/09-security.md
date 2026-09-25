@@ -61,6 +61,10 @@ Release implementation:
   persists only a hash and prints a one-time activation link, while the intended
   administrator sets the password on first browser entry; the command refuses a
   second valid link and refuses permanently after activation;
+- on the isolated Amvera beta, the same CLI may write the link to a private
+  `/data` file for the project owner rather than stdout; it recovers only a
+  still-valid link for the same email and removes that file after activation on
+  the next configured startup;
 - opaque session tokens contain 256 random bits and only their SHA-256 hashes are persisted;
 - invitation/reset links contain a persisted record id and an HMAC-SHA-256 value bound to purpose and expiry; the database persists only the link hash and one-time record state, while the email worker can reconstruct the link from server-side HMAC configuration;
 - successful password reset revokes all existing sessions for the user.

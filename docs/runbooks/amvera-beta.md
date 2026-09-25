@@ -69,10 +69,16 @@ email-dependent registration, recovery and invitation flows are unverified.
    `/api/health/ready`. Both should return success before functional checks.
 4. Remove `RUN_BETA_MIGRATIONS` after the migration has completed. Future schema
    changes require another controlled migration run.
-5. Bootstrap the first test `SUPER_ADMIN` with `event-bootstrap-admin` in the
-   Amvera application console. Its one-time activation link is a secret: the
-   intended administrator opens it directly, sets the password, and does not
-   paste the link into chat or logs.
+5. Set `BOOTSTRAP_ADMIN_EMAIL` to the intended first administrator's email.
+   At application startup the `event-bootstrap-admin` CLI writes the one-time
+   activation URL to `/data/first-admin-activation.txt` (mode 0600), outside
+   the public document root and without logging it. The intended administrator
+   downloads this file from the application's **Data** tab in Amvera, opens
+   the link directly and sets the password. Never paste the link into chat or
+   logs. A still-valid pending invitation for the same email can be recovered;
+   a pending invitation for another email is refused. After activation, remove
+   `BOOTSTRAP_ADMIN_EMAIL` and delete the link file from Data. The CLI removes
+   the link file on startup when a `SUPER_ADMIN` already exists.
 6. Test Web, Scanner login, camera, offline cache/sync and representative
    registration flows using fictional identities first. Mark email-dependent
    checks blocked until test SMTP is configured.

@@ -18,7 +18,7 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from event_api.bootstrap import create_activation_token
+from event_api.bootstrap import _write_private_link, create_activation_token
 from event_api.config import Settings
 from event_api.database import Database
 from event_api.demo_seed import main as seed_demo
@@ -30,6 +30,16 @@ from event_api.schemas import MAX_CUSTOM_ANSWERS, ParticipantValues
 from event_api.security import RateLimiter, auth_link_token, hash_password, token_hash
 
 ORIGIN = {"Origin": "http://localhost:5173"}
+
+
+def test_bootstrap_link_file_is_atomically_replaced(tmp_path: Path) -> None:
+    target = tmp_path / "activation.txt"
+    _write_private_link(target, "https://example.test/auth/invitation/first")
+    _write_private_link(target, "https://example.test/auth/invitation/second")
+    assert target.read_text(encoding="utf-8") == (
+        "https://example.test/auth/invitation/second\n"
+    )
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["activation.txt"]
 
 
 def _tiny_png() -> bytes:

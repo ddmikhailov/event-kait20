@@ -268,7 +268,7 @@ def client(database_url: str) -> Iterator[TestClient]:
     from event_api.migrate import apply_migrations
 
     apply_migrations()
-    from event_api.bootstrap import create_activation_token
+    from event_api.bootstrap import _activation_token, create_activation_token
     from event_api.main import create_app
     from event_api.security import token_hash
 
@@ -276,6 +276,16 @@ def client(database_url: str) -> Iterator[TestClient]:
         database = test_client.app.state.database
         config = test_client.app.state.settings
         raw_activation = create_activation_token("admin@example.com", database, config)
+        assert (
+            _activation_token(
+                "admin@example.com", database, config, recover_pending=True
+            )
+            == raw_activation
+        )
+        with pytest.raises(SystemExit, match="already exists"):
+            _activation_token(
+                "other@example.com", database, config, recover_pending=True
+            )
         with database.connect() as connection:
             invitation_hash = connection.exec_driver_sql(
                 "SELECT token_hash FROM staff_invitations WHERE role='SUPER_ADMIN'"
@@ -288,6 +298,12 @@ def client(database_url: str) -> Iterator[TestClient]:
             json={"password": "correct horse battery"},
         )
         assert activated.status_code == 200, activated.text
+        assert (
+            _activation_token(
+                "admin@example.com", database, config, recover_pending=True
+            )
+            is None
+        )
         test_client.app.state.bootstrap_test = {
             "rawActivation": raw_activation,
             "invitationHash": invitation_hash,
