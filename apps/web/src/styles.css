@@ -183,6 +183,21 @@ a {
   margin-bottom: 2rem;
   font-weight: 700;
 }
+.mos-active-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-bottom: 1.5rem;
+}
+.mos-active-shortcuts a {
+  border: 1px solid #d8d2e4;
+  border-radius: 999px;
+  padding: 0.7rem 1rem;
+  background: #fff;
+  color: #393079;
+  font-weight: 750;
+  text-decoration: none;
+}
 .mos-active-search > div {
   display: flex;
   flex-wrap: wrap;
@@ -2067,5 +2082,224 @@ textarea {
   .activity-reason,
   .activity-actions .row-actions {
     grid-column: auto;
+  }
+}
+
+/* Clear task groups and a review layout that stays readable without a wide table. */
+.admin-heading-actions,
+.admin-workspace-links,
+.review-card-search-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.admin-heading-actions {
+  justify-content: flex-end;
+}
+.admin-workspaces {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.admin-workspace-group {
+  min-width: 0;
+  border: 1px solid #dedbe7;
+  border-radius: 1rem;
+  padding: 1.15rem;
+  background: #fff;
+}
+.admin-workspace-group h2 {
+  margin-bottom: 0.9rem;
+  color: #292857;
+  font-size: 1rem;
+}
+.admin-workspace-links {
+  align-items: stretch;
+  gap: 0.5rem;
+}
+.admin-workspace-links button {
+  min-height: 2.75rem;
+  border: 1px solid #dedbe7;
+  border-radius: 0.65rem;
+  padding: 0.6rem 0.8rem;
+  background: #f8f7fb;
+  color: #393079;
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+}
+.admin-workspace-links button:hover {
+  border-color: #83639d;
+  background: #f0eaf5;
+}
+.review-list {
+  display: grid;
+  gap: 1rem;
+}
+.review-card {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+  border: 1px solid #dedbe7;
+  border-radius: 1rem;
+  padding: clamp(1rem, 2vw, 1.5rem);
+  background: #fff;
+  box-shadow: 0 0.5rem 1.5rem rgb(43 44 124 / 5%);
+}
+.review-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #ece9f0;
+  padding-bottom: 0.75rem;
+}
+.review-card-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  overflow-wrap: anywhere;
+}
+.review-card-header span,
+.review-card-status > span {
+  color: #67677b;
+  font-size: 0.8rem;
+}
+.review-card-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  flex-wrap: wrap;
+}
+.review-updated {
+  color: #86501d;
+}
+.review-card-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 0.9rem;
+}
+.review-card-fields label,
+.review-card-save label,
+.review-card-search label {
+  display: grid;
+  min-width: 0;
+  gap: 0.4rem;
+  color: #35354c;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.review-field-hint {
+  color: #67677b;
+  font-size: 0.74rem;
+  font-weight: 500;
+}
+.review-card-match {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  flex-wrap: wrap;
+}
+.review-card-match h3,
+.review-card-search h3 {
+  width: 100%;
+  margin: 0;
+  font-size: 0.9rem;
+}
+.review-card-match .checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.review-card-match input[type='checkbox'] {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+.review-card-save {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.75rem;
+}
+.review-card-search {
+  display: grid;
+  gap: 0.75rem;
+  border-top: 1px solid #dedbe7;
+  padding-top: 1rem;
+}
+.review-card-search-heading {
+  justify-content: space-between;
+}
+.review-card-search .secondary-button,
+.review-candidate {
+  justify-self: start;
+}
+.review-candidate {
+  min-height: 2.75rem;
+  border: 1px solid #dedbe7;
+  border-radius: 0.65rem;
+  padding: 0.6rem 0.85rem;
+  background: #f8f7fb;
+  color: #393079;
+  cursor: pointer;
+  text-align: left;
+}
+.row-actions,
+.admin-section-title,
+.activity-list li {
+  flex-wrap: wrap;
+}
+.admin-panel > *,
+.admin-form > *,
+.field-form > * {
+  min-width: 0;
+}
+.activity-rule-form {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+}
+.participant-table-wrap,
+.table-scroll {
+  max-width: 100%;
+  overscroll-behavior-inline: contain;
+}
+.participant-table td {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .admin-heading-actions,
+  .review-card-save {
+    display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+  .admin-workspace-links {
+    display: grid;
+  }
+  .admin-workspace-links button,
+  .review-card-save button {
+    width: 100%;
+  }
+  .constructor-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+  }
+  .constructor-row label {
+    grid-column: 1 / -1;
+  }
+  .constructor-row .secondary-button {
+    min-width: 2.75rem;
+  }
+  .activity-list li {
+    display: grid;
+  }
+  .mos-active-total {
+    flex-wrap: wrap;
+  }
+  .mos-active-shortcuts a,
+  .mos-active-search button {
+    width: 100%;
+    text-align: center;
   }
 }

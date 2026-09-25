@@ -307,7 +307,7 @@ const AdminWorkspace = ({
             <h1>Мероприятия</h1>
             <p>Создавайте события и настраивайте форму регистрации.</p>
           </div>
-          <div className="row-actions">
+          <div className="admin-heading-actions">
             <label className="archive-toggle">
               <input
                 type="checkbox"
@@ -316,69 +316,57 @@ const AdminWorkspace = ({
               />
               <span>Показать архив</span>
             </label>
-            <button
-              className="secondary-button"
-              onClick={() => setView('activity')}
-            >
-              Активность
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => setView('participations')}
-            >
-              Участия
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => setView('reviewQueue')}
-            >
-              Проверка MOS Active
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => setView('membership')}
-            >
-              Учебная принадлежность
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => setView('achievements')}
-            >
-              Достижения
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => setView('adjustments')}
-            >
-              Корректировки баллов
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => setView('directions')}
-            >
-              Направления
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => setView('scoring')}
-            >
-              Скоринг v2
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => setView('staff')}
-            >
-              Сотрудники
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() => setView('people')}
-            >
-              Общая база людей
-            </button>
             <Button onClick={() => void openEditor()}>Новое мероприятие</Button>
           </div>
         </header>
+        <nav className="admin-workspaces" aria-label="Разделы управления">
+          <section
+            className="admin-workspace-group"
+            aria-labelledby="admin-workspace-events"
+          >
+            <h2 id="admin-workspace-events">Участники и доступ</h2>
+            <div className="admin-workspace-links">
+              <button onClick={() => setView('people')}>База людей</button>
+              <button onClick={() => setView('staff')}>Сотрудники</button>
+              <button onClick={() => setView('directions')}>Направления</button>
+            </div>
+          </section>
+          <section
+            className="admin-workspace-group"
+            aria-labelledby="admin-workspace-mosactive"
+          >
+            <h2 id="admin-workspace-mosactive">МосАктив</h2>
+            <div className="admin-workspace-links">
+              <button onClick={() => setView('reviewQueue')}>
+                Проверить участие
+              </button>
+              <button onClick={() => setView('participations')}>Участия</button>
+              <button onClick={() => setView('activity')}>
+                Правила активности
+              </button>
+              <button onClick={() => setView('scoring')}>
+                Политики баллов
+              </button>
+            </div>
+          </section>
+          <section
+            className="admin-workspace-group"
+            aria-labelledby="admin-workspace-records"
+          >
+            <h2 id="admin-workspace-records">Карточки студентов</h2>
+            <div className="admin-workspace-links">
+              <button onClick={() => setView('membership')}>
+                Учебная принадлежность
+              </button>
+              <button onClick={() => setView('achievements')}>
+                Достижения
+              </button>
+              <button onClick={() => setView('adjustments')}>
+                Корректировки баллов
+              </button>
+            </div>
+          </section>
+        </nav>
         {notice && <AdminNotice notice={notice} />}
         {busy && events.length === 0 ? (
           <p className="admin-empty">Загружаем мероприятия…</p>

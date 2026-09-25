@@ -195,6 +195,10 @@ export const MosActiveCatalog = () => {
         <h1>МосАктив</h1>
         <p>Рейтинг студентов и баллы за мероприятия.</p>
       </header>
+      <nav className="mos-active-shortcuts" aria-label="На этой странице">
+        <a href="#mos-active-ranking-title">Рейтинг студентов</a>
+        <a href="#mos-active-query">Найти студента</a>
+      </nav>
       <MosActiveLeaderboard />
       <form className="mos-active-search" onSubmit={search}>
         <label htmlFor="mos-active-query">Найти студента</label>

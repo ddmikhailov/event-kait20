@@ -122,6 +122,7 @@ export const EventReviewWorkspace = ({
   const [searchFor, setSearchFor] = useState<string>();
   const [searchText, setSearchText] = useState('');
   const [candidates, setCandidates] = useState<RosterSearch['items']>([]);
+  const [hasSearched, setHasSearched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{
     kind: 'error' | 'success';
@@ -179,6 +180,7 @@ export const EventReviewWorkspace = ({
     setBusy(true);
     try {
       setCandidates((await adminApi.searchRoster(searchText.trim())).items);
+      setHasSearched(true);
     } catch (error) {
       setNotice({ kind: 'error', text: reviewError(error) });
     } finally {
@@ -273,195 +275,207 @@ export const EventReviewWorkspace = ({
           <p>Список утверждён. Начисления отражены в MosActive.</p>
         )}
         {review?.state === 'PENDING' && (
-          <div className="participant-table-wrap">
-            <table className="participant-table activity-table">
-              <thead>
-                <tr>
-                  <th>Зарегистрирован</th>
-                  <th>Scanner</th>
-                  <th>Итог</th>
-                  <th>Роль и результат</th>
-                  <th>Студент в базе</th>
-                  <th>Решение</th>
-                </tr>
-              </thead>
-              <tbody>
-                {review.items.map((item) => {
-                  const selected = decision(item);
-                  return (
-                    <tr key={item.registrationId}>
-                      <td>
-                        <strong>
-                          {[item.lastName, item.firstName, item.middleName]
-                            .filter(Boolean)
-                            .join(' ')}
-                        </strong>
-                        <span>{item.studyGroup ?? 'Группа не указана'}</span>
-                      </td>
-                      <td>
-                        {item.scannerFirstAttendedAt ? 'Пришёл' : 'Нет отметки'}
-                        {item.attendanceChangedSinceReview && (
-                          <strong> Новая отметка</strong>
+          <div className="review-list" aria-label="Участники для проверки">
+            {review.items.map((item) => {
+              const selected = decision(item);
+              return (
+                <article className="review-card" key={item.registrationId}>
+                  <header className="review-card-header">
+                    <h2>
+                      {[item.lastName, item.firstName, item.middleName]
+                        .filter(Boolean)
+                        .join(' ')}
+                    </h2>
+                    <span>{item.studyGroup ?? 'Группа не указана'}</span>
+                  </header>
+                  <div className="review-card-status">
+                    <span>Отметка Scanner</span>
+                    <strong>
+                      {item.scannerFirstAttendedAt ? 'Пришёл' : 'Нет отметки'}
+                    </strong>
+                    {item.attendanceChangedSinceReview && (
+                      <strong className="review-updated">
+                        Новая отметка — проверьте
+                      </strong>
+                    )}
+                  </div>
+                  <div className="review-card-fields">
+                    <label>
+                      Итоговое посещение
+                      <select
+                        value={selected.attendanceDecision}
+                        onChange={(event) =>
+                          change(item, {
+                            attendanceDecision: event.target.value as
+                              'PRESENT' | 'ABSENT',
+                          })
+                        }
+                      >
+                        <option value="PRESENT">Пришёл</option>
+                        <option value="ABSENT">Не пришёл</option>
+                      </select>
+                    </label>
+                    <label>
+                      Роль
+                      <select
+                        value={selected.roleId}
+                        onChange={(event) =>
+                          change(item, { roleId: event.target.value })
+                        }
+                      >
+                        {roles.map((role) => (
+                          <option key={role.id} value={role.id}>
+                            {role.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Результат
+                      <select
+                        value={selected.resultId ?? ''}
+                        onChange={(event) =>
+                          change(item, {
+                            resultId: event.target.value || null,
+                          })
+                        }
+                      >
+                        <option value="">Без результата</option>
+                        {results.map((result) => (
+                          <option key={result.id} value={result.id}>
+                            {result.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="review-card-match">
+                    <h3>Студент в базе</h3>
+                    {item.personType === 'KAIT_STUDENT' ? (
+                      <>
+                        <span>
+                          {item.matchState === 'MATCHED'
+                            ? 'Сопоставлен'
+                            : item.matchState === 'REJECTED'
+                              ? 'Отклонён'
+                              : 'Требует проверки'}
+                        </span>
+                        {selected.rosterPersonId && (
+                          <span> Запись выбрана</span>
                         )}
-                      </td>
-                      <td>
-                        <select
-                          aria-label={`Итоговое посещение ${item.lastName} ${item.firstName}`}
-                          value={selected.attendanceDecision}
-                          onChange={(event) =>
-                            change(item, {
-                              attendanceDecision: event.target.value as
-                                'PRESENT' | 'ABSENT',
-                            })
-                          }
-                        >
-                          <option value="PRESENT">Пришёл</option>
-                          <option value="ABSENT">Не пришёл</option>
-                        </select>
-                      </td>
-                      <td>
-                        <select
-                          aria-label={`Роль ${item.lastName} ${item.firstName}`}
-                          value={selected.roleId}
-                          onChange={(event) =>
-                            change(item, { roleId: event.target.value })
-                          }
-                        >
-                          {roles.map((role) => (
-                            <option key={role.id} value={role.id}>
-                              {role.name}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          aria-label={`Результат ${item.lastName} ${item.firstName}`}
-                          value={selected.resultId ?? ''}
-                          onChange={(event) =>
-                            change(item, {
-                              resultId: event.target.value || null,
-                            })
-                          }
-                        >
-                          <option value="">Без результата</option>
-                          {results.map((result) => (
-                            <option key={result.id} value={result.id}>
-                              {result.name}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td>
-                        {item.personType === 'KAIT_STUDENT' ? (
-                          <>
-                            <span>
-                              {item.matchState === 'MATCHED'
-                                ? 'Сопоставлен'
-                                : item.matchState === 'REJECTED'
-                                  ? 'Отклонён'
-                                  : 'Требует проверки'}
-                            </span>
-                            {selected.rosterPersonId && (
-                              <span> Запись выбрана</span>
-                            )}
-                            <button
-                              className="text-button"
-                              onClick={() => {
-                                setSearchFor(item.registrationId);
-                                setSearchText(item.lastName);
-                                setCandidates([]);
-                              }}
-                            >
-                              Найти студента
-                            </button>
-                            <label className="checkbox-row">
-                              <input
-                                type="checkbox"
-                                checked={selected.rejectMatch}
-                                onChange={(event) =>
-                                  change(item, {
-                                    rejectMatch: event.target.checked,
-                                    rosterPersonId: event.target.checked
-                                      ? null
-                                      : selected.rosterPersonId,
-                                  })
-                                }
-                              />
-                              Отклонить запись
-                            </label>
-                          </>
-                        ) : (
-                          'Баллы студенту КАИТ не начисляются'
-                        )}
-                      </td>
-                      <td>
-                        <input
-                          aria-label={`Причина решения ${item.lastName} ${item.firstName}`}
-                          placeholder="Причина изменения"
-                          maxLength={500}
-                          value={selected.reason}
-                          onChange={(event) =>
-                            change(item, { reason: event.target.value })
-                          }
-                        />
                         <button
-                          className="secondary-button"
-                          disabled={busy || selected.reason.trim().length < 3}
-                          onClick={() => void save(item)}
+                          className="text-button"
+                          onClick={() => {
+                            setSearchFor(item.registrationId);
+                            setSearchText(item.lastName);
+                            setCandidates([]);
+                            setHasSearched(false);
+                          }}
                         >
-                          Сохранить
+                          Найти студента
                         </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {searchFor && review?.state === 'PENDING' && (
-          <div className="admin-panel">
-            <h2>Связать с записью студента</h2>
-            <label>
-              Фамилия или группа
-              <input
-                value={searchText}
-                onChange={(event) => setSearchText(event.target.value)}
-              />
-            </label>
-            <button
-              className="secondary-button"
-              disabled={busy || searchText.trim().length < 2}
-              onClick={() => void search()}
-            >
-              Найти
-            </button>
-            {candidates.length === 0 && <p>Подходящих записей пока нет.</p>}
-            {candidates.map((candidate) => (
-              <button
-                key={candidate.id}
-                className="text-button"
-                onClick={() => {
-                  const item = review.items.find(
-                    (entry) => entry.registrationId === searchFor,
-                  );
-                  if (item)
-                    change(item, {
-                      rosterPersonId: candidate.id,
-                      rejectMatch: false,
-                    });
-                  setSearchFor(undefined);
-                }}
-              >
-                {[
-                  candidate.lastName,
-                  candidate.firstName,
-                  candidate.middleName,
-                  candidate.studyGroup,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </button>
-            ))}
+                        <label className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={selected.rejectMatch}
+                            onChange={(event) =>
+                              change(item, {
+                                rejectMatch: event.target.checked,
+                                rosterPersonId: event.target.checked
+                                  ? null
+                                  : selected.rosterPersonId,
+                              })
+                            }
+                          />
+                          Отклонить запись
+                        </label>
+                      </>
+                    ) : (
+                      'Баллы студенту КАИТ не начисляются'
+                    )}
+                  </div>
+                  <div className="review-card-save">
+                    <label>
+                      Причина изменения
+                      <input
+                        placeholder="Причина изменения"
+                        maxLength={500}
+                        value={selected.reason}
+                        onChange={(event) =>
+                          change(item, { reason: event.target.value })
+                        }
+                      />
+                    </label>
+                    <button
+                      className="secondary-button"
+                      disabled={busy || selected.reason.trim().length < 3}
+                      onClick={() => void save(item)}
+                    >
+                      Сохранить
+                    </button>
+                  </div>
+                  {searchFor === item.registrationId && (
+                    <div className="review-card-search">
+                      <div className="review-card-search-heading">
+                        <h3>Связать с записью студента</h3>
+                        <button
+                          className="text-button"
+                          onClick={() => setSearchFor(undefined)}
+                        >
+                          Закрыть
+                        </button>
+                      </div>
+                      <label>
+                        Фамилия или группа
+                        <input
+                          value={searchText}
+                          onChange={(event) => {
+                            setSearchText(event.target.value);
+                            setCandidates([]);
+                            setHasSearched(false);
+                          }}
+                        />
+                        <span className="review-field-hint">
+                          Не менее трёх символов для сохранения решения.
+                        </span>
+                      </label>
+                      <button
+                        className="secondary-button"
+                        disabled={busy || searchText.trim().length < 2}
+                        onClick={() => void search()}
+                      >
+                        Найти
+                      </button>
+                      {hasSearched && candidates.length === 0 && (
+                        <p>Подходящих записей пока нет.</p>
+                      )}
+                      {candidates.map((candidate) => (
+                        <button
+                          key={candidate.id}
+                          className="review-candidate"
+                          onClick={() => {
+                            change(item, {
+                              rosterPersonId: candidate.id,
+                              rejectMatch: false,
+                            });
+                            setSearchFor(undefined);
+                          }}
+                        >
+                          {[
+                            candidate.lastName,
+                            candidate.firstName,
+                            candidate.middleName,
+                            candidate.studyGroup,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
