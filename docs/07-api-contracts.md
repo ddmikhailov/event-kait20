@@ -464,7 +464,11 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
 - `GET /admin/activity/roster/search?q=` — поиск кандидата для связи.
 - `POST /admin/people/:personId/roster` — ручное включение в контингент.
 - `POST /admin/activity/roster/preview|import` — SUPER_ADMIN, XLSX до 5 МБ,
-  один лист, до 5000 записей; импорт принимает `fileHash` из preview.
+  один лист, до 5000 записей; импорт принимает `fileHash` из preview. Принимаются
+  четыре колонки «Фамилия, Имя, Отчество, Группа» либо шаблон «Реестр
+  контингента»: объединённый заголовок A1:G1 и семь колонок во второй строке.
+  В семиколоночном варианте ФИО состоит из двух или трёх слов; ФИО и группа
+  обязательны, остальные значения сохраняются только внутри системы.
 
 - `GET/POST/PATCH /admin/activity/seasons|roles|results|categories|levels`
 - `GET/POST/PATCH /admin/activity/scoring-rules`

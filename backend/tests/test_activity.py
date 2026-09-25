@@ -254,6 +254,82 @@ def test_roster_import_creates_private_zero_profiles_and_rejects_duplicates(
     )
 
 
+def test_college_register_import_keeps_private_metadata(client: TestClient) -> None:
+    headers = login(client)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "Реестр контингента"
+    sheet.merge_cells("A1:G1")
+    sheet.append(
+        [
+            "ФИО",
+            "Статус обучения",
+            "Учебная группа",
+            "Адрес площадки",
+            "Курс обучения",
+            "Профессия/специальность",
+            "Код профессии/специальности",
+        ]
+    )
+    sheet.append(
+        [
+            "Примерова Анна Ивановна",
+            "Обучается",
+            "ТЕСТ-2",
+            "Учебная площадка",
+            2,
+            "Тестовая программа",
+            "00.00.00",
+        ]
+    )
+    source = io.BytesIO()
+    workbook.save(source)
+    workbook.close()
+    file = {
+        "file": (
+            "roster.xlsx",
+            source.getvalue(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    }
+    preview = client.post("/admin/activity/roster/preview", headers=headers, files=file)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["students"] == 1
+    imported = client.post(
+        "/admin/activity/roster/import",
+        headers=headers,
+        files=file,
+        data={"fileHash": preview.json()["fileHash"]},
+    )
+    assert imported.status_code == 201, imported.text
+    database: Database = client.app.state.database
+    with database.connect() as connection:
+        student = connection.execute(
+            text("""SELECT p.last_name,p.first_name,p.middle_name,
+            p.study_group,m.education_status,m.campus_address,m.course_label,
+            m.program_name,m.program_code,sp.visibility
+            FROM student_roster_members m JOIN persons p ON p.id=m.person_id
+            JOIN student_profiles sp ON sp.person_id=p.id
+            WHERE p.last_name='Примерова'""")
+        ).one()
+    assert student == (
+        "Примерова",
+        "Анна",
+        "Ивановна",
+        "ТЕСТ-2",
+        "Обучается",
+        "Учебная площадка",
+        "2",
+        "Тестовая программа",
+        "00.00.00",
+        "PRIVATE",
+    )
+    assert not any(
+        item["displayName"].startswith("Примерова")
+        for item in client.get("/public/students").json()["items"]
+    )
+
+
 def test_due_event_enters_review_24_hours_after_end(client: TestClient) -> None:
     headers = login(client)
     database: Database = client.app.state.database

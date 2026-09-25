@@ -412,6 +412,9 @@ reconciliation remains controlled and never infers course from group text.
 Migration 017 добавляет `events.boost_multiplier` (1, 1.5, 2, 3),
 `activity_review_required` для новых Events и `activity_review_state`.
 `student_roster_members` связывает проверенный Person с контингентом;
+миграция 018 добавляет к этой связи закрытые поля исходного реестра:
+`education_status`, `campus_address`, `course_label`, `program_name`,
+`program_code`. Они не входят в публичные ответы.
 `registrations.roster_match_state/roster_person_id` фиксируют предложение
 сопоставления, а `event_participation_reviews` — утверждаемую ведомость со
 снимком отметки Scanner, итоговым посещением, ролью, результатом и связью.
