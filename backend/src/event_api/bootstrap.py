@@ -105,10 +105,12 @@ def create_activation_token(email: str, database: Database, config: Settings) ->
 
 
 def _write_private_link(path: Path, link: str) -> None:
-    """Atomically replace a private link file outside the public document root."""
+    """Atomically replace a link file in Amvera's project-private Data volume."""
     descriptor, temporary_name = tempfile.mkstemp(prefix=".bootstrap-", dir=path.parent)
     try:
-        os.chmod(temporary_name, 0o600)
+        # Amvera's file-storage service reads Data as a different Unix user.
+        # Project access is enforced by Amvera; /data is not served by Apache.
+        os.chmod(temporary_name, 0o644)
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
             output.write(f"{link}\n")
         os.replace(temporary_name, path)

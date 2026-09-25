@@ -71,8 +71,9 @@ email-dependent registration, recovery and invitation flows are unverified.
    changes require another controlled migration run.
 5. Set `BOOTSTRAP_ADMIN_EMAIL` to the intended first administrator's email.
    At application startup the `event-bootstrap-admin` CLI writes the one-time
-   activation URL to `/data/first-admin-activation.txt` (mode 0600), outside
-   the public document root and without logging it. The intended administrator
+   activation URL to `/data/first-admin-activation.txt` (mode 0644 for Amvera's
+   file-storage service), outside the public document root and without logging
+   it. Access is controlled by the Amvera project account. The administrator
    downloads this file from the application's **Data** tab in Amvera, opens
    the link directly and sets the password. Never paste the link into chat or
    logs. A still-valid pending invitation for the same email can be recovered;
