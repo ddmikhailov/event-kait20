@@ -163,6 +163,11 @@ def create_event(
         },
     )
     assert response.status_code == 201, response.text
+    with client.app.state.database.transaction() as connection:
+        connection.execute(
+            text("UPDATE events SET activity_review_required=false WHERE id=:id"),
+            {"id": response.json()["id"]},
+        )
     return response.json()["id"]
 
 
@@ -341,7 +346,9 @@ def test_mysql_migration_preserves_legacy_decimal_and_seeds_policy(
         assert version == "DRAFT"
         assert (
             connection.execute(
-                text("SELECT COUNT(*) FROM seasons WHERE scoring_policy_id IS NOT NULL")
+                text(
+                    "SELECT COUNT(*) FROM seasons WHERE scoring_policy_id='60000000-0000-4000-8000-000000000001'"
+                )
             ).scalar_one()
             == 0
         )
@@ -1507,6 +1514,10 @@ def test_preview_production_parity_and_published_immutability(
     assert event.status_code == 201, event.text
     person_id, registration_id = str(uuid4()), str(uuid4())
     with database.transaction() as connection:
+        connection.execute(
+            text("UPDATE events SET activity_review_required=false WHERE id=:id"),
+            {"id": event.json()["id"]},
+        )
         connection.execute(
             text("""INSERT INTO persons
           (id,tenant_id,last_name,first_name,email,email_normalized,person_type,dedup_review_required,created_at,updated_at)

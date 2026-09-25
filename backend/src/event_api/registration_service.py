@@ -193,6 +193,7 @@ def find_or_create_person(
     tenant_id: str,
     *,
     update_existing: bool = True,
+    exclude_roster: bool = False,
 ) -> str:
     candidates = rows(
         connection,
@@ -200,6 +201,8 @@ def find_or_create_person(
         AND lower(last_name)=lower(:last) AND lower(first_name)=lower(:first)
         AND ((:middle IS NULL AND middle_name IS NULL) OR lower(middle_name)=lower(:middle))
         AND (email_normalized=:email OR phone_normalized=:phone OR birth_date=:birth)
+        AND (:exclude_roster=false OR NOT EXISTS (
+          SELECT 1 FROM student_roster_members member WHERE member.person_id=persons.id))
         FOR UPDATE""",
         {
             "last": data["last_name"],
@@ -209,6 +212,7 @@ def find_or_create_person(
             "email": data["email"],
             "phone": data["phone"],
             "birth": data["birth_date"],
+            "exclude_roster": exclude_roster,
         },
     )
     ids = list(dict.fromkeys(item["id"] for item in candidates))
@@ -222,6 +226,34 @@ def find_or_create_person(
     )
 
 
+def roster_candidates(
+    connection: Connection, event_id: str, data: dict[str, Any]
+) -> list[str]:
+    """FIO plus group yields a proposal only when it identifies one roster row."""
+    if data["person_type"] != "KAIT_STUDENT" or not data["study_group"]:
+        return []
+    matches = rows(
+        connection,
+        """SELECT p.id FROM student_roster_members member
+        JOIN persons p ON p.id=member.person_id
+        JOIN events e ON e.id=:event JOIN organizations o ON o.id=e.organization_id
+        WHERE p.tenant_id=o.tenant_id AND p.person_type='KAIT_STUDENT'
+          AND p.merged_into_id IS NULL
+          AND p.last_name=:last AND p.first_name=:first
+          AND ((:middle IS NULL AND p.middle_name IS NULL) OR p.middle_name=:middle)
+          AND p.study_group=:study_group
+        ORDER BY p.id LIMIT 2""",
+        {
+            "event": event_id,
+            "last": data["last_name"],
+            "first": data["first_name"],
+            "middle": data["middle_name"],
+            "study_group": data["study_group"],
+        },
+    )
+    return [str(item["id"]) for item in matches]
+
+
 def create_registration(
     connection: Connection,
     event_id: str,
@@ -233,13 +265,23 @@ def create_registration(
     stream_id: str | None = None,
 ) -> tuple[str, str]:
     registration_id, public_id = str(uuid4()), str(uuid4())
+    candidates = roster_candidates(connection, event_id, data)
+    match_state = (
+        "NOT_APPLICABLE"
+        if data["person_type"] != "KAIT_STUDENT"
+        else "MATCHED"
+        if len(candidates) == 1
+        else "AMBIGUOUS"
+        if len(candidates) > 1
+        else "UNMATCHED"
+    )
     execute(
         connection,
         """INSERT INTO registrations
-        (id,public_id,event_id,stream_id,person_id,source,status,last_name,first_name,middle_name,
+        (id,public_id,event_id,stream_id,person_id,roster_match_state,roster_person_id,source,status,last_name,first_name,middle_name,
          birth_date,email,phone,study_group,person_type,organization,consent_accepted,
          consent_version,consent_url,privacy_policy_url,consent_accepted_at,registered_at,created_at,updated_at)
-        VALUES (:id,:public,:event,:stream,:person,:source,'ACTIVE',:last_name,:first_name,:middle_name,
+        VALUES (:id,:public,:event,:stream,:person,:match_state,:roster_person,:source,'ACTIVE',:last_name,:first_name,:middle_name,
                 :birth_date,:email,:phone,:study_group,:person_type,:organization,:consent,
                 :consent_version,:consent_url,:privacy_policy_url,:consent_at,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
         {
@@ -249,6 +291,8 @@ def create_registration(
             "event": event_id,
             "stream": stream_id,
             "person": person_id,
+            "match_state": match_state,
+            "roster_person": candidates[0] if len(candidates) == 1 else None,
             "source": source,
             "consent": consent,
             "consent_version": config.consent_version if consent else None,
@@ -436,8 +480,17 @@ def register(
     data = participant(values)
     fields = form_fields(connection, event["id"])
     validate_answers(fields, values, onsite=source != "PUBLIC_FORM")
-    person_id = find_or_create_person(
-        connection, data, tenant_id, update_existing=source != "PUBLIC_FORM"
+    candidates = roster_candidates(connection, event["id"], data)
+    person_id = (
+        candidates[0]
+        if len(candidates) == 1
+        else find_or_create_person(
+            connection,
+            data,
+            tenant_id,
+            update_existing=source != "PUBLIC_FORM",
+            exclude_roster=data["person_type"] == "KAIT_STUDENT",
+        )
     )
     existing = row(
         connection,
@@ -466,7 +519,7 @@ def register(
             "ALREADY_REGISTERED",
         )
     else:
-        if source == "PUBLIC_FORM":
+        if source == "PUBLIC_FORM" and not candidates:
             update_person(connection, person_id, data)
         count = row(
             connection,

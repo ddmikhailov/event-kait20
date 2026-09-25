@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from ..activity_schemas import (
     AchievementDecision,
     AchievementValues,
+    EventReviewDecision,
     ManualAdjustmentRequest,
     ParticipationAssignRequest,
     ParticipationCancelRequest,
@@ -47,6 +48,7 @@ from ..dependencies import (
     database,
 )
 from ..errors import ApiError
+from ..event_review import approve_review, review_items, update_review_item
 from ..scoring_v2 import decimal_string
 from ..service_utils import audit, db_json, json_value, naive_utc, serial
 from ..tenant_scope import (
@@ -903,6 +905,179 @@ def search_participations(
     }
 
 
+@admin.get("/reviews/pending")
+def pending_event_reviews(
+    staff: Annotated[Staff, Depends(administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.connect() as connection:
+        items = rows(
+            connection,
+            """SELECT e.id,e.title FROM events e JOIN organizations o ON o.id=e.organization_id
+            WHERE o.tenant_id=:tenant AND e.organization_id=:organization
+              AND e.activity_review_state='PENDING' AND e.status='COMPLETED'
+            ORDER BY e.end_at DESC LIMIT 100""",
+            {"tenant": staff.tenant_id, "organization": staff.organization_id},
+        )
+    return {"items": [{"id": item["id"], "title": item["title"]} for item in items]}
+
+
+@admin.get("/roster/search")
+def search_roster(
+    staff: Annotated[Staff, Depends(administrator)],
+    db: Annotated[Database, Depends(database)],
+    q: str = Query(..., min_length=2, max_length=100),
+) -> dict[str, Any]:
+    with db.connect() as connection:
+        items = rows(
+            connection,
+            """SELECT p.id,p.last_name,p.first_name,p.middle_name,p.study_group
+            FROM student_roster_members member JOIN persons p ON p.id=member.person_id
+            WHERE p.tenant_id=:tenant AND p.person_type='KAIT_STUDENT'
+              AND p.merged_into_id IS NULL
+              AND (p.last_name LIKE :query OR p.first_name LIKE :query
+                   OR p.study_group LIKE :query)
+            ORDER BY p.last_name,p.first_name,p.id LIMIT 30""",
+            {"tenant": staff.tenant_id, "query": search_pattern(q)},
+        )
+    return {
+        "items": [
+            {
+                "id": item["id"],
+                "lastName": item["last_name"],
+                "firstName": item["first_name"],
+                "middleName": item["middle_name"],
+                "studyGroup": item["study_group"],
+            }
+            for item in items
+        ]
+    }
+
+
+@person_admin.post("/{person_id}/roster", status_code=201)
+def mark_roster_student(
+    person_id: UUID,
+    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, str]:
+    with db.transaction() as connection:
+        person = require_person_in_tenant(
+            connection, str(person_id), staff.tenant_id, lock=True
+        )
+        if person["person_type"] != "KAIT_STUDENT" or not person["study_group"]:
+            raise ApiError(
+                409, "ROSTER_STUDENT_INVALID", "Roster student needs a study group"
+            )
+        execute(
+            connection,
+            """INSERT INTO student_roster_members(person_id,created_at,created_by)
+            VALUES (:person,UTC_TIMESTAMP(3),:actor)
+            ON DUPLICATE KEY UPDATE person_id=person_id""",
+            {"person": str(person_id), "actor": staff.id},
+        )
+        load_profile(connection, str(person_id), staff.tenant_id)
+        audit(connection, staff.id, "ROSTER_STUDENT_VERIFIED", "Person", str(person_id))
+    return {"personId": str(person_id)}
+
+
+@event_admin.get("/{event_id}/review")
+def get_event_review(
+    event_id: UUID,
+    staff: Annotated[Staff, Depends(administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.connect() as connection:
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id
+        )
+        return {
+            "eventId": str(event_id),
+            "title": event["title"],
+            "state": event["activity_review_state"],
+            "items": review_items(connection, str(event_id)),
+        }
+
+
+@event_admin.post("/{event_id}/review/refresh")
+def refresh_event_review(
+    event_id: UUID,
+    staff: Annotated[Staff, Depends(csrf_administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.transaction() as connection:
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
+        if event["activity_review_state"] != "PENDING":
+            raise ApiError(409, "REVIEW_NOT_PENDING", "Event review is not pending")
+        execute(
+            connection,
+            """UPDATE event_participation_reviews review
+            JOIN registrations r ON r.id=review.registration_id
+            SET review.attendance_decision=CASE WHEN r.first_attended_at IS NULL THEN 'ABSENT' ELSE 'PRESENT' END,
+                review.scanner_first_attended_at=r.first_attended_at,
+                review.updated_at=UTC_TIMESTAMP(3)
+            WHERE review.event_id=:event AND review.reviewed_by IS NULL
+              AND NOT (review.scanner_first_attended_at <=> r.first_attended_at)""",
+            {"event": str(event_id)},
+        )
+        audit(connection, staff.id, "EVENT_REVIEW_REFRESHED", "Event", str(event_id))
+        return {
+            "eventId": str(event_id),
+            "title": event["title"],
+            "state": "PENDING",
+            "items": review_items(connection, str(event_id)),
+        }
+
+
+@event_admin.patch("/{event_id}/review/{registration_id}")
+def patch_event_review(
+    event_id: UUID,
+    registration_id: UUID,
+    values: EventReviewDecision,
+    staff: Annotated[Staff, Depends(csrf_administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.transaction() as connection:
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
+        if event["activity_review_state"] != "PENDING":
+            raise ApiError(409, "REVIEW_NOT_PENDING", "Event review is not pending")
+        update_review_item(
+            connection,
+            str(event_id),
+            str(registration_id),
+            staff.id,
+            values.attendance_decision,
+            str(values.role_id),
+            str(values.result_id) if values.result_id else None,
+            str(values.roster_person_id) if values.roster_person_id else None,
+            values.reject_match,
+            values.reason,
+            staff.tenant_id,
+        )
+        return {
+            "eventId": str(event_id),
+            "title": event["title"],
+            "state": "PENDING",
+            "items": review_items(connection, str(event_id)),
+        }
+
+
+@event_admin.post("/{event_id}/review/approve")
+def approve_event_review(
+    event_id: UUID,
+    staff: Annotated[Staff, Depends(csrf_administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, int]:
+    with db.transaction() as connection:
+        require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
+        return approve_review(connection, str(event_id), staff.id)
+
+
 @event_admin.get("/{event_id}/participations")
 def list_event_participations(
     event_id: UUID,
@@ -948,9 +1123,14 @@ def assign_participations(
 ) -> dict[str, Any]:
     assigned: list[str] = []
     with db.transaction() as connection:
-        require_event_for_staff(
+        event = require_event_for_staff(
             connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
         )
+        if (
+            event["activity_review_required"]
+            and event["activity_review_state"] != "NOT_STARTED"
+        ):
+            raise ApiError(409, "USE_EVENT_REVIEW", "Use the Event review for changes")
         role = reference(connection, "participation_roles", str(values.role_id))
         if values.result_id:
             reference(connection, "participation_results", str(values.result_id))
@@ -1020,9 +1200,11 @@ def confirm_participations(
 ) -> dict[str, Any]:
     confirmed: list[str] = []
     with db.transaction() as connection:
-        require_event_for_staff(
+        event = require_event_for_staff(
             connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
         )
+        if event["activity_review_required"]:
+            raise ApiError(409, "USE_EVENT_REVIEW", "Use the Event review for scoring")
         for registration_id in values.registration_ids:
             confirmed.append(
                 confirm_registration(
@@ -1049,9 +1231,11 @@ def patch_participation(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, Any]:
     with db.transaction() as connection:
-        require_event_for_staff(
+        event = require_event_for_staff(
             connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
         )
+        if event["activity_review_required"]:
+            raise ApiError(409, "USE_EVENT_REVIEW", "Use the Event review for changes")
         target = row(
             connection,
             "SELECT event_id FROM participations WHERE id=:id",
@@ -1079,9 +1263,11 @@ def cancel_participations(
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, bool]:
     with db.transaction() as connection:
-        require_event_for_staff(
+        event = require_event_for_staff(
             connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
         )
+        if event["activity_review_required"]:
+            raise ApiError(409, "USE_EVENT_REVIEW", "Use the Event review for changes")
         for participation_id in values.participation_ids:
             target = row(
                 connection,
@@ -2382,24 +2568,24 @@ def leaderboard(
             connection,
             f"""SELECT sp.public_slug,p.last_name,p.first_name,p.middle_name,
             {PUBLIC_STUDY_GROUP} AS study_group,pc.allowed_fields,
-            SUM(st.points) AS points,
+            COALESCE(SUM(st.points),0) AS points,
             (SELECT COUNT(*) FROM participations pa JOIN events pe ON pe.id=pa.event_id
              WHERE pa.person_id=p.id AND pa.status='CONFIRMED' AND pe.season_id=:season) AS participations,
             (SELECT COUNT(*) FROM achievements a
              LEFT JOIN participations ap ON ap.id=a.participation_id
              LEFT JOIN events ae ON ae.id=COALESCE(a.event_id,ap.event_id)
              WHERE a.person_id=p.id AND a.status='VERIFIED' AND ae.season_id=:season) AS achievements
-            FROM score_transactions st JOIN persons p ON p.id=st.person_id
-            JOIN student_profiles sp ON sp.person_id=p.id AND sp.visibility='PUBLIC'
+            FROM student_profiles sp JOIN persons p ON p.id=sp.person_id
+            LEFT JOIN score_transactions st ON st.person_id=p.id AND st.season_id=:season
             JOIN profile_publication_consents pc ON pc.person_id=p.id AND pc.withdrawn_at IS NULL
-            WHERE st.season_id=:season AND p.tenant_id=:tenant
+            WHERE sp.visibility='PUBLIC' AND p.tenant_id=:tenant
               AND p.person_type='KAIT_STUDENT' AND p.merged_into_id IS NULL
               AND JSON_CONTAINS(pc.allowed_fields, JSON_QUOTE('NAME'))
               AND JSON_CONTAINS(pc.allowed_fields, JSON_QUOTE('SCORES'))
               AND pc.accepted_at=(SELECT MAX(pc2.accepted_at) FROM profile_publication_consents pc2
                                   WHERE pc2.person_id=p.id AND pc2.withdrawn_at IS NULL)
             GROUP BY p.id,sp.public_slug,p.last_name,p.first_name,p.middle_name,study_group,pc.allowed_fields
-            HAVING points<>0 ORDER BY points DESC,p.last_name,p.first_name,p.id
+            ORDER BY points DESC,p.last_name,p.first_name,p.id
             LIMIT :limit OFFSET :offset""",
             {
                 "season": str(season_id),

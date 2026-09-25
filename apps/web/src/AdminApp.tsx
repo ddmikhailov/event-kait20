@@ -17,6 +17,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { AdminApiError, adminApi } from './admin-api.js';
 import { ActivitySettings } from './AdminActivity.js';
 import { ParticipationsAdmin } from './AdminActivityAdmin.js';
+import { EventReviewQueue } from './AdminEventReview.js';
 import { AchievementAdmin } from './AdminAchievement.js';
 import { DirectionAdmin } from './AdminDirection.js';
 import { ManualAdjustmentAdmin } from './AdminManualAdjustment.js';
@@ -39,8 +40,8 @@ type Notice = { kind: 'error' | 'success'; text: string };
 
 const completionMessage = (summary: EventResponse['completionSummary']) =>
   summary
-    ? `Проверено отмеченных студентов: ${summary.attendedStudents}. Подтверждено участий: ${summary.confirmed}. Начислены баллы: ${summary.awarded} (после исправления правил: ${summary.retried}). Без подходящего правила: ${summary.noRule}. Уже подтверждены: ${summary.alreadyConfirmed}. Отменённые участия пропущены: ${summary.cancelled}.`
-    : 'Мероприятие завершено.';
+    ? `Мероприятие передано на проверку: зарегистрировано ${summary.registered}, отмечено ${summary.present}, без отметки ${summary.absent}. Баллы будут начислены после утверждения списка.`
+    : 'Мероприятие передано на проверку.';
 
 export const AdminApp = () => {
   const [session, setSession] = useState<SessionResponse>();
@@ -133,6 +134,7 @@ const AdminWorkspace = ({
     | 'access'
     | 'activity'
     | 'participations'
+    | 'reviewQueue'
     | 'membership'
     | 'achievements'
     | 'adjustments'
@@ -252,6 +254,16 @@ const AdminWorkspace = ({
       />
     );
   }
+  if (view === 'reviewQueue') {
+    return (
+      <EventReviewQueue
+        onBack={() => {
+          setView('events');
+          void loadEvents();
+        }}
+      />
+    );
+  }
   if (view === 'membership') {
     return (
       <MembershipAdmin
@@ -315,6 +327,12 @@ const AdminWorkspace = ({
               onClick={() => setView('participations')}
             >
               Участия
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => setView('reviewQueue')}
+            >
+              Проверка MOS Active
             </button>
             <button
               className="secondary-button"
@@ -488,7 +506,22 @@ const EventEditor = ({
       .then(([seasonList, categoryList, levelList, directionList]) => {
         setSeasons(seasonList.items);
         setCategories(categoryList.items.filter((item) => item.active));
-        setLevels(levelList.items.filter((item) => item.active));
+        setLevels(
+          levelList.items.filter(
+            (item) =>
+              item.active &&
+              ([
+                'DEPARTMENT',
+                'COLLEGE',
+                'CITY',
+                'REGIONAL',
+                'OKRUG',
+                'FEDERAL',
+                'INTERNATIONAL',
+              ].includes(item.code) ||
+                item.id === event?.levelId),
+          ),
+        );
         setDirections(directionList.items);
       })
       .catch((error: unknown) => setNotice(errorNotice(error)));
@@ -511,7 +544,7 @@ const EventEditor = ({
       }
       setSavedEvent(result);
       setNotice({
-        kind: result.completionSummary?.noRule ? 'error' : 'success',
+        kind: 'success',
         text: result.completionSummary
           ? completionMessage(result.completionSummary)
           : 'Изменения сохранены',
@@ -527,7 +560,7 @@ const EventEditor = ({
     if (
       !savedEvent ||
       !window.confirm(
-        'Завершить мероприятие и начислить баллы отмеченным студентам? Сначала синхронизируйте все офлайн-отметки Scanner.',
+        'Завершить мероприятие и передать список на проверку? Сначала синхронизируйте все офлайн-отметки Scanner.',
       )
     )
       return;
@@ -539,7 +572,7 @@ const EventEditor = ({
       });
       setSavedEvent(completed);
       setNotice({
-        kind: completed.completionSummary?.noRule ? 'error' : 'success',
+        kind: 'success',
         text: completionMessage(completed.completionSummary),
       });
     } catch (error) {
@@ -685,8 +718,8 @@ const EventEditor = ({
                 onClick={() => void completeEvent()}
               >
                 {savedEvent.status === 'COMPLETED'
-                  ? 'Обработать новые отметки и баллы'
-                  : 'Завершить мероприятие и начислить баллы'}
+                  ? 'Обновить список для проверки'
+                  : 'Завершить и передать на проверку'}
               </button>
             )}
           {savedEvent && !archived && (
@@ -915,6 +948,7 @@ export const EventForm = ({
             name="levelId"
             defaultValue={values.levelId}
             disabled={readOnly}
+            required={!readOnly}
           >
             <option value="">Не выбран</option>
             {levels.map((level) => (
@@ -922,6 +956,19 @@ export const EventForm = ({
                 {level.name}
               </option>
             ))}
+          </select>
+        </label>
+        <label>
+          <span>Повышающий коэффициент</span>
+          <select
+            name="boostMultiplier"
+            defaultValue={values.boostMultiplier}
+            disabled={readOnly}
+          >
+            <option value="1.0">Без повышения (×1)</option>
+            <option value="1.5">×1,5</option>
+            <option value="2.0">×2</option>
+            <option value="3.0">×3</option>
           </select>
         </label>
         <p className="muted">Все даты и время — московские (UTC+3).</p>

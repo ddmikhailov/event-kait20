@@ -31,6 +31,7 @@ from ..registration_service import (
     persist_answers,
     person_lock_keys,
     release_person_locks,
+    roster_candidates,
     validate_answers,
     validate_participant_type,
 )
@@ -875,7 +876,17 @@ def commit(
                         dedup_review_required=True,
                     )
                 else:
-                    person_id = find_or_create_person(connection, data, staff.tenant_id)
+                    candidates = roster_candidates(connection, str(event_id), data)
+                    person_id = (
+                        candidates[0]
+                        if len(candidates) == 1
+                        else find_or_create_person(
+                            connection,
+                            data,
+                            staff.tenant_id,
+                            exclude_roster=data["person_type"] == "KAIT_STUDENT",
+                        )
+                    )
                 existing = row(
                     connection,
                     "SELECT id FROM registrations WHERE event_id=:event AND person_id=:person AND status='ACTIVE'",

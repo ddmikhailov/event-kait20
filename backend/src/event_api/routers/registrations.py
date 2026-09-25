@@ -37,11 +37,11 @@ def public_events(
     with db.connect() as connection:
         items = rows(
             connection,
-            """SELECT id,title,slug,description,direction,cover_object_key,start_at,end_at,
-                      timezone,location,registration_deadline,status
-               FROM events
-               WHERE is_listed=true AND status IN ('REGISTRATION_OPEN','REGISTRATION_CLOSED','ACTIVE') AND end_at>:now
-               ORDER BY start_at ASC LIMIT 200""",
+            """SELECT e.id,e.title,e.slug,e.description,e.direction,e.cover_object_key,e.start_at,e.end_at,
+                      e.timezone,e.location,e.registration_deadline,e.status,e.boost_multiplier,l.name AS level_name
+               FROM events e LEFT JOIN event_levels l ON l.id=e.level_id
+               WHERE e.is_listed=true AND e.status IN ('REGISTRATION_OPEN','REGISTRATION_CLOSED','ACTIVE') AND e.end_at>:now
+               ORDER BY e.start_at ASC LIMIT 200""",
             {"now": now},
         )
     return {
@@ -52,6 +52,8 @@ def public_events(
                 "title": item["title"],
                 "slug": item["slug"],
                 "description": item["description"],
+                "levelName": item["level_name"],
+                "boostMultiplier": str(item["boost_multiplier"]),
                 "direction": item["direction"],
                 "coverObjectKey": item["cover_object_key"],
                 "startAt": utc_iso(item["start_at"]),
@@ -75,8 +77,10 @@ def public_event(
     with db.connect() as connection:
         event = row(
             connection,
-            """SELECT id,title,slug,description,direction,cover_object_key,start_at,end_at,
-            timezone,form_config,allowed_person_types,is_listed,streams_enabled,location,registration_deadline,capacity,status FROM events WHERE slug=:slug""",
+            """SELECT e.id,e.title,e.slug,e.description,e.direction,e.cover_object_key,e.start_at,e.end_at,
+            e.timezone,e.form_config,e.allowed_person_types,e.is_listed,e.streams_enabled,e.location,e.registration_deadline,e.capacity,e.status,
+            e.boost_multiplier,l.name AS level_name
+            FROM events e LEFT JOIN event_levels l ON l.id=e.level_id WHERE e.slug=:slug""",
             {"slug": slug},
         )
         if not event or event["status"] in {"DRAFT", "ARCHIVED"}:
@@ -112,6 +116,8 @@ def public_event(
         "title": event["title"],
         "slug": event["slug"],
         "description": event["description"],
+        "levelName": event["level_name"],
+        "boostMultiplier": str(event["boost_multiplier"]),
         "direction": event["direction"],
         "allowedPersonTypes": json_value(event["allowed_person_types"]),
         "systemFields": event_form_config(event)["public"],

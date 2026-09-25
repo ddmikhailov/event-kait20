@@ -713,7 +713,7 @@ def preview(
     with db.transaction() as connection:
         participation = row(
             connection,
-            """SELECT p.*,e.start_at AS event_start_at,e.level_id,e.season_id,
+            """SELECT p.*,e.start_at AS event_start_at,e.level_id,e.season_id,e.boost_multiplier,
           s.scoring_policy_id,
           s.scoring_policy_effective_from,
           pr.code AS role_code,pr.name AS role_name,el.code AS level_code,el.name AS level_name,

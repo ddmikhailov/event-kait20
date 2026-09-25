@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +17,7 @@ from .errors import (
     unexpected_error_handler,
     validation_error_handler,
 )
+from .event_review import enqueue_due_reviews
 from .routers import (
     activity,
     attendance,
@@ -24,6 +27,7 @@ from .routers import (
     participants,
     registrations,
     reporting,
+    roster,
     scoring_v2,
     staff,
     streams,
@@ -36,8 +40,28 @@ from .security import RateLimiter, verify_csrf
 async def lifespan(app: FastAPI):
     with app.state.database.connect() as connection:
         connection.exec_driver_sql("SELECT 1")
-    yield
-    app.state.database.dispose()
+
+    async def review_scheduler() -> None:
+        while True:
+            try:
+                await asyncio.to_thread(enqueue_due_reviews, app.state.database)
+            except Exception:
+                logging.getLogger(__name__).exception("Event review scheduler failed")
+            await asyncio.sleep(60)
+
+    scheduler = (
+        asyncio.create_task(review_scheduler())
+        if app.state.settings.production
+        else None
+    )
+    try:
+        yield
+    finally:
+        if scheduler:
+            scheduler.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduler
+        app.state.database.dispose()
 
 
 def create_app(settings_override: Settings | None = None) -> FastAPI:
@@ -183,6 +207,7 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
         scoring_v2.router,
         reporting.router,
         excel.router,
+        roster.router,
     ):
         app.include_router(router)
     return app

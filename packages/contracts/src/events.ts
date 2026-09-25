@@ -16,6 +16,7 @@ const eventValuesSchema = z.object({
   seasonId: uuidSchema.nullable().optional(),
   categoryId: uuidSchema.nullable().optional(),
   levelId: uuidSchema.nullable().optional(),
+  boostMultiplier: z.enum(['1.0', '1.5', '2.0', '3.0']).default('1.0'),
   formConfig: registrationFormConfigSchema.optional(),
   isListed: z.boolean().optional(),
   allowedPersonTypes: allowedPersonTypesSchema.optional(),
@@ -52,13 +53,9 @@ export type UpdateEventRequest = z.infer<typeof updateEventRequestSchema>;
 export const eventResponseSchema = z.object({
   completionSummary: z
     .object({
-      attendedStudents: z.number().int().nonnegative(),
-      confirmed: z.number().int().nonnegative(),
-      awarded: z.number().int().nonnegative(),
-      noRule: z.number().int().nonnegative(),
-      alreadyConfirmed: z.number().int().nonnegative(),
-      cancelled: z.number().int().nonnegative(),
-      retried: z.number().int().nonnegative(),
+      registered: z.number().int().nonnegative(),
+      present: z.number().int().nonnegative(),
+      absent: z.number().int().nonnegative(),
     })
     .strict()
     .optional(),
@@ -70,6 +67,11 @@ export const eventResponseSchema = z.object({
   seasonId: uuidSchema.nullable().optional(),
   categoryId: uuidSchema.nullable().optional(),
   levelId: uuidSchema.nullable().optional(),
+  boostMultiplier: z.enum(['1.0', '1.5', '2.0', '3.0']).optional(),
+  levelName: z.string().nullable().optional(),
+  activityReviewState: z
+    .enum(['NOT_STARTED', 'PENDING', 'APPROVED'])
+    .optional(),
   id: uuidSchema,
   title: z.string(),
   slug: z.string(),
@@ -105,6 +107,8 @@ export const publicEventSummarySchema = eventResponseSchema.pick({
   title: true,
   slug: true,
   description: true,
+  levelName: true,
+  boostMultiplier: true,
   direction: true,
   directionId: true,
   coverObjectKey: true,

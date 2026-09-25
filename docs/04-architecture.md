@@ -46,6 +46,13 @@ Python 3.12 + FastAPI backend.
 - imports;
 - statistics;
 - audit.
+- MosActive: контингент, ведомость проверки и вычисление баллов.
+
+В production FastAPI запускает задачу, которая раз в минуту выбирает Events,
+закончившиеся не менее 24 часов назад, и атомарно переводит их в очередь
+проверки. Повторный проход не начисляет баллы; начисление выполняет только
+административный запрос утверждения. Все данные Web, Scanner и MosActive
+хранятся в одной MySQL 8.1.0.
 
 ### `backend/src/event_api/email_worker.py`
 Обрабатывает durable email-delivery intents, retries и SMTP transport.

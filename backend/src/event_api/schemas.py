@@ -140,6 +140,7 @@ class EventValues(Contract):
     season_id: UUID | None = None
     category_id: UUID | None = None
     level_id: UUID | None = None
+    boost_multiplier: Literal["1.0", "1.5", "2.0", "3.0"] = "1.0"
     direction_id: UUID | None = None
     form_config: RegistrationFormConfig = Field(default_factory=default_form_config)
     is_listed: bool = True
@@ -185,6 +186,7 @@ class UpdateEventRequest(Contract):
     season_id: UUID | None = None
     category_id: UUID | None = None
     level_id: UUID | None = None
+    boost_multiplier: Literal["1.0", "1.5", "2.0", "3.0"] | None = None
     direction_id: UUID | None = None
     form_config: RegistrationFormConfig | None = None
     is_listed: bool | None = None

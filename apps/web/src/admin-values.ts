@@ -46,6 +46,7 @@ export const eventValues = (
     seasonId: optionalText(form, 'seasonId'),
     categoryId: optionalText(form, 'categoryId'),
     levelId: optionalText(form, 'levelId'),
+    boostMultiplier: text(form, 'boostMultiplier') || '1.0',
     isListed: form.has('visibilityConfigured') ? form.has('isListed') : true,
     allowedPersonTypes: form.has('allowedPersonTypesConfigured')
       ? form.getAll('allowedPersonTypes').map(String)
@@ -99,6 +100,7 @@ export const eventDefaults = (event?: EventResponse) => ({
   seasonId: event?.seasonId ?? '',
   categoryId: event?.categoryId ?? '',
   levelId: event?.levelId ?? '',
+  boostMultiplier: event?.boostMultiplier ?? '1.0',
   isListed: event?.isListed ?? true,
   allowedPersonTypes: event?.allowedPersonTypes ?? null,
   title: event?.title ?? '',

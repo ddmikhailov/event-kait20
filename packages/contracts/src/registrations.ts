@@ -94,6 +94,8 @@ const publicFormFieldSchema = z.object({
 });
 
 export const publicEventResponseSchema = z.object({
+  levelName: z.string().nullable().optional(),
+  boostMultiplier: z.enum(['1.0', '1.5', '2.0', '3.0']).optional(),
   effectiveStatus: eventStatusSchema.optional(),
   registrationDeadline: z.iso.datetime({ offset: true }).optional(),
   systemFields: systemFieldsSchema.optional(),

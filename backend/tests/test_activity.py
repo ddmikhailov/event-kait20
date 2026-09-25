@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -9,9 +10,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
 from sqlalchemy import text
 
 from event_api.database import Database
+from event_api.event_review import enqueue_due_reviews
 from event_api.security import hash_password
 
 ORIGIN = {"Origin": "http://localhost:5173"}
@@ -91,6 +94,11 @@ def create_event(
         },
     )
     assert response.status_code == 201, response.text
+    with client.app.state.database.transaction() as connection:
+        connection.execute(
+            text("UPDATE events SET activity_review_required=false WHERE id=:id"),
+            {"id": response.json()["id"]},
+        )
     return response.json()["id"], slug
 
 
@@ -162,6 +170,183 @@ def create_registration_for_person(
             },
         )
     return registration_id, resolved_person_id
+
+
+def test_roster_import_creates_private_zero_profiles_and_rejects_duplicates(
+    client: TestClient,
+) -> None:
+    headers = login(client)
+    workbook = Workbook()
+    workbook.active.append(["Фамилия", "Имя", "Отчество", "Группа"])
+    workbook.active.append(["Демонстрационный", "Студент", "П.", "ТЕСТ-1"])
+    source = io.BytesIO()
+    workbook.save(source)
+    workbook.close()
+    data = source.getvalue()
+    mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    file = {"file": ("roster.xlsx", data, mime)}
+    preview = client.post("/admin/activity/roster/preview", headers=headers, files=file)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["students"] == 1
+    imported = client.post(
+        "/admin/activity/roster/import",
+        headers=headers,
+        files=file,
+        data={"fileHash": preview.json()["fileHash"]},
+    )
+    assert imported.status_code == 201, imported.text
+    assert imported.json()["created"] == 1
+    database: Database = client.app.state.database
+    with database.connect() as connection:
+        student = connection.execute(
+            text("""SELECT p.id,p.study_group,sp.visibility FROM student_roster_members rm
+            JOIN persons p ON p.id=rm.person_id
+            JOIN student_profiles sp ON sp.person_id=p.id
+            WHERE p.last_name='Демонстрационный'""")
+        ).one()
+    assert student[1:] == ("ТЕСТ-1", "PRIVATE")
+    assert not any(
+        item["displayName"].startswith("Демонстрационный")
+        for item in client.get("/public/students").json()["items"]
+    )
+    repeated = client.post(
+        "/admin/activity/roster/preview", headers=headers, files=file
+    )
+    assert repeated.status_code == 409
+    assert repeated.json()["error"]["code"] == "ROSTER_STUDENT_EXISTS"
+    now = datetime.now(UTC)
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"ZERO_{uuid4().hex[:8].upper()}",
+            "name": "Нулевой рейтинг",
+            "startsAt": (now - timedelta(days=1)).isoformat(),
+            "endsAt": (now + timedelta(days=1)).isoformat(),
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    consent = client.post(
+        f"/admin/people/{student[0]}/profile/consent",
+        headers=headers,
+        json={
+            "consentVersion": "synthetic-v1",
+            "allowedFields": ["NAME", "SCORES"],
+            "source": "ADMIN",
+        },
+    )
+    assert consent.status_code == 201, consent.text
+    published = client.patch(
+        f"/admin/people/{student[0]}/profile",
+        headers=headers,
+        json={"visibility": "PUBLIC"},
+    )
+    assert published.status_code == 200, published.text
+    ranking = client.get(
+        "/public/leaderboard", params={"seasonId": season.json()["id"]}
+    )
+    assert ranking.status_code == 200, ranking.text
+    assert any(
+        item["publicSlug"] == published.json()["publicSlug"]
+        and float(item["points"]) == 0
+        for item in ranking.json()["items"]
+    )
+
+
+def test_due_event_enters_review_24_hours_after_end(client: TestClient) -> None:
+    headers = login(client)
+    database: Database = client.app.state.database
+    now = datetime.now(UTC).replace(microsecond=0)
+    event = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Ожидание проверки",
+            "slug": f"due-review-{uuid4().hex[:10]}",
+            "startAt": (now - timedelta(hours=26)).isoformat(),
+            "endAt": (now - timedelta(hours=25)).isoformat(),
+            "registrationDeadline": (now - timedelta(hours=27)).isoformat(),
+            "location": "КАИТ №20",
+            "capacity": 10,
+            "status": "REGISTRATION_OPEN",
+        },
+    )
+    assert event.status_code == 201, event.text
+    assert enqueue_due_reviews(database, now - timedelta(hours=2)) == 0
+    assert enqueue_due_reviews(database, now) >= 1
+    reviewed = client.get(f"/admin/events/{event.json()['id']}/review", headers=headers)
+    assert reviewed.status_code == 200
+    assert reviewed.json()["state"] == "PENDING"
+    assert enqueue_due_reviews(database, now) == 0
+
+
+def test_public_registration_matches_roster_by_full_name_and_group(
+    client: TestClient,
+) -> None:
+    headers = login(client)
+    database: Database = client.app.state.database
+    student_id = str(uuid4())
+    with database.transaction() as connection:
+        connection.execute(
+            text("""INSERT INTO persons
+            (id,tenant_id,last_name,first_name,middle_name,person_type,study_group,
+             dedup_review_required,created_at,updated_at)
+            VALUES (:id,'50000000-0000-4000-8000-000000000001',
+                    'Реестровый','Участник','П.','KAIT_STUDENT','AUTO-1',
+                    false,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""),
+            {"id": student_id},
+        )
+    roster = client.post(f"/admin/people/{student_id}/roster", headers=headers)
+    assert roster.status_code == 201, roster.text
+    now = datetime.now(UTC).replace(microsecond=0)
+    event = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Сверка контингента",
+            "slug": f"roster-match-{uuid4().hex[:10]}",
+            "startAt": (now + timedelta(days=2)).isoformat(),
+            "endAt": (now + timedelta(days=2, hours=2)).isoformat(),
+            "registrationDeadline": (now + timedelta(days=1)).isoformat(),
+            "location": "КАИТ №20",
+            "capacity": 10,
+            "status": "REGISTRATION_OPEN",
+            "levelId": "20000000-0000-4000-8000-000000000003",
+        },
+    )
+    assert event.status_code == 201, event.text
+    client.cookies.clear()
+    for group in ("AUTO-1", "ЧУЖАЯ-ГРУППА"):
+        registration = client.post(
+            f"/public/events/{event.json()['slug']}/register",
+            headers=ORIGIN,
+            json={
+                "lastName": "Реестровый",
+                "firstName": "Участник",
+                "middleName": "П.",
+                "studyGroup": group,
+                "email": f"demo-{uuid4().hex[:8]}@example.com",
+                "phone": "+79990000001",
+                "personType": "KAIT_STUDENT",
+                "customAnswers": [],
+                "consentAccepted": True,
+                "consentVersion": "test-v1",
+                "requestId": str(uuid4()),
+            },
+        )
+        assert registration.status_code == 201, registration.text
+    with database.connect() as connection:
+        matches = connection.execute(
+            text("""SELECT r.study_group,r.roster_match_state,r.roster_person_id,r.person_id
+            FROM registrations r WHERE r.event_id=:event ORDER BY r.study_group"""),
+            {"event": event.json()["id"]},
+        ).all()
+    by_group = {entry[0]: entry for entry in matches}
+    assert by_group["AUTO-1"][1] == "MATCHED"
+    assert by_group["AUTO-1"][2] == by_group["AUTO-1"][3]
+    assert by_group["ЧУЖАЯ-ГРУППА"][1] == "UNMATCHED"
+    assert by_group["ЧУЖАЯ-ГРУППА"][2] is None
 
 
 def test_event_completion_scores_checked_in_students_once(client: TestClient) -> None:
@@ -273,71 +458,17 @@ def test_event_completion_scores_checked_in_students_once(client: TestClient) ->
     )
     assert completed.status_code == 200, completed.text
     assert completed.json()["completionSummary"] == {
-        "attendedStudents": 2,
-        "confirmed": 2,
-        "awarded": 2,
-        "noRule": 0,
-        "alreadyConfirmed": 0,
-        "cancelled": 0,
-        "retried": 0,
+        "registrations": 3,
+        "present": 2,
+        "absent": 1,
     }
-    with database.connect() as connection:
-        ledger = connection.execute(
-            text("""SELECT r.id,st.points,p.role_id FROM score_transactions st
-            JOIN participations p ON p.id=st.participation_id
-            JOIN registrations r ON r.id=p.registration_id
-            WHERE p.event_id=:event AND st.transaction_type='AWARD'"""),
-            {"event": event_id},
-        ).all()
-    assert {item[0]: (int(item[1]), item[2]) for item in ledger} == {
-        ordinary: (10, participant["id"]),
-        assigned: (20, volunteer["id"]),
-    }
-    assert absent not in {item[0] for item in ledger}
-    with database.connect() as connection:
-        ordinary_person = connection.execute(
-            text("SELECT person_id FROM registrations WHERE id=:id"),
-            {"id": ordinary},
-        ).scalar_one()
-    consent = client.post(
-        f"/admin/people/{ordinary_person}/profile/consent",
-        headers=headers,
-        json={
-            "consentVersion": "synthetic-demo-v1",
-            "allowedFields": ["NAME", "STUDY_GROUP", "SCORES", "PARTICIPATIONS"],
-            "source": "ADMIN",
-        },
-    )
-    assert consent.status_code == 201, consent.text
-    published = client.patch(
-        f"/admin/people/{ordinary_person}/profile",
-        headers=headers,
-        json={"visibility": "PUBLIC"},
-    )
-    assert published.status_code == 200, published.text
-    slug = published.json()["publicSlug"]
-    public_ranking = client.get(
-        "/public/leaderboard", params={"seasonId": season.json()["id"]}
-    )
-    assert public_ranking.status_code == 200, public_ranking.text
-    assert any(
-        item["publicSlug"] == slug and float(item["points"]) == 10
-        for item in public_ranking.json()["items"]
-    ), public_ranking.json()
-    public_history = client.get(f"/public/profiles/{slug}/score-transactions")
-    assert public_history.status_code == 200, public_history.text
-    assert any(
-        item["type"] == "AWARD"
-        and float(item["points"]) == 10
-        and item["eventTitle"] == "Проверка автоматического начисления"
-        for item in public_history.json()["items"]
-    )
-    repeated = client.patch(
-        f"/admin/events/{event_id}", headers=headers, json={"status": "COMPLETED"}
-    )
-    assert repeated.status_code == 200, repeated.text
-    assert repeated.json()["completionSummary"]["confirmed"] == 0
-    assert repeated.json()["completionSummary"]["alreadyConfirmed"] == 2
+    assert completed.json()["activityReviewState"] == "PENDING"
+    review = client.get(f"/admin/events/{event_id}/review", headers=headers)
+    assert review.status_code == 200, review.text
+    decisions = {item["registrationId"]: item for item in review.json()["items"]}
+    assert decisions[ordinary]["attendanceDecision"] == "PRESENT"
+    assert decisions[assigned]["roleId"] == volunteer["id"]
+    assert decisions[absent]["attendanceDecision"] == "ABSENT"
     with database.connect() as connection:
         assert (
             connection.execute(
@@ -346,16 +477,18 @@ def test_event_completion_scores_checked_in_students_once(client: TestClient) ->
                 ),
                 {"event": event_id},
             ).scalar_one()
-            == 2
+            == 0
         )
-    withdrawn = client.delete(
-        f"/admin/people/{ordinary_person}/profile/consent", headers=headers
+    direct = client.post(
+        f"/admin/events/{event_id}/participations/confirm",
+        headers=headers,
+        json={"registrationIds": [ordinary], "roleId": participant["id"]},
     )
-    assert withdrawn.status_code == 200, withdrawn.text
-    assert client.get(f"/public/profiles/{slug}").status_code == 404
+    assert direct.status_code == 409
+    assert direct.json()["error"]["code"] == "USE_EVENT_REVIEW"
 
 
-def test_completed_event_retries_no_rule_after_rule_is_added(
+def test_completed_event_waits_for_published_policy_before_approval(
     client: TestClient,
 ) -> None:
     headers = login(client)
@@ -365,89 +498,165 @@ def test_completed_event_retries_no_rule_after_rule_is_added(
         "/admin/activity/seasons",
         headers=headers,
         json={
-            "code": f"RETRY_{uuid4().hex[:8].upper()}",
-            "name": "Проверка повторного начисления",
-            "startsAt": (now - timedelta(days=1)).isoformat(),
-            "endsAt": (now + timedelta(days=1)).isoformat(),
+            "code": f"REVIEW_{uuid4().hex[:8].upper()}",
+            "name": "Проверка начисления",
+            "startsAt": (now - timedelta(days=30)).isoformat(),
+            "endsAt": (now + timedelta(days=30)).isoformat(),
             "active": False,
         },
     )
     assert season.status_code == 201, season.text
-    event_id, _ = create_event(
-        client,
-        headers,
-        title="Повторная обработка баллов",
-        start_at=(now - timedelta(hours=2)).isoformat(),
-        end_at=(now - timedelta(hours=1)).isoformat(),
-        season_id=season.json()["id"],
+    event = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Проверка баллов",
+            "slug": f"review-{uuid4().hex[:10]}",
+            "startAt": (now - timedelta(hours=2)).isoformat(),
+            "endAt": (now - timedelta(hours=1)).isoformat(),
+            "registrationDeadline": (now - timedelta(hours=3)).isoformat(),
+            "location": "КАИТ №20",
+            "capacity": 10,
+            "status": "REGISTRATION_OPEN",
+            "seasonId": season.json()["id"],
+            "levelId": "20000000-0000-4000-8000-000000000003",
+            "boostMultiplier": "1.5",
+        },
     )
-    registration_id = create_registration(database, event_id, "no-rule")
-    assert (
-        client.patch(
-            f"/admin/events/{event_id}",
-            headers=headers,
-            json={"status": "REGISTRATION_OPEN"},
-        ).status_code
-        == 200
+    assert event.status_code == 201, event.text
+    event_id = event.json()["id"]
+    registration_id = create_registration(database, event_id, "review")
+    with database.transaction() as connection:
+        person_id = connection.execute(
+            text("SELECT person_id FROM registrations WHERE id=:id"),
+            {"id": registration_id},
+        ).scalar_one()
+    roster = client.post(f"/admin/people/{person_id}/roster", headers=headers)
+    assert roster.status_code == 201, roster.text
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                "UPDATE registrations SET roster_match_state='MATCHED',roster_person_id=:person WHERE id=:id"
+            ),
+            {"person": person_id, "id": registration_id},
+        )
+    locked = client.patch(
+        f"/admin/events/{event_id}",
+        headers=headers,
+        json={"boostMultiplier": "2.0"},
     )
+    assert locked.status_code == 409
+    assert locked.json()["error"]["code"] == "SCORING_CONFIG_LOCKED"
     completed = client.patch(
         f"/admin/events/{event_id}", headers=headers, json={"status": "COMPLETED"}
     )
     assert completed.status_code == 200, completed.text
-    assert completed.json()["completionSummary"]["noRule"] == 1
-    with database.connect() as connection:
-        before = connection.execute(
-            text(
-                "SELECT id,scoring_state FROM participations WHERE registration_id=:id"
-            ),
-            {"id": registration_id},
-        ).one()
-    assert before[1] == "NO_RULE"
-
+    approval = client.post(f"/admin/events/{event_id}/review/approve", headers=headers)
+    assert approval.status_code == 409
+    assert approval.json()["error"]["code"] == "SCORING_SETUP_REQUIRED"
+    policy = client.post(
+        "/admin/activity/scoring-v2/policies",
+        headers=headers,
+        json={"code": f"P_{uuid4().hex[:10].upper()}", "name": "Показ"},
+    )
+    assert policy.status_code == 201, policy.text
     participant = next(
         item
         for item in client.get("/admin/activity/roles").json()["items"]
         if item["code"] == "PARTICIPANT"
     )
-    rule = client.post(
-        "/admin/activity/scoring-rules",
+    version = client.post(
+        f"/admin/activity/scoring-v2/policies/{policy.json()['id']}/versions",
         headers=headers,
         json={
-            "seasonId": season.json()["id"],
-            "participationRoleId": participant["id"],
-            "points": 12,
-            "priority": 100,
-            "active": True,
-            "validFrom": None,
-            "validTo": None,
+            "roleBases": [{"classifierId": participant["id"], "value": "10.0000"}],
+            "levelMultipliers": [
+                {
+                    "classifierId": "20000000-0000-4000-8000-000000000003",
+                    "value": "2.0000",
+                }
+            ],
+            "statusMultipliers": [],
+            "newcomerTiers": [
+                {"sequenceFrom": 1, "sequenceTo": None, "value": "1.0000"}
+            ],
+            "resultBonuses": [],
         },
     )
-    assert rule.status_code == 201, rule.text
-    retried = client.patch(
-        f"/admin/events/{event_id}", headers=headers, json={"status": "COMPLETED"}
+    assert version.status_code == 201, version.text
+    published = client.post(
+        f"/admin/activity/scoring-v2/versions/{version.json()['id']}/publish",
+        headers=headers,
+        json={"effectiveFrom": (now - timedelta(days=20)).isoformat()},
     )
-    assert retried.status_code == 200, retried.text
-    assert retried.json()["completionSummary"]["retried"] == 1
-    assert retried.json()["completionSummary"]["awarded"] == 1
-    with database.connect() as connection:
-        after = connection.execute(
-            text(
-                "SELECT id,scoring_state FROM participations WHERE registration_id=:id"
-            ),
-            {"id": registration_id},
-        ).one()
-        points = (
-            connection.execute(
-                text(
-                    "SELECT points FROM score_transactions WHERE participation_id=:id AND transaction_type='AWARD'"
-                ),
-                {"id": before[0]},
-            )
-            .scalars()
-            .all()
+    assert published.status_code == 200, published.text
+    assigned = client.post(
+        f"/admin/activity/scoring-v2/seasons/{season.json()['id']}/policy",
+        headers=headers,
+        json={
+            "scoringPolicyId": policy.json()["id"],
+            "effectiveFrom": (now - timedelta(days=20)).isoformat(),
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    organizer_id = str(uuid4())
+    organizer_email = f"review-organizer-{organizer_id[:12]}@example.com"
+    with database.transaction() as connection:
+        connection.execute(
+            text("""INSERT INTO staff_users
+            (id,tenant_id,organization_id,email,email_normalized,password_hash,system_role,
+             active,password_changed_at,created_at,updated_at)
+            VALUES (:id,'50000000-0000-4000-8000-000000000001',
+                    '51000000-0000-4000-8000-000000000001',:email,:email,:password,
+                    'ORGANIZER',true,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""),
+            {
+                "id": organizer_id,
+                "email": organizer_email,
+                "password": hash_password("review organizer password"),
+            },
         )
-    assert after == (before[0], "AWARDED")
-    assert points == [12]
+    client.cookies.clear()
+    organizer_login = client.post(
+        "/auth/login",
+        headers=ORIGIN,
+        json={"email": organizer_email, "password": "review organizer password"},
+    )
+    assert organizer_login.status_code == 200, organizer_login.text
+    organizer_headers = {**ORIGIN, "X-CSRF-Token": organizer_login.json()["csrfToken"]}
+    review = client.get(f"/admin/events/{event_id}/review", headers=organizer_headers)
+    assert review.status_code == 200, review.text
+    decision = {
+        "roleId": participant["id"],
+        "resultId": None,
+        "rosterPersonId": person_id,
+        "rejectMatch": False,
+        "reason": "Сверено по итоговой ведомости",
+    }
+    for attendance in ("ABSENT", "PRESENT"):
+        corrected = client.patch(
+            f"/admin/events/{event_id}/review/{registration_id}",
+            headers=organizer_headers,
+            json={**decision, "attendanceDecision": attendance},
+        )
+        assert corrected.status_code == 200, corrected.text
+        assert corrected.json()["items"][0]["attendanceDecision"] == attendance
+    approval = client.post(
+        f"/admin/events/{event_id}/review/approve", headers=organizer_headers
+    )
+    assert approval.status_code == 200, approval.text
+    assert approval.json()["awarded"] == 1
+    with database.connect() as connection:
+        points = connection.execute(
+            text(
+                "SELECT st.points FROM score_transactions st JOIN participations p ON p.id=st.participation_id WHERE p.event_id=:event AND st.transaction_type='AWARD'"
+            ),
+            {"event": event_id},
+        ).scalar_one()
+    assert points == 30
+    repeated = client.post(
+        f"/admin/events/{event_id}/review/approve", headers=organizer_headers
+    )
+    assert repeated.status_code == 409
 
 
 def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> None:
@@ -503,6 +712,16 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
     assert event.status_code == 201, event.text
     event_id = event.json()["id"]
     assert event.json()["seasonId"] == season.json()["id"]
+    with database.transaction() as connection:
+        connection.execute(
+            text("UPDATE events SET activity_review_required=false WHERE id=:id"),
+            {"id": event_id},
+        )
+    with database.transaction() as connection:
+        connection.execute(
+            text("UPDATE events SET activity_review_required=false WHERE id=:id"),
+            {"id": event_id},
+        )
 
     rule_payload = {
         "seasonId": season.json()["id"],
@@ -750,7 +969,10 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
     profile = client.get(f"/admin/people/{person_id}/profile")
     assert profile.json()["visibility"] == "PRIVATE"
     assert client.get("/public/profiles/not-a-real-profile").status_code == 404
-    assert client.get("/public/students").json()["items"] == []
+    assert all(
+        item["displayName"] != "Тестов У."
+        for item in client.get("/public/students").json()["items"]
+    )
     consent = client.post(
         f"/admin/people/{person_id}/profile/consent",
         headers=headers,
@@ -834,7 +1056,14 @@ def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> No
         },
     )
     assert participation_consent.status_code == 201, participation_consent.text
-    assert client.get("/public/students").json()["items"][0]["studyGroup"] == "ИС-21"
+    assert (
+        next(
+            item
+            for item in client.get("/public/students").json()["items"]
+            if item["publicSlug"] == slug
+        )["studyGroup"]
+        == "ИС-21"
+    )
     assert client.get("/public/students", params={"q": "ИС-21"}).json()["items"]
     current_group = create_study_group(
         client, headers, "MOS_ACTIVE_CURRENT", "MOS_ACTIVE_DEPT", 1

@@ -446,12 +446,25 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
 
 ## Activity API
 
-`PATCH /admin/events/:eventId` с `status=COMPLETED` подтверждает отмеченных
-студентов и рассчитывает баллы в одной транзакции. Дополнительное поле ответа
-`completionSummary` содержит `attendedStudents`, `confirmed`, `awarded`,
-`noRule`, `alreadyConfirmed`, `cancelled`, `retried`. Повторный вызов безопасен
-для уже начисленных участий и пересчитывает `NO_RULE` после исправления правил.
-Доступ — SUPER_ADMIN/ORGANIZER; Scanner только сохраняет отметки.
+`PATCH /admin/events/:eventId` с `status=COMPLETED` создаёт ведомость проверки
+без начисления баллов. `completionSummary` содержит `registrations`, `present`,
+`absent`. Планировщик в production выполняет тот же переход через 24 часа после
+`endAt`. Доступ к проверке — SUPER_ADMIN/ORGANIZER; Scanner сохраняет отметки.
+Для новых Events прямой старый `participations/confirm|cancel` и изменение
+подтверждённого участия возвращают `409 USE_EVENT_REVIEW`. Старые Events
+сохраняют прежний API для исторических корректировок.
+
+- `GET /admin/activity/reviews/pending` — очередь завершённых Events.
+- `GET /admin/events/:eventId/review` — все активные регистрации и решения.
+- `POST /admin/events/:eventId/review/refresh` — новые отметки Scanner.
+- `PATCH /admin/events/:eventId/review/:registrationId` — посещение, роль,
+  результат, связь с контингентом или отклонение с обязательной причиной.
+- `POST /admin/events/:eventId/review/approve` — атомарное начисление после
+  проверки всех записей; повторы дают `409 REVIEW_NOT_PENDING`.
+- `GET /admin/activity/roster/search?q=` — поиск кандидата для связи.
+- `POST /admin/people/:personId/roster` — ручное включение в контингент.
+- `POST /admin/activity/roster/preview|import` — SUPER_ADMIN, XLSX до 5 МБ,
+  один лист, до 5000 записей; импорт принимает `fileHash` из preview.
 
 - `GET/POST/PATCH /admin/activity/seasons|roles|results|categories|levels`
 - `GET/POST/PATCH /admin/activity/scoring-rules`

@@ -30,12 +30,14 @@ class ScoringInput:
     statuses: tuple[dict[str, str], ...]
     newcomer: dict[str, str | int]
     result: dict[str, str] | None
+    boost_multiplier: str = "1.0"
 
 
 def calculate(values: ScoringInput) -> tuple[Decimal, dict[str, Any]]:
     role = Decimal(values.role["value"])
     level = Decimal(values.level["value"])
-    score = role * level
+    boost = Decimal(values.boost_multiplier)
+    score = role * level * boost
     for status in values.statuses:
         score *= Decimal(status["value"])
     newcomer = Decimal(str(values.newcomer["value"]))
@@ -44,10 +46,11 @@ def calculate(values: ScoringInput) -> tuple[Decimal, dict[str, Any]]:
     bonus = Decimal(values.result["value"]) if values.result else Decimal("0")
     total = (score + bonus).quantize(SCALE, rounding=ROUND_HALF_UP)
     snapshot = {
-        "formula": "roleBase * levelMultiplier * statusMultipliers * newcomerMultiplier + resultBonus",
+        "formula": "roleBase * levelMultiplier * eventBoost * statusMultipliers * newcomerMultiplier + resultBonus",
         "roundingMode": "ROUND_HALF_UP",
         "role": values.role,
         "level": values.level,
+        "eventBoost": decimal_string(boost),
         "statuses": list(values.statuses),
         "newcomer": values.newcomer,
         "result": values.result,
@@ -258,6 +261,7 @@ def calculate_participation(
             if result_row
             else None
         ),
+        boost_multiplier=str(participation["boost_multiplier"]),
     )
     total, snapshot = calculate(values)
     snapshot.update(

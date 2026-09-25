@@ -23,6 +23,15 @@ Reason = Annotated[
 ]
 
 
+class EventReviewDecision(Contract):
+    attendance_decision: Literal["PRESENT", "ABSENT"]
+    role_id: UUID
+    result_id: UUID | None = None
+    roster_person_id: UUID | None = None
+    reject_match: bool = False
+    reason: Reason
+
+
 class ReferenceValues(Contract):
     code: Code
     name: Label

@@ -39,15 +39,18 @@ Legacy Import и другие нерасчётные ledger rows сохраня�
 
 Формула:
 
-`role base × event level × all applicable person statuses × newcomer multiplier + result bonus`
+`role base × event level × event boost × all applicable person statuses × newcomer multiplier + result bonus`
 
 Все операции выполняются Python `Decimal`. Промежуточные результаты не
 округляются; только итог квантуется до четырёх знаков с `ROUND_HALF_UP`. API
 возвращает баллы decimal-string, например `"16.7000"`.
 
-Пример: Organizer `3.0000` × City `2.0000` × Profession Ambassador `1.5000`
+Пример без повышения: Organizer `3.0000` × City `2.0000` × Profession Ambassador `1.5000`
 × вторая Participation `1.3000` + first place `5.0000` = `16.7000`. Bonus
 добавляется после всех множителей.
+Повышение Event выбирается из ×1, ×1,5, ×2, ×3 и сохраняется в snapshot как
+`eventBoost`. Роли и множители уровней задаёт администратор, готовая числовая
+таблица для новой схемы не предполагается.
 
 ## Policies and history
 

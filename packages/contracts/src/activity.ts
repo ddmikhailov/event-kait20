@@ -152,6 +152,85 @@ export const participationListSchema = z
 export type Participation = z.infer<typeof participationSchema>;
 export type ParticipationList = z.infer<typeof participationListSchema>;
 
+export const eventReviewItemSchema = z.object({
+  registrationId: uuidSchema,
+  lastName: z.string(),
+  firstName: z.string(),
+  middleName: z.string().nullable(),
+  studyGroup: z.string().nullable(),
+  personType: z.string(),
+  scannerFirstAttendedAt: z.iso.datetime({ offset: true }).nullable(),
+  attendanceDecision: z.enum(['PRESENT', 'ABSENT']),
+  attendanceChangedSinceReview: z.boolean(),
+  roleId: uuidSchema,
+  roleName: z.string(),
+  resultId: uuidSchema.nullable(),
+  resultName: z.string().nullable(),
+  matchState: z.enum([
+    'NOT_APPLICABLE',
+    'MATCHED',
+    'UNMATCHED',
+    'AMBIGUOUS',
+    'REJECTED',
+  ]),
+  rosterPersonId: uuidSchema.nullable(),
+  decisionReason: z.string().nullable(),
+  reviewedAt: z.iso.datetime({ offset: true }).nullable(),
+});
+export const eventReviewSchema = z.object({
+  eventId: uuidSchema,
+  title: z.string(),
+  state: z.enum(['NOT_STARTED', 'PENDING', 'APPROVED']),
+  items: z.array(eventReviewItemSchema),
+});
+export const eventReviewDecisionSchema = z.object({
+  attendanceDecision: z.enum(['PRESENT', 'ABSENT']),
+  roleId: uuidSchema,
+  resultId: uuidSchema.nullable(),
+  rosterPersonId: uuidSchema.nullable(),
+  rejectMatch: z.boolean(),
+  reason: z.string().trim().min(3).max(500),
+});
+export const eventReviewApprovalSchema = z.object({
+  registered: z.number().int().nonnegative(),
+  present: z.number().int().nonnegative(),
+  absent: z.number().int().nonnegative(),
+  awarded: z.number().int().nonnegative(),
+});
+export const pendingEventReviewsSchema = z.object({
+  items: z.array(z.object({ id: uuidSchema, title: z.string() })),
+});
+export const rosterSearchSchema = z.object({
+  items: z.array(
+    z.object({
+      id: uuidSchema,
+      lastName: z.string(),
+      firstName: z.string(),
+      middleName: z.string().nullable(),
+      studyGroup: z.string().nullable(),
+    }),
+  ),
+});
+export type EventReview = z.infer<typeof eventReviewSchema>;
+export type EventReviewDecision = z.infer<typeof eventReviewDecisionSchema>;
+export type EventReviewApproval = z.infer<typeof eventReviewApprovalSchema>;
+export type PendingEventReviews = z.infer<typeof pendingEventReviewsSchema>;
+export type RosterSearch = z.infer<typeof rosterSearchSchema>;
+
+export const rosterPreviewSchema = z
+  .object({
+    fileHash: z.string().regex(/^[a-f0-9]{64}$/),
+    students: z.number().int().positive().max(5000),
+  })
+  .strict();
+export type RosterPreview = z.infer<typeof rosterPreviewSchema>;
+export const rosterImportSchema = z
+  .object({
+    created: z.number().int().positive().max(5000),
+  })
+  .strict();
+export type RosterImport = z.infer<typeof rosterImportSchema>;
+
 export const participationAssignRequestSchema = z
   .object({
     registrationIds: z.array(uuidSchema).min(1).max(500),

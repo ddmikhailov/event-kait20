@@ -327,6 +327,14 @@ const EventHero = ({ event }: { event: PublicEventResponse }) => (
           <dt>Где</dt>
           <dd>{event.location}</dd>
         </div>
+        <div>
+          <dt>Уровень</dt>
+          <dd>{event.levelName ?? 'Не указан'}</dd>
+        </div>
+        <div>
+          <dt>Коэффициент баллов</dt>
+          <dd>×{(event.boostMultiplier ?? '1.0').replace('.', ',')}</dd>
+        </div>
       </dl>
     </div>
   </header>

@@ -819,6 +819,48 @@ export const PeopleDirectory = ({
   const [selected, setSelected] = useState<PersonDetailResponse>();
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
+  const [rosterFile, setRosterFile] = useState<File>();
+  const [rosterPreview, setRosterPreview] = useState<{
+    fileHash: string;
+    students: number;
+  }>();
+  const previewRoster = async () => {
+    if (!rosterFile) return;
+    setBusy(true);
+    try {
+      setRosterPreview(await adminApi.previewRoster(rosterFile));
+      setNotice({
+        kind: 'success',
+        text: 'Файл проверен. Проверьте количество студентов перед загрузкой.',
+      });
+    } catch (error) {
+      setRosterPreview(undefined);
+      setNotice(participantError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const importRoster = async () => {
+    if (!rosterFile || !rosterPreview) return;
+    setBusy(true);
+    try {
+      const result = await adminApi.importRoster(
+        rosterFile,
+        rosterPreview.fileHash,
+      );
+      setNotice({
+        kind: 'success',
+        text: `Создано профилей студентов: ${result.created}. Публикация требует отдельного согласия.`,
+      });
+      setRosterPreview(undefined);
+      setRosterFile(undefined);
+      void load();
+    } catch (error) {
+      setNotice(participantError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
   const load = useCallback(async () => {
     setBusy(true);
     try {
@@ -871,6 +913,48 @@ export const PeopleDirectory = ({
           </div>
         </header>
         {notice && <ParticipantNotice notice={notice} />}
+        {role === 'SUPER_ADMIN' && (
+          <div className="admin-panel">
+            <h2>Загрузить контингент для MOS Active</h2>
+            <p>
+              Файл XLSX до 5 МБ, один лист. Столбцы по порядку: Фамилия, Имя,
+              Отчество, Группа. До 5000 студентов за одну загрузку.
+            </p>
+            <p>В тестовой среде загружайте только вымышленных студентов.</p>
+            <input
+              type="file"
+              accept=".xlsx"
+              aria-label="Файл контингента XLSX"
+              onChange={(event) => {
+                setRosterFile(event.target.files?.[0]);
+                setRosterPreview(undefined);
+              }}
+            />
+            <button
+              className="secondary-button"
+              disabled={busy || !rosterFile}
+              onClick={() => void previewRoster()}
+            >
+              Проверить файл
+            </button>
+            {rosterPreview && (
+              <p>
+                Новых студентов: {rosterPreview.students}. Их профили будут
+                созданы с нулём баллов и останутся закрытыми до оформления
+                публикации.
+              </p>
+            )}
+            {rosterPreview && (
+              <button
+                className="secondary-button"
+                disabled={busy}
+                onClick={() => void importRoster()}
+              >
+                Загрузить студентов
+              </button>
+            )}
+          </div>
+        )}
         <form
           className="participant-filters people-filter"
           onSubmit={(event) => {

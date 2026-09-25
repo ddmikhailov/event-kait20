@@ -409,6 +409,18 @@ reconciliation remains controlled and never infers course from group text.
 
 ## 22. MosActive scoring v2
 
+Migration 017 добавляет `events.boost_multiplier` (1, 1.5, 2, 3),
+`activity_review_required` для новых Events и `activity_review_state`.
+`student_roster_members` связывает проверенный Person с контингентом;
+`registrations.roster_match_state/roster_person_id` фиксируют предложение
+сопоставления, а `event_participation_reviews` — утверждаемую ведомость со
+снимком отметки Scanner, итоговым посещением, ролью, результатом и связью.
+Исторические Events с подтверждённым участием сохраняют
+`activity_review_required=false`; незавершённые Events без подтверждённых
+участий переходят в новый порядок. Миграция добавляющая:
+перед откатом остановить создание новых ведомостей и экспортировать решения;
+удаление таблиц/колонок без резервной копии теряет аудиторский контекст.
+
 Migration 016 adds organization-owned versioned scoring policies while retaining
 legacy ScoringRule. `Season.scoring_policy_id IS NULL` means v1. With an assigned
 policy, Events before `scoring_policy_effective_from` remain v1 and Events at/after

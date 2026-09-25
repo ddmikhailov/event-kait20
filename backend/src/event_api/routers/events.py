@@ -7,11 +7,7 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.engine import Connection, RowMapping
 
-from ..activity_service import (
-    confirm_attended_students_on_completion,
-    reference,
-    scoped_reference,
-)
+from ..activity_service import reference, scoped_reference
 from ..config import Settings
 from ..database import Database, execute, row, rows
 from ..dependencies import (
@@ -24,6 +20,7 @@ from ..dependencies import (
     settings,
 )
 from ..errors import ApiError
+from ..event_review import prepare_review
 from ..form_config import event_form_config
 from ..media import cover_path, remove_cover, save_cover
 from ..schemas import (
@@ -243,10 +240,10 @@ def create_event(
         execute(
             connection,
             """INSERT INTO events
-               (id,organization_id,title,slug,description,direction,direction_id,form_config,allowed_person_types,is_listed,season_id,category_id,level_id,cover_object_key,start_at,end_at,timezone,
+               (id,organization_id,title,slug,description,direction,direction_id,form_config,allowed_person_types,is_listed,season_id,category_id,level_id,boost_multiplier,activity_review_required,cover_object_key,start_at,end_at,timezone,
                 location,registration_deadline,capacity,status,created_by,
                 offline_data_version,created_at,updated_at)
-               VALUES (:id,:organization,:title,:slug,:description,:direction,:direction_id,:form_config,:allowed_person_types,:is_listed,:season_id,:category_id,:level_id,NULL,:start_at,:end_at,
+               VALUES (:id,:organization,:title,:slug,:description,:direction,:direction_id,:form_config,:allowed_person_types,:is_listed,:season_id,:category_id,:level_id,:boost_multiplier,true,NULL,:start_at,:end_at,
                        :timezone,:location,:registration_deadline,:capacity,:status,:actor,
                        1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
             {
@@ -369,6 +366,15 @@ def update_event(
             "SELECT count(*) AS count FROM registrations WHERE event_id=:id AND status='ACTIVE'",
             {"id": event_id_s},
         )
+        if int(active["count"] if active else 0) > 0 and any(
+            field in changes and str(changes[field]) != str(existing[field])
+            for field in ("season_id", "level_id", "boost_multiplier")
+        ):
+            raise ApiError(
+                409,
+                "SCORING_CONFIG_LOCKED",
+                "Scoring settings cannot change after registration",
+            )
         if capacity != existing["capacity"] and capacity < int(
             active["count"] if active else 0
         ):
@@ -392,7 +398,7 @@ def update_event(
             connection,
             """UPDATE events SET title=:title,slug=:slug,description=:description,form_config=:form_config,
                     direction=:direction,direction_id=:direction_id,allowed_person_types=:allowed_person_types,is_listed=:is_listed,
-                    season_id=:season_id,category_id=:category_id,level_id=:level_id,start_at=:start,end_at=:end,timezone=:timezone,
+                    season_id=:season_id,category_id=:category_id,level_id=:level_id,boost_multiplier=:boost_multiplier,start_at=:start,end_at=:end,timezone=:timezone,
                     location=:location,registration_deadline=:deadline,capacity=:capacity,status=:status,
                     offline_data_version=offline_data_version+1,updated_at=UTC_TIMESTAMP(3) WHERE id=:id""",
             {
@@ -414,6 +420,9 @@ def update_event(
                 "level_id": str(changes["level_id"])
                 if changes.get("level_id")
                 else changes.get("level_id", existing["level_id"]),
+                "boost_multiplier": changes.get(
+                    "boost_multiplier", existing["boost_multiplier"]
+                ),
                 "start": start,
                 "end": end,
                 "deadline": deadline,
@@ -423,8 +432,10 @@ def update_event(
             },
         )
         completion_summary = (
-            confirm_attended_students_on_completion(connection, event_id_s, staff.id)
-            if "status" in changes and next_status == "COMPLETED"
+            prepare_review(connection, event_id_s, staff.id)
+            if "status" in changes
+            and next_status == "COMPLETED"
+            and existing["activity_review_required"]
             else None
         )
         updated = event_row(connection, event_id_s, tenant_id=staff.tenant_id)
@@ -648,6 +659,11 @@ def purge_event(
         execute(
             connection,
             "DELETE FROM registration_requests WHERE event_id=:event",
+            {"event": event_id_s},
+        )
+        execute(
+            connection,
+            "DELETE FROM event_participation_reviews WHERE event_id=:event",
             {"event": event_id_s},
         )
         execute(

@@ -16,6 +16,12 @@ import {
   personDetailResponseSchema,
   personListResponseSchema,
   participationListSchema,
+  eventReviewSchema,
+  eventReviewApprovalSchema,
+  pendingEventReviewsSchema,
+  rosterSearchSchema,
+  rosterPreviewSchema,
+  rosterImportSchema,
   activityDirectionListSchema,
   activityDirectionSchema,
   registrationDetailResponseSchema,
@@ -63,6 +69,13 @@ import {
   type CreateFormFieldRequest,
   type EventListResponse,
   type EventResponse,
+  type EventReview,
+  type EventReviewApproval,
+  type EventReviewDecision,
+  type PendingEventReviews,
+  type RosterSearch,
+  type RosterPreview,
+  type RosterImport,
   type EventStatisticsResponse,
   type EventAccessListResponse,
   type EventAccessRequest,
@@ -151,6 +164,27 @@ export class AdminApiError extends Error {
 }
 
 export class AdminApiClient {
+  public previewRoster(file: File): Promise<RosterPreview> {
+    const form = new FormData();
+    form.set('file', file);
+    return this.request(
+      '/admin/activity/roster/preview',
+      { method: 'POST', body: form },
+      rosterPreviewSchema,
+    );
+  }
+
+  public importRoster(file: File, fileHash: string): Promise<RosterImport> {
+    const form = new FormData();
+    form.set('file', file);
+    form.set('fileHash', fileHash);
+    return this.request(
+      '/admin/activity/roster/import',
+      { method: 'POST', body: form },
+      rosterImportSchema,
+    );
+  }
+
   public activityRoles(): Promise<ActivityReferenceList> {
     return this.request(
       '/admin/activity/roles',
@@ -491,6 +525,58 @@ export class AdminApiClient {
       '/admin/activity/scoring-v2/preview',
       { method: 'POST', body: JSON.stringify(values) },
       scoringPreviewResponseSchema,
+    );
+  }
+
+  public pendingEventReviews(): Promise<PendingEventReviews> {
+    return this.request(
+      '/admin/activity/reviews/pending',
+      { method: 'GET' },
+      pendingEventReviewsSchema,
+    );
+  }
+
+  public eventReview(eventId: string): Promise<EventReview> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/review`,
+      { method: 'GET' },
+      eventReviewSchema,
+    );
+  }
+
+  public refreshEventReview(eventId: string): Promise<EventReview> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/review/refresh`,
+      { method: 'POST' },
+      eventReviewSchema,
+    );
+  }
+
+  public updateEventReview(
+    eventId: string,
+    registrationId: string,
+    values: EventReviewDecision,
+  ): Promise<EventReview> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/review/${encodeURIComponent(registrationId)}`,
+      { method: 'PATCH', body: JSON.stringify(values) },
+      eventReviewSchema,
+    );
+  }
+
+  public approveEventReview(eventId: string): Promise<EventReviewApproval> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/review/approve`,
+      { method: 'POST' },
+      eventReviewApprovalSchema,
+    );
+  }
+
+  public searchRoster(query: string): Promise<RosterSearch> {
+    return this.request(
+      `/admin/activity/roster/search?q=${encodeURIComponent(query)}`,
+      { method: 'GET' },
+      rosterSearchSchema,
     );
   }
 
