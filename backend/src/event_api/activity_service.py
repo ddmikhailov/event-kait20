@@ -638,6 +638,100 @@ def confirm_registration(
     return identity
 
 
+def confirm_attended_students_on_completion(
+    connection: Connection, event_id: str, actor_id: str
+) -> dict[str, int]:
+    """Confirm checked-in KAIT students when an operator completes an Event.
+
+    Existing draft role/result assignments win over the ordinary participant
+    default. Confirmed and cancelled participations are never overwritten.
+    Repeating completion processes only newly arrived attendance.
+    """
+    completion_limit = 5_000
+    attendees = rows(
+        connection,
+        """SELECT r.id AS registration_id,p.id AS participation_id,
+        p.status AS participation_status,p.scoring_state,
+        p.role_id AS assigned_role_id
+        FROM registrations r
+        LEFT JOIN participations p ON p.registration_id=r.id
+        WHERE r.event_id=:event AND r.status='ACTIVE'
+          AND r.person_type='KAIT_STUDENT' AND r.first_attended_at IS NOT NULL
+        ORDER BY r.first_attended_at,r.id LIMIT :limit""",
+        {"event": event_id, "limit": completion_limit + 1},
+    )
+    if len(attendees) > completion_limit:
+        raise ApiError(
+            409,
+            "EVENT_COMPLETION_TOO_LARGE",
+            "Event exceeds the reviewed automatic completion limit",
+        )
+    summary = {
+        "attendedStudents": len(attendees),
+        "confirmed": 0,
+        "awarded": 0,
+        "noRule": 0,
+        "alreadyConfirmed": 0,
+        "cancelled": 0,
+        "retried": 0,
+    }
+    needs_default = any(
+        item["participation_status"] not in ("CONFIRMED", "CANCELLED")
+        and not item["assigned_role_id"]
+        for item in attendees
+    )
+    default_role = (
+        row(
+            connection,
+            "SELECT id FROM participation_roles WHERE code='PARTICIPANT' AND active=true",
+        )
+        if needs_default
+        else None
+    )
+    if needs_default and not default_role:
+        raise ApiError(
+            409, "PARTICIPATION_ROLE_REQUIRED", "Participant role is unavailable"
+        )
+    for item in attendees:
+        if item["participation_status"] == "CONFIRMED":
+            summary["alreadyConfirmed"] += 1
+            if item["scoring_state"] in ("NO_RULE", "NOT_SCORED"):
+                transaction_id = award_score(
+                    connection, item["participation_id"], actor_id
+                )
+                if transaction_id:
+                    summary["awarded"] += 1
+                    summary["retried"] += 1
+                else:
+                    summary["noRule"] += 1
+            continue
+        if item["participation_status"] == "CANCELLED":
+            summary["cancelled"] += 1
+            continue
+        participation_id = confirm_registration(
+            connection,
+            event_id,
+            item["registration_id"],
+            actor_id,
+            item["assigned_role_id"] or (default_role["id"] if default_role else None),
+            None,
+            "ATTENDANCE_BULK",
+            False,
+            None,
+        )
+        summary["confirmed"] += 1
+        scored = row(
+            connection,
+            "SELECT scoring_state FROM participations WHERE id=:id",
+            {"id": participation_id},
+        )
+        if scored and scored["scoring_state"] == "AWARDED":
+            summary["awarded"] += 1
+        else:
+            summary["noRule"] += 1
+    return summary
+
+
 def cancel_participation(
     connection: Connection, participation_id: str, actor_id: str, reason: str
 ) -> None:

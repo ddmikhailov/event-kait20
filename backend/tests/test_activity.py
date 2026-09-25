@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -162,6 +162,292 @@ def create_registration_for_person(
             },
         )
     return registration_id, resolved_person_id
+
+
+def test_event_completion_scores_checked_in_students_once(client: TestClient) -> None:
+    headers = login(client)
+    database: Database = client.app.state.database
+    now = datetime.now(UTC).replace(microsecond=0)
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"AUTO_{uuid4().hex[:8].upper()}",
+            "name": "Показ MOS Active",
+            "startsAt": (now - timedelta(days=30)).isoformat(),
+            "endsAt": (now + timedelta(days=30)).isoformat(),
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    event = client.post(
+        "/admin/events",
+        headers=headers,
+        json={
+            "title": "Проверка автоматического начисления",
+            "slug": f"auto-score-{uuid4().hex[:10]}",
+            "startAt": (now - timedelta(hours=2)).isoformat(),
+            "endAt": (now - timedelta(hours=1)).isoformat(),
+            "registrationDeadline": (now - timedelta(hours=3)).isoformat(),
+            "location": "КАИТ №20",
+            "capacity": 20,
+            "status": "REGISTRATION_OPEN",
+            "seasonId": season.json()["id"],
+        },
+    )
+    assert event.status_code == 201, event.text
+    event_id = event.json()["id"]
+    roles = client.get("/admin/activity/roles").json()["items"]
+    participant = next(item for item in roles if item["code"] == "PARTICIPANT")
+    volunteer = next(item for item in roles if item["code"] == "VOLUNTEER")
+    for role, points in ((participant, 10), (volunteer, 20)):
+        rule = client.post(
+            "/admin/activity/scoring-rules",
+            headers=headers,
+            json={
+                "seasonId": season.json()["id"],
+                "participationRoleId": role["id"],
+                "points": points,
+                "priority": 100,
+                "active": True,
+                "validFrom": None,
+                "validTo": None,
+            },
+        )
+        assert rule.status_code == 201, rule.text
+    ordinary = create_registration(database, event_id, "ordinary")
+    assigned = create_registration(database, event_id, "volunteer")
+    absent = create_registration(database, event_id, "absent")
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                "UPDATE registrations SET first_attended_at=NULL WHERE event_id=:event"
+            ),
+            {"event": event_id},
+        )
+    draft = client.post(
+        f"/admin/events/{event_id}/participations/assign",
+        headers=headers,
+        json={
+            "registrationIds": [assigned],
+            "roleId": volunteer["id"],
+            "reason": "Волонтёр назначен организатором до завершения",
+        },
+    )
+    assert draft.status_code == 200, draft.text
+    scan_time = (now - timedelta(hours=1, minutes=30)).isoformat()
+    scan = client.post(
+        f"/scanner/events/{event_id}/attendance/sync",
+        headers=headers,
+        json={
+            "deviceId": str(uuid4()),
+            "events": [
+                {
+                    "clientEventId": str(uuid4()),
+                    "registrationId": registration_id,
+                    "mode": "MANUAL_CONFIRM",
+                    "source": "ONLINE",
+                    "deviceScannedAt": scan_time,
+                    "estimatedScannedAt": scan_time,
+                }
+                for registration_id in (ordinary, assigned)
+            ],
+        },
+    )
+    assert scan.status_code == 201, scan.text
+    assert [item["status"] for item in scan.json()["results"]] == [
+        "ACCEPTED",
+        "ACCEPTED",
+    ]
+    with database.connect() as connection:
+        before = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM score_transactions st JOIN participations p ON p.id=st.participation_id WHERE p.event_id=:event"
+            ),
+            {"event": event_id},
+        ).scalar_one()
+    assert before == 0
+
+    completed = client.patch(
+        f"/admin/events/{event_id}", headers=headers, json={"status": "COMPLETED"}
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["completionSummary"] == {
+        "attendedStudents": 2,
+        "confirmed": 2,
+        "awarded": 2,
+        "noRule": 0,
+        "alreadyConfirmed": 0,
+        "cancelled": 0,
+        "retried": 0,
+    }
+    with database.connect() as connection:
+        ledger = connection.execute(
+            text("""SELECT r.id,st.points,p.role_id FROM score_transactions st
+            JOIN participations p ON p.id=st.participation_id
+            JOIN registrations r ON r.id=p.registration_id
+            WHERE p.event_id=:event AND st.transaction_type='AWARD'"""),
+            {"event": event_id},
+        ).all()
+    assert {item[0]: (int(item[1]), item[2]) for item in ledger} == {
+        ordinary: (10, participant["id"]),
+        assigned: (20, volunteer["id"]),
+    }
+    assert absent not in {item[0] for item in ledger}
+    with database.connect() as connection:
+        ordinary_person = connection.execute(
+            text("SELECT person_id FROM registrations WHERE id=:id"),
+            {"id": ordinary},
+        ).scalar_one()
+    consent = client.post(
+        f"/admin/people/{ordinary_person}/profile/consent",
+        headers=headers,
+        json={
+            "consentVersion": "synthetic-demo-v1",
+            "allowedFields": ["NAME", "STUDY_GROUP", "SCORES", "PARTICIPATIONS"],
+            "source": "ADMIN",
+        },
+    )
+    assert consent.status_code == 201, consent.text
+    published = client.patch(
+        f"/admin/people/{ordinary_person}/profile",
+        headers=headers,
+        json={"visibility": "PUBLIC"},
+    )
+    assert published.status_code == 200, published.text
+    slug = published.json()["publicSlug"]
+    public_ranking = client.get(
+        "/public/leaderboard", params={"seasonId": season.json()["id"]}
+    )
+    assert public_ranking.status_code == 200, public_ranking.text
+    assert any(
+        item["publicSlug"] == slug and float(item["points"]) == 10
+        for item in public_ranking.json()["items"]
+    ), public_ranking.json()
+    public_history = client.get(f"/public/profiles/{slug}/score-transactions")
+    assert public_history.status_code == 200, public_history.text
+    assert any(
+        item["type"] == "AWARD"
+        and float(item["points"]) == 10
+        and item["eventTitle"] == "Проверка автоматического начисления"
+        for item in public_history.json()["items"]
+    )
+    repeated = client.patch(
+        f"/admin/events/{event_id}", headers=headers, json={"status": "COMPLETED"}
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["completionSummary"]["confirmed"] == 0
+    assert repeated.json()["completionSummary"]["alreadyConfirmed"] == 2
+    with database.connect() as connection:
+        assert (
+            connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM score_transactions st JOIN participations p ON p.id=st.participation_id WHERE p.event_id=:event"
+                ),
+                {"event": event_id},
+            ).scalar_one()
+            == 2
+        )
+    withdrawn = client.delete(
+        f"/admin/people/{ordinary_person}/profile/consent", headers=headers
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert client.get(f"/public/profiles/{slug}").status_code == 404
+
+
+def test_completed_event_retries_no_rule_after_rule_is_added(
+    client: TestClient,
+) -> None:
+    headers = login(client)
+    database: Database = client.app.state.database
+    now = datetime.now(UTC).replace(microsecond=0)
+    season = client.post(
+        "/admin/activity/seasons",
+        headers=headers,
+        json={
+            "code": f"RETRY_{uuid4().hex[:8].upper()}",
+            "name": "Проверка повторного начисления",
+            "startsAt": (now - timedelta(days=1)).isoformat(),
+            "endsAt": (now + timedelta(days=1)).isoformat(),
+            "active": False,
+        },
+    )
+    assert season.status_code == 201, season.text
+    event_id, _ = create_event(
+        client,
+        headers,
+        title="Повторная обработка баллов",
+        start_at=(now - timedelta(hours=2)).isoformat(),
+        end_at=(now - timedelta(hours=1)).isoformat(),
+        season_id=season.json()["id"],
+    )
+    registration_id = create_registration(database, event_id, "no-rule")
+    assert (
+        client.patch(
+            f"/admin/events/{event_id}",
+            headers=headers,
+            json={"status": "REGISTRATION_OPEN"},
+        ).status_code
+        == 200
+    )
+    completed = client.patch(
+        f"/admin/events/{event_id}", headers=headers, json={"status": "COMPLETED"}
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["completionSummary"]["noRule"] == 1
+    with database.connect() as connection:
+        before = connection.execute(
+            text(
+                "SELECT id,scoring_state FROM participations WHERE registration_id=:id"
+            ),
+            {"id": registration_id},
+        ).one()
+    assert before[1] == "NO_RULE"
+
+    participant = next(
+        item
+        for item in client.get("/admin/activity/roles").json()["items"]
+        if item["code"] == "PARTICIPANT"
+    )
+    rule = client.post(
+        "/admin/activity/scoring-rules",
+        headers=headers,
+        json={
+            "seasonId": season.json()["id"],
+            "participationRoleId": participant["id"],
+            "points": 12,
+            "priority": 100,
+            "active": True,
+            "validFrom": None,
+            "validTo": None,
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    retried = client.patch(
+        f"/admin/events/{event_id}", headers=headers, json={"status": "COMPLETED"}
+    )
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["completionSummary"]["retried"] == 1
+    assert retried.json()["completionSummary"]["awarded"] == 1
+    with database.connect() as connection:
+        after = connection.execute(
+            text(
+                "SELECT id,scoring_state FROM participations WHERE registration_id=:id"
+            ),
+            {"id": registration_id},
+        ).one()
+        points = (
+            connection.execute(
+                text(
+                    "SELECT points FROM score_transactions WHERE participation_id=:id AND transaction_type='AWARD'"
+                ),
+                {"id": before[0]},
+            )
+            .scalars()
+            .all()
+        )
+    assert after == (before[0], "AWARDED")
+    assert points == [12]
 
 
 def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> None:

@@ -188,6 +188,13 @@ def process_item(
                     if same_attendance_payload(existing, event, item, device_id, staff)
                     else None,
                 )
+            # Event completion locks Event before registrations. Keep the same
+            # lock order when a late offline batch arrives during completion.
+            row(
+                connection,
+                "SELECT id FROM events WHERE id=:id FOR UPDATE",
+                {"id": event["id"]},
+            )
             registration = row(
                 connection,
                 "SELECT status,first_attended_at FROM registrations WHERE id=:id AND event_id=:event FOR UPDATE",

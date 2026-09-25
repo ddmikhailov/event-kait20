@@ -446,6 +446,13 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
 
 ## Activity API
 
+`PATCH /admin/events/:eventId` с `status=COMPLETED` подтверждает отмеченных
+студентов и рассчитывает баллы в одной транзакции. Дополнительное поле ответа
+`completionSummary` содержит `attendedStudents`, `confirmed`, `awarded`,
+`noRule`, `alreadyConfirmed`, `cancelled`, `retried`. Повторный вызов безопасен
+для уже начисленных участий и пересчитывает `NO_RULE` после исправления правил.
+Доступ — SUPER_ADMIN/ORGANIZER; Scanner только сохраняет отметки.
+
 - `GET/POST/PATCH /admin/activity/seasons|roles|results|categories|levels`
 - `GET/POST/PATCH /admin/activity/scoring-rules`
 - `GET /admin/events/:eventId/participations`

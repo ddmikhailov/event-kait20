@@ -1,5 +1,5 @@
 import hashlib
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -7,7 +7,11 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.engine import Connection, RowMapping
 
-from ..activity_service import reference, scoped_reference
+from ..activity_service import (
+    confirm_attended_students_on_completion,
+    reference,
+    scoped_reference,
+)
 from ..config import Settings
 from ..database import Database, execute, row, rows
 from ..dependencies import (
@@ -315,9 +319,14 @@ def update_event(
         if "form_config" in changes and changes["form_config"] is None:
             raise ApiError(400, "VALIDATION_ERROR", "Form configuration cannot be null")
         next_status = str(changes.get("status", existing["status"]))
-        if (
-            next_status == "ARCHIVED"
-            or next_status not in TRANSITIONS[existing["status"]]
+        can_finish_elapsed_open_event = (
+            next_status == "COMPLETED"
+            and existing["status"] == "REGISTRATION_OPEN"
+            and naive_utc(existing["end_at"]) <= datetime.now(UTC).replace(tzinfo=None)
+        )
+        if next_status == "ARCHIVED" or (
+            next_status not in TRANSITIONS[existing["status"]]
+            and not can_finish_elapsed_open_event
         ):
             raise ApiError(
                 409, "INVALID_EVENT_STATE", "Event status transition is not allowed"
@@ -413,6 +422,11 @@ def update_event(
                 "id": event_id_s,
             },
         )
+        completion_summary = (
+            confirm_attended_students_on_completion(connection, event_id_s, staff.id)
+            if "status" in changes and next_status == "COMPLETED"
+            else None
+        )
         updated = event_row(connection, event_id_s, tenant_id=staff.tenant_id)
         audit(
             connection,
@@ -422,7 +436,10 @@ def update_event(
             event_id_s,
             {"fields": sorted(values.model_fields_set)},
         )
-    return event_response(updated)
+    response = event_response(updated)
+    if completion_summary is not None:
+        response["completionSummary"] = completion_summary
+    return response
 
 
 @admin.post("/{event_id}/cover")

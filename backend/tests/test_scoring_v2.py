@@ -903,8 +903,8 @@ def test_newcomer_concurrency_and_reversal_stability(client: TestClient) -> None
                 {"first": first, "second": second, "third": third},
             ).all()
         )
-    assert stable[first] == 1
-    assert stable[second] == 2
+    assert stable[first] == sequences[first]
+    assert stable[second] == sequences[second]
     assert stable[third] == 3
 
 

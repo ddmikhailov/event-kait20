@@ -37,6 +37,11 @@ import {
 
 type Notice = { kind: 'error' | 'success'; text: string };
 
+const completionMessage = (summary: EventResponse['completionSummary']) =>
+  summary
+    ? `Проверено отмеченных студентов: ${summary.attendedStudents}. Подтверждено участий: ${summary.confirmed}. Начислены баллы: ${summary.awarded} (после исправления правил: ${summary.retried}). Без подходящего правила: ${summary.noRule}. Уже подтверждены: ${summary.alreadyConfirmed}. Отменённые участия пропущены: ${summary.cancelled}.`
+    : 'Мероприятие завершено.';
+
 export const AdminApp = () => {
   const [session, setSession] = useState<SessionResponse>();
   const [loading, setLoading] = useState(true);
@@ -505,7 +510,38 @@ const EventEditor = ({
         result = await adminApi.uploadEventCover(result.id, cover);
       }
       setSavedEvent(result);
-      setNotice({ kind: 'success', text: 'Изменения сохранены' });
+      setNotice({
+        kind: result.completionSummary?.noRule ? 'error' : 'success',
+        text: result.completionSummary
+          ? completionMessage(result.completionSummary)
+          : 'Изменения сохранены',
+      });
+    } catch (error) {
+      setNotice(errorNotice(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const completeEvent = async () => {
+    if (
+      !savedEvent ||
+      !window.confirm(
+        'Завершить мероприятие и начислить баллы отмеченным студентам? Сначала синхронизируйте все офлайн-отметки Scanner.',
+      )
+    )
+      return;
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      const completed = await adminApi.updateEvent(savedEvent.id, {
+        status: 'COMPLETED',
+      });
+      setSavedEvent(completed);
+      setNotice({
+        kind: completed.completionSummary?.noRule ? 'error' : 'success',
+        text: completionMessage(completed.completionSummary),
+      });
     } catch (error) {
       setNotice(errorNotice(error));
     } finally {
@@ -638,6 +674,21 @@ const EventEditor = ({
             levels={levels}
             directions={directions}
           />
+          {savedEvent &&
+            !archived &&
+            savedEvent.status !== 'DRAFT' &&
+            new Date(savedEvent.endAt).getTime() <= Date.now() && (
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy}
+                onClick={() => void completeEvent()}
+              >
+                {savedEvent.status === 'COMPLETED'
+                  ? 'Обработать новые отметки и баллы'
+                  : 'Завершить мероприятие и начислить баллы'}
+              </button>
+            )}
           {savedEvent && !archived && (
             <button
               className="danger-button"
@@ -732,7 +783,9 @@ export const EventForm = ({
       : undefined;
   const [coverPreview, setCoverPreview] = useState<string>();
   const statuses: EventResponse['status'][] = event
-    ? allowedStatuses(event.status)
+    ? allowedStatuses(event.status).filter(
+        (status) => status !== 'COMPLETED' || event.status === 'COMPLETED',
+      )
     : ['DRAFT', 'REGISTRATION_OPEN'];
   return (
     <form
@@ -1384,6 +1437,12 @@ const errorNotice = (error: unknown): Notice => {
       UNAUTHENTICATED: 'Сессия завершена. Войдите снова',
       FORBIDDEN: 'Недостаточно прав для этой операции',
       INVALID_EVENT_STATE: 'Такой переход статуса недоступен',
+      EVENT_COMPLETION_TOO_LARGE:
+        'На мероприятии слишком много отметок для одного завершения. Обратитесь к администратору системы.',
+      PARTICIPATION_ROLE_REQUIRED:
+        'Не найдена активная роль «Участник». Проверьте настройки активности.',
+      SCORING_RULE_AMBIGUOUS:
+        'Для одного участия подходят несколько равнозначных правил баллов. Уточните правила и повторите завершение.',
       INVALID_TIME_RANGE:
         'Проверьте даты: окончание должно быть после начала, а приём заявок — завершиться не позже начала',
       CAPACITY_BELOW_ACTIVE_REGISTRATIONS:

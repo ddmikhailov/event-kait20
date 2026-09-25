@@ -50,6 +50,18 @@ export const updateEventRequestSchema = eventValuesSchema
 export type UpdateEventRequest = z.infer<typeof updateEventRequestSchema>;
 
 export const eventResponseSchema = z.object({
+  completionSummary: z
+    .object({
+      attendedStudents: z.number().int().nonnegative(),
+      confirmed: z.number().int().nonnegative(),
+      awarded: z.number().int().nonnegative(),
+      noRule: z.number().int().nonnegative(),
+      alreadyConfirmed: z.number().int().nonnegative(),
+      cancelled: z.number().int().nonnegative(),
+      retried: z.number().int().nonnegative(),
+    })
+    .strict()
+    .optional(),
   effectiveStatus: eventStatusSchema.optional(),
   formConfig: registrationFormConfigSchema.optional(),
   streamsEnabled: z.boolean().optional(),
