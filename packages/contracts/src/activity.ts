@@ -231,6 +231,32 @@ export const rosterImportSchema = z
   .strict();
 export type RosterImport = z.infer<typeof rosterImportSchema>;
 
+// Validation locations only; uploaded cell values must not be echoed in errors.
+export const rosterValidationDetailsSchema = z.object({
+  reason: z.enum([
+    'FILE_TYPE',
+    'FILE_TOO_LARGE',
+    'UNREADABLE_FILE',
+    'UNSAFE_ARCHIVE',
+    'SHEET_COUNT',
+    'HEADERS',
+    'MERGED_CELLS',
+    'TOO_MANY_ROWS',
+    'FORMULA',
+    'CELL_ERROR',
+    'EXTRA_COLUMNS',
+    'VALUE_TOO_LONG',
+    'REQUIRED_VALUE',
+    'FIO_PARTS',
+    'DUPLICATE_STUDENT',
+    'EMPTY_ROSTER',
+  ]),
+  row: z.number().int().positive().max(1048576).optional(),
+  column: z.number().int().positive().max(16384).optional(),
+  firstRow: z.number().int().positive().max(1048576).optional(),
+  maxLength: z.number().int().positive().max(120).optional(),
+});
+
 export const participationAssignRequestSchema = z
   .object({
     registrationIds: z.array(uuidSchema).min(1).max(500),

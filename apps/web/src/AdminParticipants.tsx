@@ -13,13 +13,14 @@ import {
   ConsentCheckbox,
 } from '@event-registration/ui';
 import { defaultSystemFields } from '@event-registration/contracts';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
 import { AdminMosActivePublication } from './AdminMosActivePublication.js';
 import { EventParticipationWorkspace } from './AdminActivity.js';
 import { downloadEventExcel, EventExcel } from './AdminExcel.js';
 import { OnsiteStreamSelector } from './EventStreams.js';
+import { rosterErrorMessage } from './roster-errors.js';
 import {
   onsiteValues,
   participantDefaults,
@@ -820,6 +821,7 @@ export const PeopleDirectory = ({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
   const [rosterFile, setRosterFile] = useState<File>();
+  const rosterInput = useRef<HTMLInputElement>(null);
   const [rosterPreview, setRosterPreview] = useState<{
     fileHash: string;
     students: number;
@@ -854,6 +856,7 @@ export const PeopleDirectory = ({
       });
       setRosterPreview(undefined);
       setRosterFile(undefined);
+      if (rosterInput.current) rosterInput.current.value = '';
       void load();
     } catch (error) {
       setNotice(participantError(error));
@@ -929,9 +932,12 @@ export const PeopleDirectory = ({
               type="file"
               accept=".xlsx"
               aria-label="Файл контингента XLSX"
+              ref={rosterInput}
+              disabled={busy}
               onChange={(event) => {
                 setRosterFile(event.target.files?.[0]);
                 setRosterPreview(undefined);
+                setNotice(undefined);
               }}
             />
             <button
@@ -1245,6 +1251,8 @@ const displayAnswer = (value: unknown): string =>
       : String(value ?? '—');
 
 const participantError = (error: unknown): Notice => {
+  const rosterMessage = rosterErrorMessage(error);
+  if (rosterMessage) return { kind: 'error', text: rosterMessage };
   if (error instanceof ParticipantFormError) {
     return { kind: 'error', text: error.message };
   }

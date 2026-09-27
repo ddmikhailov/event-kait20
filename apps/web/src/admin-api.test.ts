@@ -16,6 +16,61 @@ const session = {
 describe('admin API client', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it('preserves structured roster validation errors', async () => {
+    const details = { reason: 'REQUIRED_VALUE', row: 8, column: 4 };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            error: {
+              code: 'INVALID_ROSTER_ROW',
+              message: 'Roster validation failed',
+              details,
+            },
+          },
+          400,
+        ),
+      ),
+    );
+    await expect(
+      new AdminApiClient().previewRoster(new File(['test'], 'roster.xlsx')),
+    ).rejects.toMatchObject({
+      code: 'INVALID_ROSTER_ROW',
+      status: 400,
+      details,
+    });
+  });
+
+  it('sends roster preview and import as multipart with CSRF and the checked file hash', async () => {
+    const fileHash = 'a'.repeat(64);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(session))
+      .mockResolvedValueOnce(jsonResponse({ fileHash, students: 1 }))
+      .mockResolvedValueOnce(jsonResponse({ created: 1 }, 201));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AdminApiClient();
+    await client.restoreSession();
+    const file = new File(['test'], 'roster.xlsx', {
+      type: 'application/octet-stream',
+    });
+    await client.previewRoster(file);
+    await client.importRoster(file, fileHash);
+    for (const index of [1, 2]) {
+      const init = fetchMock.mock.calls[index]?.[1] as RequestInit;
+      expect(init.body).toBeInstanceOf(FormData);
+      expect(new Headers(init.headers).get('x-csrf-token')).toBe(
+        session.csrfToken,
+      );
+      expect(new Headers(init.headers).has('content-type')).toBe(false);
+      expect((init.body as FormData).get('file')).toBe(file);
+    }
+    expect(
+      (fetchMock.mock.calls[2]?.[1].body as FormData).get('fileHash'),
+    ).toBe(fileHash);
+  });
+
   it('uses credentialed cookies and keeps CSRF in memory for mutations', async () => {
     const fetchMock = vi
       .fn()

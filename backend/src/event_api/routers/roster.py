@@ -30,53 +30,125 @@ REGISTER_HEADERS = (
 )
 
 
+def roster_error(
+    reason: str,
+    *,
+    row_number: int | None = None,
+    column: int | None = None,
+    first_row: int | None = None,
+    max_length: int | None = None,
+    code: str = "INVALID_ROSTER_FILE",
+    status: int = 400,
+) -> ApiError:
+    details: dict[str, Any] = {"reason": reason}
+    if row_number is not None:
+        details["row"] = row_number
+    if column is not None:
+        details["column"] = column
+    if first_row is not None:
+        details["firstRow"] = first_row
+    if max_length is not None:
+        details["maxLength"] = max_length
+    return ApiError(status, code, "Roster validation failed", details)
+
+
+def cell_text(value: Any) -> str:
+    return " ".join(str(value).split()) if value is not None else ""
+
+
+def header_values(cells: Any) -> list[str]:
+    values = [cell_text(cell.value).casefold() for cell in cells]
+    while values and not values[-1]:
+        values.pop()
+    return values
+
+
 def parse_roster(source: bytes) -> list[dict[str, str | None]]:
-    if not source or len(source) > MAX_FILE or not source.startswith(b"PK"):
-        raise ApiError(
-            400, "INVALID_ROSTER_FILE", "A valid XLSX up to 5 MiB is required"
-        )
-    _validate_xlsx_archive(source)
+    if len(source) > MAX_FILE:
+        raise roster_error("FILE_TOO_LARGE")
+    if not source or not source.startswith(b"PK"):
+        raise roster_error("UNREADABLE_FILE")
+    try:
+        _validate_xlsx_archive(source)
+    except ApiError as error:
+        raise roster_error("UNSAFE_ARCHIVE") from error
     try:
         workbook = load_workbook(io.BytesIO(source), read_only=False, data_only=False)
     except Exception as error:
-        raise ApiError(400, "INVALID_ROSTER_FILE", "Cannot read XLSX") from error
+        raise roster_error("UNREADABLE_FILE") from error
     try:
         if len(workbook.worksheets) != 1:
-            raise ApiError(400, "INVALID_ROSTER_FILE", "One sheet is required")
+            raise roster_error("SHEET_COUNT")
         sheet = workbook.worksheets[0]
-        register_format = (
-            sheet.max_row >= 2
-            and [str(cell.value or "").strip() for cell in sheet[2]]
-            == list(REGISTER_HEADERS)
-            and str(sheet["A1"].value or "").strip() == "Реестр контингента"
-            and {str(merged) for merged in sheet.merged_cells.ranges} == {"A1:G1"}
-        )
-        if not register_format and sheet.merged_cells.ranges:
-            raise ApiError(400, "INVALID_ROSTER_FILE", "Unexpected merged cells")
-        headers = [str(cell.value or "").strip() for cell in sheet[1]]
-        if not register_format and headers != list(HEADERS):
-            raise ApiError(400, "INVALID_ROSTER_HEADERS", "Unsupported roster columns")
+        first = header_values(sheet[1])
+        header_row = 2 if first == ["реестр контингента"] else 1
+        headers = header_values(sheet[header_row])
+        register_format = headers == [value.casefold() for value in REGISTER_HEADERS]
+        if not register_format and headers != [value.casefold() for value in HEADERS]:
+            raise roster_error(
+                "HEADERS", row_number=header_row, code="INVALID_ROSTER_HEADERS"
+            )
+        allowed_merges = {"A1:G1"} if register_format and header_row == 2 else set()
+        if {str(merged) for merged in sheet.merged_cells.ranges} - allowed_merges:
+            raise roster_error("MERGED_CELLS")
+        width = 7 if register_format else 4
         result: list[dict[str, str | None]] = []
-        seen: set[tuple[str, ...]] = set()
-        for cells in sheet.iter_rows(min_row=3 if register_format else 2):
-            if all(cell.value in (None, "") for cell in cells):
+        seen: dict[tuple[str, ...], int] = {}
+        for row_number, cells in enumerate(
+            sheet.iter_rows(min_row=header_row + 1), start=header_row + 1
+        ):
+            if all(not cell_text(cell.value) for cell in cells):
                 continue
-            if len(result) >= MAX_ROWS or len(cells) != (7 if register_format else 4):
-                raise ApiError(400, "INVALID_ROSTER_FILE", "Too many rows or columns")
-            if any(cell.data_type == "f" for cell in cells):
-                raise ApiError(400, "INVALID_ROSTER_FILE", "Formulas are not allowed")
-            values = [str(cell.value or "").strip() for cell in cells]
-            if any(len(value) > 120 for value in values):
-                raise ApiError(
-                    400, "INVALID_ROSTER_ROW", f"Row {cells[0].row}: value is too long"
-                )
+            if len(result) >= MAX_ROWS:
+                raise roster_error("TOO_MANY_ROWS", row_number=row_number)
+            for column, cell in enumerate(cells, start=1):
+                if cell.data_type == "f":
+                    raise roster_error("FORMULA", row_number=row_number, column=column)
+                if cell.data_type == "e":
+                    raise roster_error(
+                        "CELL_ERROR", row_number=row_number, column=column
+                    )
+                if column > width and cell_text(cell.value):
+                    raise roster_error(
+                        "EXTRA_COLUMNS", row_number=row_number, column=column
+                    )
+            values = [cell_text(cell.value) for cell in cells[:width]]
+            for column, value in enumerate(values, start=1):
+                # The combined FIO is checked by its individual name parts below.
+                limit = 100 if not register_format or column == 3 else 120
+                if not (register_format and column == 1) and len(value) > limit:
+                    raise roster_error(
+                        "VALUE_TOO_LONG",
+                        row_number=row_number,
+                        column=column,
+                        code="INVALID_ROSTER_ROW",
+                        max_length=limit,
+                    )
+            required = (0, 2) if register_format else (0, 1, 3)
+            for index in required:
+                if not values[index]:
+                    raise roster_error(
+                        "REQUIRED_VALUE",
+                        row_number=row_number,
+                        column=index + 1,
+                        code="INVALID_ROSTER_ROW",
+                    )
             if register_format:
                 parts = values[0].split()
-                if len(parts) not in (2, 3) or not values[2]:
-                    raise ApiError(
-                        400,
-                        "INVALID_ROSTER_ROW",
-                        f"Row {cells[0].row}: FIO and group are required",
+                if len(parts) not in (2, 3):
+                    raise roster_error(
+                        "FIO_PARTS",
+                        row_number=row_number,
+                        column=1,
+                        code="INVALID_ROSTER_ROW",
+                    )
+                if any(len(part) > 100 for part in parts):
+                    raise roster_error(
+                        "VALUE_TOO_LONG",
+                        row_number=row_number,
+                        column=1,
+                        max_length=100,
+                        code="INVALID_ROSTER_ROW",
                     )
                 student = {
                     "last_name": parts[0],
@@ -90,12 +162,6 @@ def parse_roster(source: bytes) -> list[dict[str, str | None]]:
                     "program_code": values[6] or None,
                 }
             else:
-                if not all(values[index] for index in (0, 1, 3)):
-                    raise ApiError(
-                        400,
-                        "INVALID_ROSTER_ROW",
-                        f"Row {cells[0].row}: surname, name and group are required",
-                    )
                 student = {
                     "last_name": values[0],
                     "first_name": values[1],
@@ -107,24 +173,22 @@ def parse_roster(source: bytes) -> list[dict[str, str | None]]:
                     "program_name": None,
                     "program_code": None,
                 }
-            if not student["last_name"] or not student["first_name"]:
-                raise ApiError(
-                    400,
-                    "INVALID_ROSTER_ROW",
-                    f"Row {cells[0].row}: surname and name are required",
-                )
             key = tuple(
                 (student[field] or "").casefold()
                 for field in ("last_name", "first_name", "middle_name", "study_group")
             )
             if key in seen:
-                raise ApiError(
-                    409, "DUPLICATE_ROSTER_STUDENT", "Duplicate name and group"
+                raise roster_error(
+                    "DUPLICATE_STUDENT",
+                    row_number=row_number,
+                    first_row=seen[key],
+                    code="DUPLICATE_ROSTER_STUDENT",
+                    status=409,
                 )
-            seen.add(key)
+            seen[key] = row_number
             result.append(student)
         if not result:
-            raise ApiError(400, "INVALID_ROSTER_FILE", "No students in workbook")
+            raise roster_error("EMPTY_ROSTER")
         return result
     finally:
         workbook.close()
@@ -155,11 +219,13 @@ def assert_new_students(
 
 
 async def upload(file: UploadFile) -> bytes:
-    if (
-        not (file.filename or "").lower().endswith(".xlsx")
-        or file.content_type != XLSX_MIME
+    if not (file.filename or "").lower().endswith(".xlsx") or file.content_type not in (
+        XLSX_MIME,
+        "application/octet-stream",
+        "",
+        None,
     ):
-        raise ApiError(400, "INVALID_ROSTER_FILE", "Only XLSX is accepted")
+        raise roster_error("FILE_TYPE")
     return await file.read(MAX_FILE + 1)
 
 

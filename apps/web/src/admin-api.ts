@@ -157,6 +157,7 @@ export class AdminApiError extends Error {
     public readonly code: string,
     public readonly status: number,
     message: string,
+    public readonly details?: unknown,
   ) {
     super(message);
   }
@@ -1141,11 +1142,13 @@ export class AdminApiClient {
     const body = await response.json().catch(() => undefined);
     if (!response.ok) {
       const error = body as
-        { error?: { code?: string; message?: string } } | undefined;
+        | { error?: { code?: string; message?: string; details?: unknown } }
+        | undefined;
       throw new AdminApiError(
         error?.error?.code ?? 'REQUEST_FAILED',
         response.status,
         error?.error?.message ?? 'Запрос не выполнен',
+        error?.error?.details,
       );
     }
     return schema ? schema.parse(body) : (body as T);
