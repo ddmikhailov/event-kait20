@@ -22,6 +22,7 @@ from .errors import (
     validation_error_handler,
 )
 from .event_review import enqueue_due_reviews
+from .operational_logging import enable_operational_logging
 from .routers import (
     activity,
     attendance,
@@ -40,6 +41,8 @@ from .routers import (
     structure,
 )
 from .security import RateLimiter, verify_csrf
+
+LOGGER = logging.getLogger("event_api")
 
 
 @asynccontextmanager
@@ -189,11 +192,24 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
     async def correlate_request(request: Request, call_next):  # type: ignore[no-untyped-def]
         identity = request_id(request)
         token = current_request_id.set(identity)
+        started = time.perf_counter()
+        status = 500
         try:
             response = await call_next(request)
+            status = response.status_code
             response.headers["X-Request-ID"] = identity
             return response
         finally:
+            route = getattr(request.scope.get("route"), "path", "unknown")
+            if route not in {"/health", "/health/live", "/health/ready"}:
+                LOGGER.info(
+                    "HTTP request request_id=%s method=%s route=%s status=%s duration_ms=%.1f",
+                    identity,
+                    request.method,
+                    route,
+                    status,
+                    (time.perf_counter() - started) * 1000,
+                )
             current_request_id.reset(token)
 
     @app.get("/health")
@@ -252,4 +268,13 @@ def run() -> None:
     import uvicorn
 
     settings = get_settings()
-    uvicorn.run("event_api.main:app", host=settings.api_host, port=settings.api_port)
+    if settings.production:
+        enable_operational_logging()
+    # The default access log includes raw paths and query strings. Use the
+    # template-only request log in correlate_request instead.
+    uvicorn.run(
+        "event_api.main:app",
+        host=settings.api_host,
+        port=settings.api_port,
+        access_log=False,
+    )

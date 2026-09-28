@@ -533,6 +533,37 @@ def test_unexpected_error_logging_uses_route_template_and_redacts_details(
         assert sensitive not in response.body.decode()
 
 
+def test_request_completion_log_uses_template_and_excludes_private_url(
+    client: TestClient, caplog
+) -> None:  # type: ignore[no-untyped-def]
+    with caplog.at_level(logging.INFO, logger="event_api"):
+        response = client.get(
+            "/public/profiles/participant@example.test?token=secret-token"
+        )
+
+    log = caplog.text
+    assert response.status_code == 404
+    assert f"request_id={response.headers['x-request-id']}" in log
+    assert "route=/public/profiles/{slug} status=404 duration_ms=" in log
+    assert "participant@example.test" not in log
+    assert "secret-token" not in log
+
+
+def test_server_entrypoint_disables_raw_access_log(client: TestClient) -> None:
+    from event_api.main import run
+
+    production = client.app.state.settings.model_copy(update={"node_env": "production"})
+    with (
+        patch("event_api.main.get_settings", return_value=production),
+        patch("event_api.main.enable_operational_logging") as setup_logging,
+        patch("uvicorn.run") as start_server,
+    ):
+        run()
+
+    setup_logging.assert_called_once_with()
+    assert start_server.call_args.kwargs["access_log"] is False
+
+
 def test_production_login_cookie_is_secure(
     client: TestClient, database_url: str
 ) -> None:

@@ -192,6 +192,13 @@ Operational logs:
 - status/latency;
 - internal error code.
 
+The API emits one request completion record with the server request ID, route
+template, method, status and duration; the Uvicorn raw access log is disabled
+for the application entrypoint. Email delivery outcomes log only delivery type,
+status and a fixed error code, never recipient addresses or message contents.
+Use route/status aggregates to monitor import and scoring failures. A failed
+transaction can have an operational log without an audit row.
+
 Do not log request bodies for registration/auth by default.
 
 Audit log records significant admin actions but should store field names/compact context rather than a second full copy of sensitive before/after PII.

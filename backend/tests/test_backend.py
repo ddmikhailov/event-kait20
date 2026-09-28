@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -2302,7 +2303,15 @@ def test_repeated_forgot_password_does_not_invalidate_pending_link(
 
 def test_email_worker_sends_durable_intent_without_persisting_link(
     client: TestClient,
+    caplog,
 ) -> None:
+    headers, _ = _login(client)
+    queued = client.post(
+        "/auth/password/forgot",
+        headers=headers,
+        json={"email": "admin@example.com"},
+    )
+    assert queued.status_code == 202
     database: Database = client.app.state.database
     config = client.app.state.settings.model_copy(
         update={
@@ -2316,8 +2325,13 @@ def test_email_worker_sends_durable_intent_without_persisting_link(
         captured.append(str(message))
         return "provider-test-id"
 
-    assert process_once(database, config, fake_sender) == 1
+    with caplog.at_level(logging.INFO, logger="event_api"):
+        assert process_once(database, config, fake_sender) == 1
     assert captured and "provider-test-id" not in captured[0]
+    assert "Email delivery outcome type=" in caplog.text
+    assert "status=SENT" in caplog.text
+    assert "provider-test-id" not in caplog.text
+    assert "@example" not in caplog.text
     with database.connect() as connection:
         delivery = (
             connection.execute(

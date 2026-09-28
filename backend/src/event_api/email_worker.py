@@ -15,8 +15,11 @@ from sqlalchemy import text
 
 from .config import Settings, get_settings
 from .database import Database
+from .operational_logging import enable_operational_logging
 from .registration_service import ticket_url
 from .security import AuthPurpose, auth_link_token
+
+LOGGER = logging.getLogger("event_api")
 
 # Terminal cancellation reasons for a queued message whose underlying intent
 # is no longer current. Shared with the routers that proactively cancel a
@@ -340,6 +343,11 @@ def process_once(
                     ),
                     {"code": cancellation_reason, "id": delivery.id},
                 )
+            LOGGER.info(
+                "Email delivery outcome type=%s status=CANCELLED code=%s",
+                delivery.type,
+                cancellation_reason,
+            )
             return 1
         try:
             provider_id = sender(_message(delivery, config), config)
@@ -369,6 +377,12 @@ def process_once(
                         "retry": retry_at,
                     },
                 )
+            LOGGER.info(
+                "Email delivery outcome type=%s status=%s code=%s",
+                delivery.type,
+                status,
+                code,
+            )
         else:
             with database.transaction() as connection:
                 connection.execute(
@@ -378,6 +392,10 @@ def process_once(
                     ),
                     {"provider": provider_id[:255], "id": delivery.id},
                 )
+            LOGGER.info(
+                "Email delivery outcome type=%s status=SENT",
+                delivery.type,
+            )
     finally:
         if owned:
             database.dispose()
@@ -388,6 +406,8 @@ def main() -> None:
     config = get_settings()
     if config.production and not config.smtp_host:
         raise RuntimeError("SMTP_HOST is required in production")
+    if config.production:
+        enable_operational_logging()
     logger = logging.getLogger("event_api")
     database = Database(config)
     consecutive_failures = 0
