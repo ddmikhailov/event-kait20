@@ -31,6 +31,10 @@ container starts the email worker only when `SMTP_HOST` is configured.
 `EventKI20BetaDB` host, `event_registration` schema and `event_app` user, then
 connects to verify MySQL version 8.1.0 and the selected schema. The app exits
 before a migration or HTTP listener starts if this check fails.
+The gate retries temporary DNS/connect errors (MySQL 2003/2005) up to six
+times, five seconds apart, because the database service may resolve shortly
+after the application starts. Wrong credentials, database identity and version
+fail immediately; exhausted retries still prevent the application from starting.
 
 ## Amvera environment variables
 

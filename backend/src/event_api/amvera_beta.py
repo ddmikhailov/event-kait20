@@ -1,15 +1,18 @@
 """Fail closed before starting or migrating the isolated Amvera beta."""
 
 import os
+import time
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import ArgumentError
+from sqlalchemy.exc import ArgumentError, OperationalError
 
 EXPECTED_HOST = "amvera-ddmikhailov-run-eventki20betadb"
 EXPECTED_DATABASE = "event_registration"
 EXPECTED_USER = "event_app"
 EXPECTED_VERSION = "8.1.0"
+CONNECTION_ATTEMPTS = 6
+RETRY_SECONDS = 5
 
 
 def validate_database_url(value: str) -> str:
@@ -36,6 +39,12 @@ def validate_server_identity(version: str, database: str | None) -> None:
         raise RuntimeError("Amvera beta MySQL version or selected database is wrong")
 
 
+def transient_connect_error(error: OperationalError) -> bool:
+    """Retry only a temporarily unavailable MySQL endpoint, not credentials."""
+    arguments = getattr(error.orig, "args", ())
+    return bool(arguments and arguments[0] in (2003, 2005))
+
+
 def main() -> None:
     database_url = os.environ.get("DATABASE_URL", "")
     engine = create_engine(
@@ -44,11 +53,21 @@ def main() -> None:
         connect_args={"connect_timeout": 5},
     )
     try:
-        with engine.connect() as connection:
-            version, database = connection.execute(
-                text("SELECT VERSION(), DATABASE()")
-            ).one()
-            validate_server_identity(version, database)
+        for attempt in range(CONNECTION_ATTEMPTS):
+            try:
+                with engine.connect() as connection:
+                    version, database = connection.execute(
+                        text("SELECT VERSION(), DATABASE()")
+                    ).one()
+                    validate_server_identity(version, database)
+                return
+            except OperationalError as error:
+                if (
+                    not transient_connect_error(error)
+                    or attempt + 1 == CONNECTION_ATTEMPTS
+                ):
+                    raise
+                time.sleep(RETRY_SECONDS)
     finally:
         engine.dispose()
 
