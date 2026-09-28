@@ -32,6 +32,10 @@ export const participantListQuerySchema = pageQuerySchema.extend({
 });
 export type ParticipantListQuery = z.infer<typeof participantListQuerySchema>;
 
+export const personListQuerySchema = participantListQuerySchema.extend({
+  dedupReviewRequired: z.boolean().optional(),
+});
+
 export const registrationListQuerySchema = participantListQuerySchema.extend({
   status: registrationStatusSchema.optional(),
 });
@@ -55,15 +59,28 @@ const registrationHistoryItemSchema = z.object({
   firstAttendedAt: z.iso.datetime({ offset: true }).nullable(),
 });
 
+export const rosterMetadataSchema = z.object({
+  educationStatus: z.string().trim().min(1).max(120).nullable(),
+  campusAddress: z.string().trim().min(1).max(120).nullable(),
+  course: z.string().trim().min(1).max(120).nullable(),
+  programName: z.string().trim().min(1).max(120).nullable(),
+  programCode: z.string().trim().min(1).max(120).nullable(),
+});
+export const updateRosterMetadataRequestSchema = rosterMetadataSchema
+  .extend({
+    expectedVersion: z.string().regex(/^[a-f0-9]{64}$/),
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict();
+export type UpdateRosterMetadataRequest = z.infer<
+  typeof updateRosterMetadataRequestSchema
+>;
+
 export const personDetailResponseSchema = personSummarySchema.extend({
-  roster: z
-    .object({
-      educationStatus: z.string().nullable(),
-      campusAddress: z.string().nullable(),
-      course: z.string().nullable(),
-      programName: z.string().nullable(),
-      programCode: z.string().nullable(),
-    })
+  roster: rosterMetadataSchema.nullable(),
+  rosterVersion: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
     .nullable(),
   registrations: z.array(registrationHistoryItemSchema),
 });

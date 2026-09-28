@@ -409,6 +409,16 @@ reconciliation remains controlled and never infers course from group text.
 
 ## 22. MosActive scoring v2
 
+Миграция `019_review_preparation_retry.sql` добавляет в `events` nullable-поля
+`review_preparation_error`, `review_retry_at` и индекс очереди. Существующие
+мероприятия и начисления не изменяются. Применить миграцию штатным runner до
+запуска новой версии приложения; на тестовой копии проверить старые записи,
+ошибку подготовки, следующий проход очереди и успешный повтор. Перед production
+обновлением выполнить предусмотренное инфраструктурой резервное копирование.
+Откат приложения допускает сохранение новых nullable-полей и индекса: старая
+версия их не использует. Удалять их при оперативном откате не требуется;
+откат старого планировщика возвращает прежнее поведение очереди.
+
 Migration 017 добавляет `events.boost_multiplier` (1, 1.5, 2, 3),
 `activity_review_required` для новых Events и `activity_review_state`.
 `student_roster_members` связывает проверенный Person с контингентом;
@@ -438,3 +448,12 @@ null engine marker. New Stage 2 classifier seeds use exact existing codes and
 policy components resolve the actual existing IDs, without changing display names.
 Newcomer history counts distinct confirmed Participation or Participation with a
 historical engine AWARD, so later cancellation/reversal cannot reclaim a sequence.
+
+Migration 020 adds `scanner_rejected_attendance` for durable handoff of rejected
+Scanner marks. `client_event_id` is the idempotency key; the original device,
+registration, mode, source and timestamps remain immutable. An unknown
+registration ID is allowed because it may be the rejection cause. Only a
+staff-authorized resolution changes `OPEN` to `RESOLVED` with a reason and audit
+entry; neither operation changes attendance or scoring. Event purge removes
+these Event-scoped cases via the event foreign key. Rollback keeps the additive
+table; do not discard unresolved cases.

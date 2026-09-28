@@ -151,6 +151,27 @@ Required:
 
 PWA application-shell updates must not delete pending attendance. Schema migrations for IndexedDB must be backward-safe and tested. A new release cannot force-clear local business data just to fix cache issues.
 
+Scanner uses the PWA prompt strategy. The event selection screen shows a new
+version and an explicit **Обновить Scanner** action. It is unavailable while an
+operation or reconnect is running; the scanner screen has no update action.
+Returning from scanning is disabled during recording/synchronization. Applying
+an update blocks further UI actions until reload, or until activation fails or
+times out (30 seconds), when the operator can retry.
+
+Registration checks for updates on startup, window focus, reconnection and once
+an hour. Initial shell caching has a separate offline-ready message: the Event
+bundle must still be prepared. A worker claims clients on activation, but reload
+is controlled by the current tab's explicit update request. An activation from
+another tab never forces this tab to reload. Native controller changes also
+cover a tab opened before the first worker installation; Workbox's initial
+`isUpdate` flag alone does not cover that case.
+
+The update path does not clear IndexedDB or submit attendance with a new ID.
+Pending, syncing and rejected records retain their original identifiers. These
+protections apply to clients running this version; previously installed clients
+with older update handlers should be restarted between scanning sessions when
+first moving to this release. Do not clear site data to install an update.
+
 ## 13. Scanner client implementation freeze
 
 The MVP Scanner PWA uses Dexie-backed IndexedDB and keeps the CSRF token only
@@ -166,3 +187,11 @@ offline business tables while retaining only the anonymous device identifier.
 
 Production freezes `VITE_API_BASE_URL=/api`; Scanner uses its own same-origin
 Apache proxy. The value is not a secret.
+
+Rejected marks remain on the device until the operator sends each original
+`client_event_id` to `POST /scanner/events/{eventId}/attendance/rejections`.
+Only a successful server response for that same ID permits transactional local
+deletion. A network failure leaves the mark unchanged. Administrators see open
+cases and record a reason when closing them. Handoff and closure do not create
+attendance or points; attendance corrections use the Event review workflow.
+The server case survives device logout and shift change.

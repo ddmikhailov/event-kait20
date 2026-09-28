@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
+from publication_fixture import publication_fields
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
@@ -394,7 +395,7 @@ def test_public_registration_and_idempotent_attendance(client: TestClient) -> No
     opened = client.patch(
         f"/admin/events/{event_id}",
         headers=headers,
-        json={"status": "REGISTRATION_OPEN"},
+        json={"status": "REGISTRATION_OPEN", **publication_fields(client)},
     )
     assert opened.status_code == 200, opened.text
     client.cookies.clear()
@@ -686,6 +687,7 @@ def test_organizer_boundaries_archived_visibility_and_event_purge(
         "registrationDeadline": "2026-11-09T10:00:00Z",
         "capacity": 10,
         "status": "REGISTRATION_OPEN",
+        **publication_fields(client),
     }
     created = client.post("/admin/events", headers=organizer_headers, json=payload)
     assert created.status_code == 201, created.text
@@ -1082,12 +1084,19 @@ def test_excel_preview_commit_and_safe_export(client: TestClient) -> None:
                 "choices": json.dumps(["Робототехника", "Дизайн"], ensure_ascii=False),
             },
         )
+    renamed = client.patch(
+        f"/admin/events/{event_id}/form-fields/{choices_field_id}",
+        headers=headers,
+        json={"label": "Новое название вопроса"},
+    )
+    assert renamed.status_code == 200, renamed.text
     exported = client.get(f"/admin/events/{event_id}/export.xlsx")
     assert exported.status_code == 200
     assert exported.content.startswith(b"PK")
     exported_workbook = load_workbook(BytesIO(exported.content), data_only=False)
     exported_sheet = exported_workbook["Участники"]
     exported_headers = [cell.value for cell in exported_sheet[1]]
+    assert "Поле: Новое название вопроса" not in exported_headers
     email_index = exported_headers.index("Email")
     exported_cells = next(
         row
@@ -1237,6 +1246,7 @@ def test_stream_capacity_visibility_and_audience(client: TestClient) -> None:
         "registrationDeadline": "2027-10-09T07:00:00Z",
         "capacity": 100,
         "status": "REGISTRATION_OPEN",
+        **publication_fields(client),
         "isListed": False,
         "allowedPersonTypes": ["PARENT"],
     }
@@ -1403,6 +1413,7 @@ def test_stream_race_scanner_override_and_report(client: TestClient) -> None:
             "registrationDeadline": "2027-11-09T07:00:00Z",
             "capacity": 100,
             "status": "REGISTRATION_OPEN",
+            **publication_fields(client),
         },
     )
     assert created.status_code == 201, created.text
@@ -1583,6 +1594,7 @@ def test_registration_constructor_and_private_retry_receipts(
             "registrationDeadline": "2027-10-09T07:00:00Z",
             "capacity": 100,
             "status": "REGISTRATION_OPEN",
+            **publication_fields(client),
         },
     )
     assert created.status_code == 201, created.text
@@ -1791,6 +1803,7 @@ def test_form_field_creation_enforces_active_limit_and_exact_limit_submits(
             "registrationDeadline": "2027-10-09T07:00:00Z",
             "capacity": 100,
             "status": "REGISTRATION_OPEN",
+            **publication_fields(client),
         },
     )
     assert created.status_code == 201, created.text
@@ -1873,6 +1886,7 @@ def test_form_field_edit_and_deactivate_remain_allowed_at_limit(
             "registrationDeadline": "2027-10-09T07:00:00Z",
             "capacity": 10,
             "status": "REGISTRATION_OPEN",
+            **publication_fields(client),
         },
     )
     assert created.status_code == 201, created.text
@@ -1947,6 +1961,7 @@ def test_legacy_over_limit_event_can_recover_but_not_grow(
             "registrationDeadline": "2027-10-09T07:00:00Z",
             "capacity": 10,
             "status": "REGISTRATION_OPEN",
+            **publication_fields(client),
         },
     )
     assert created.status_code == 201, created.text
@@ -2000,6 +2015,7 @@ def test_form_field_creation_race_does_not_exceed_limit(client: TestClient) -> N
             "registrationDeadline": "2027-10-09T07:00:00Z",
             "capacity": 10,
             "status": "REGISTRATION_OPEN",
+            **publication_fields(client),
         },
     )
     assert created.status_code == 201, created.text
@@ -2063,6 +2079,7 @@ def test_live_event_status_and_closed_catalogue(client: TestClient) -> None:
         "endAt": (now + timedelta(hours=2)).isoformat(),
         "registrationDeadline": (now + timedelta(minutes=30)).isoformat(),
         "status": "REGISTRATION_OPEN",
+        **publication_fields(client),
     }
     created = client.post("/admin/events", headers=headers, json=payload)
     assert created.status_code == 201, created.text
@@ -2854,6 +2871,7 @@ def test_scanner_reporting_and_stream_routes_reject_event_outside_staff_scope(
             "registrationDeadline": "2027-10-31T07:00:00Z",
             "capacity": 10,
             "status": "REGISTRATION_OPEN",
+            **publication_fields(client),
         },
     )
     assert created.status_code == 201, created.text
@@ -3610,6 +3628,7 @@ def test_excel_commit_failure_after_person_resolution_releases_lock(
             "registrationDeadline": "2027-10-15T07:00:00Z",
             "capacity": 1,
             "status": "REGISTRATION_OPEN",
+            **publication_fields(client),
         },
     ).json()["id"]
     filler = client.post(

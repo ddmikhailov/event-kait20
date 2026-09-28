@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -81,7 +81,7 @@ def bundle(
         for item in registrations
     ]
     encoded = json.dumps(items, ensure_ascii=False, separators=(",", ":"))
-    now = __import__("datetime").datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     expires = event["end_at"] + timedelta(hours=24)
     return {
         "eventId": str(event_id),

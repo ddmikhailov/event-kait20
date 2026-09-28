@@ -10,6 +10,7 @@ import {
   loginRequestSchema,
   personTypeSchema,
   personTypeLabels,
+  scoringSetupDetailsSchema,
 } from '@event-registration/contracts';
 import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
@@ -140,7 +141,12 @@ const AdminWorkspace = ({
     | 'adjustments'
     | 'directions'
     | 'scoring'
-  >('events');
+  >(() =>
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('section') === 'scoring'
+      ? 'scoring'
+      : 'events',
+  );
   const [selected, setSelected] = useState<EventResponse>();
   const [showArchived, setShowArchived] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -257,6 +263,7 @@ const AdminWorkspace = ({
   if (view === 'reviewQueue') {
     return (
       <EventReviewQueue
+        canCorrect={session.user.role === 'SUPER_ADMIN'}
         onBack={() => {
           setView('events');
           void loadEvents();
@@ -416,6 +423,19 @@ export const EventGrid = ({
         <h2>{event.title}</h2>
         <p>{formatDate(event.startAt, event.timezone)}</p>
         <p>{event.location}</p>
+        {event.reviewPreparationError && (
+          <p className="admin-notice error">
+            Не удалось подготовить сверку:{' '}
+            {event.reviewPreparationError === 'EVENT_COMPLETION_TOO_LARGE'
+              ? 'больше 5000 действующих регистраций'
+              : event.reviewPreparationError === 'PARTICIPATION_ROLE_REQUIRED'
+                ? 'нет активной роли «Участник»'
+                : 'ошибка обработки'}
+            .
+            {event.reviewRetryAt &&
+              ` Повторная попытка: ${formatDate(event.reviewRetryAt, event.timezone)}.`}
+          </p>
+        )}
         <div className="event-card-actions">
           <button
             className="secondary-button"
@@ -865,6 +885,7 @@ export const EventForm = ({
           key={values.capacity}
           readOnly={event?.streamsEnabled ?? false}
           min={1}
+          max={5000}
           value={values.capacity}
           required
           disabled={readOnly}
@@ -921,6 +942,14 @@ export const EventForm = ({
             ))}
           </select>
         </label>
+        <p className="muted">
+          Для открытия регистрации нужны сезон, уровень и опубликованные правила
+          начисления на дату мероприятия. Пока правила не готовы, сохраните
+          мероприятие как черновик.{' '}
+          <a href="/admin?section=scoring" target="_blank" rel="noreferrer">
+            Правила начисления — открыть в новой вкладке
+          </a>
+        </p>
         <label>
           <span>Категория активности</span>
           <select
@@ -942,7 +971,6 @@ export const EventForm = ({
             name="levelId"
             defaultValue={values.levelId}
             disabled={readOnly}
-            required={!readOnly}
           >
             <option value="">Не выбран</option>
             {levels.map((level) => (
@@ -1474,6 +1502,25 @@ const fieldTypeLabel = (type: FormFieldResponse['type']) =>
 
 const errorNotice = (error: unknown): Notice => {
   if (error instanceof AdminApiError) {
+    if (error.code === 'SCORING_SETUP_REQUIRED') {
+      const details = scoringSetupDetailsSchema.safeParse(error.details);
+      const reasons = {
+        SEASON_REQUIRED: 'Выберите сезон активности.',
+        LEVEL_REQUIRED: 'Выберите уровень мероприятия.',
+        POLICY_REQUIRED:
+          'Назначьте сезону правила начисления, действующие на дату мероприятия.',
+        POLICY_VERSION_REQUIRED:
+          'Опубликуйте версию правил, действующую на дату мероприятия.',
+        PARTICIPANT_BASE_REQUIRED:
+          'В правилах не заданы баллы для активной роли «Участник».',
+        LEVEL_MULTIPLIER_REQUIRED:
+          'В правилах не задан множитель выбранного уровня мероприятия.',
+      };
+      return {
+        kind: 'error',
+        text: `${details.success ? reasons[details.data.reason] : 'Проверьте правила начисления для сезона и уровня мероприятия.'} Пока настройка не завершена, сохраните мероприятие как черновик. Правила изменяет главный администратор.`,
+      };
+    }
     const messages: Record<string, string> = {
       INVALID_CREDENTIALS: 'Неверный email или пароль',
       UNAUTHENTICATED: 'Сессия завершена. Войдите снова',
@@ -1489,6 +1536,8 @@ const errorNotice = (error: unknown): Notice => {
         'Проверьте даты: окончание должно быть после начала, а приём заявок — завершиться не позже начала',
       CAPACITY_BELOW_ACTIVE_REGISTRATIONS:
         'Количество мест меньше числа действующих регистраций',
+      EVENT_REGISTRATION_LIMIT:
+        'Лимит мероприятия — 5000 действующих регистраций, включая все потоки и добавление сверх вместимости.',
       FORM_FIELD_LIMIT_EXCEEDED:
         'Достигнут лимит дополнительных полей формы. Отключите неиспользуемое поле, чтобы добавить новое',
       CONFLICT: 'Такой адрес страницы уже используется',

@@ -16,6 +16,7 @@ from ..dependencies import (
 )
 from ..email_worker import REGISTRATION_CANCELLED
 from ..errors import ApiError
+from ..person_roster import ROSTER_FIELDS, RosterMetadataUpdate, roster_version
 from ..registration_service import ticket_url, validate_participant_type
 from ..schemas import PersonUpdate
 from ..service_utils import audit, json_value, serial
@@ -89,6 +90,7 @@ def list_people(
     query: str = Query("", max_length=200),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, alias="pageSize", ge=1, le=100),
+    dedup_review_required: bool | None = Query(None, alias="dedupReviewRequired"),
 ) -> dict[str, Any]:
     params = {
         "query": query,
@@ -96,8 +98,9 @@ def list_people(
         "limit": page_size,
         "offset": (page - 1) * page_size,
         "tenant": staff.tenant_id,
+        "dedup": dedup_review_required,
     }
-    where = """tenant_id=:tenant AND merged_into_id IS NULL AND (:query='' OR concat_ws(' ',last_name,first_name,middle_name) LIKE :search
+    where = """tenant_id=:tenant AND merged_into_id IS NULL AND (:dedup IS NULL OR dedup_review_required=:dedup) AND (:query='' OR concat_ws(' ',last_name,first_name,middle_name) LIKE :search
         OR coalesce(email,'') LIKE :search OR coalesce(phone,'') LIKE :search OR coalesce(study_group,'') LIKE :search)"""
     with db.connect() as connection:
         items = rows(
@@ -145,6 +148,7 @@ def get_person(
         raise ApiError(404, "NOT_FOUND", "Person not found")
     return {
         **person_response(item),
+        "rosterVersion": roster_version(str(person_id), roster) if roster else None,
         "roster": (
             {
                 "educationStatus": roster["education_status"],
@@ -223,6 +227,64 @@ def update_person(
             target,
             {"fields": sorted(values.model_fields_set)},
         )
+    return get_person(person_id, staff, db)
+
+
+@people.patch("/{person_id}/roster-metadata")
+def update_roster_metadata(
+    person_id: UUID,
+    values: RosterMetadataUpdate,
+    staff: Annotated[Staff, Depends(csrf_administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    target = str(person_id)
+    with db.transaction() as connection:
+        person = row(
+            connection,
+            "SELECT id FROM persons WHERE id=:id AND tenant_id=:tenant AND merged_into_id IS NULL FOR UPDATE",
+            {"id": target, "tenant": staff.tenant_id},
+        )
+        if not person:
+            raise ApiError(404, "NOT_FOUND", "Person not found")
+        member = row(
+            connection,
+            "SELECT * FROM student_roster_members WHERE person_id=:id FOR UPDATE",
+            {"id": target},
+        )
+        if not member:
+            raise ApiError(404, "ROSTER_STUDENT_REQUIRED", "Roster record not found")
+        if values.expected_version != roster_version(target, member):
+            raise ApiError(
+                409,
+                "ROSTER_METADATA_CHANGED",
+                "Roster metadata has changed; reload before saving",
+            )
+        changes = values.model_dump(exclude={"expected_version", "reason", "course"})
+        changes["course_label"] = values.course
+        changed = sorted(
+            field for field in ROSTER_FIELDS if member[field] != changes[field]
+        )
+        if changed:
+            execute(
+                connection,
+                """UPDATE student_roster_members SET education_status=:education_status,
+                campus_address=:campus_address,course_label=:course_label,program_name=:program_name,
+                program_code=:program_code WHERE person_id=:id""",
+                {**changes, "id": target},
+            )
+            execute(
+                connection,
+                "UPDATE persons SET updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
+                {"id": target},
+            )
+            audit(
+                connection,
+                staff.id,
+                "ROSTER_METADATA_UPDATED",
+                "Person",
+                target,
+                {"fields": changed, "reason": values.reason},
+            )
     return get_person(person_id, staff, db)
 
 

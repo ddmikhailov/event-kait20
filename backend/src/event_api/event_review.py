@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.engine import Connection
 
-from .activity_service import confirm_registration, reference
+from .activity_service import (
+    cancel_participation,
+    confirm_registration,
+    reference,
+    update_participation,
+)
 from .database import Database, execute, row, rows
 from .errors import ApiError
 from .service_utils import audit, serial
@@ -62,7 +69,8 @@ def prepare_review(
         )
     execute(
         connection,
-        """UPDATE events SET activity_review_state='PENDING',updated_at=UTC_TIMESTAMP(3)
+        """UPDATE events SET activity_review_state='PENDING',review_preparation_error=NULL,
+        review_retry_at=NULL,updated_at=UTC_TIMESTAMP(3)
         WHERE id=:event AND activity_review_state='NOT_STARTED'""",
         {"event": event_id},
     )
@@ -83,7 +91,10 @@ def prepare_review(
 
 def enqueue_due_reviews(database: Database, now: datetime | None = None) -> int:
     """Move eligible Events to review 24 hours after their scheduled end."""
-    cutoff = (now or datetime.now(UTC)).replace(tzinfo=None) - timedelta(hours=24)
+    clock = now or datetime.now(UTC)
+    clock = clock.replace(tzinfo=UTC) if clock.tzinfo is None else clock
+    clock = clock.astimezone(UTC).replace(tzinfo=None)
+    cutoff = clock - timedelta(hours=24)
     with database.connect() as connection:
         due = rows(
             connection,
@@ -91,8 +102,9 @@ def enqueue_due_reviews(database: Database, now: datetime | None = None) -> int:
             WHERE status IN ('REGISTRATION_OPEN','REGISTRATION_CLOSED','ACTIVE')
               AND activity_review_required=true
               AND activity_review_state='NOT_STARTED' AND end_at<=:cutoff
+              AND (review_retry_at IS NULL OR review_retry_at<=:now)
             ORDER BY end_at,id LIMIT 20""",
-            {"cutoff": cutoff},
+            {"cutoff": cutoff, "now": clock},
         )
     completed = 0
     for event in due:
@@ -103,8 +115,9 @@ def enqueue_due_reviews(database: Database, now: datetime | None = None) -> int:
                     """SELECT id FROM events WHERE id=:id
                     AND status IN ('REGISTRATION_OPEN','REGISTRATION_CLOSED','ACTIVE')
                     AND activity_review_required=true AND activity_review_state='NOT_STARTED'
-                    AND end_at<=:cutoff FOR UPDATE SKIP LOCKED""",
-                    {"id": event["id"], "cutoff": cutoff},
+                    AND end_at<=:cutoff AND (review_retry_at IS NULL OR review_retry_at<=:now)
+                    FOR UPDATE SKIP LOCKED""",
+                    {"id": event["id"], "cutoff": cutoff, "now": clock},
                 )
                 if not eligible:
                     continue
@@ -116,11 +129,45 @@ def enqueue_due_reviews(database: Database, now: datetime | None = None) -> int:
                 )
                 prepare_review(connection, event["id"], None)
             completed += 1
-        except ApiError:
-            logging.getLogger(__name__).exception(
-                "Could not prepare Event review %s", event["id"]
+        except Exception as error:
+            code = (
+                error.code
+                if isinstance(error, ApiError)
+                else "REVIEW_PREPARATION_FAILED"
             )
+            logging.getLogger(__name__).error(
+                "Review preparation failed event_id=%s code=%s", event["id"], code
+            )
+            with database.transaction() as connection:
+                execute(
+                    connection,
+                    """UPDATE events SET review_preparation_error=:code,review_retry_at=:retry
+                    WHERE id=:id AND activity_review_state='NOT_STARTED'""",
+                    {
+                        "id": event["id"],
+                        "code": code,
+                        "retry": clock + timedelta(minutes=5),
+                    },
+                )
     return completed
+
+
+def review_version(item: Any) -> str:
+    """Opaque optimistic-concurrency token, including the latest Scanner mark."""
+    fields = (
+        "attendance_decision",
+        "scanner_first_attended_at",
+        "first_attended_at",
+        "role_id",
+        "result_id",
+        "match_state",
+        "roster_person_id",
+        "decision_reason",
+        "reviewed_at",
+    )
+    return hashlib.sha256(
+        json.dumps([item[field] for field in fields], default=str).encode()
+    ).hexdigest()
 
 
 def review_items(connection: Connection, event_id: str) -> list[dict[str, Any]]:
@@ -140,6 +187,7 @@ def review_items(connection: Connection, event_id: str) -> list[dict[str, Any]]:
     )
     return [
         {
+            "version": review_version(item),
             "registrationId": item["id"],
             "lastName": item["last_name"],
             "firstName": item["first_name"],
@@ -177,16 +225,37 @@ def update_review_item(
     reject_match: bool,
     reason: str,
     tenant_id: str,
+    expected_version: str,
 ) -> None:
     current = row(
         connection,
-        """SELECT review.*,r.person_type FROM event_participation_reviews review
+        """SELECT review.*,r.person_type,r.first_attended_at FROM event_participation_reviews review
         JOIN registrations r ON r.id=review.registration_id
         WHERE review.event_id=:event AND review.registration_id=:registration FOR UPDATE""",
         {"event": event_id, "registration": registration_id},
     )
     if not current:
         raise ApiError(404, "REVIEW_ITEM_NOT_FOUND", "Review item not found")
+    if review_version(current) != expected_version:
+        raise ApiError(
+            409, "REVIEW_ITEM_CHANGED", "Review item changed; reload before saving"
+        )
+    previous_participation = row(
+        connection,
+        "SELECT person_id,scoring_sequence FROM participations WHERE registration_id=:id",
+        {"id": registration_id},
+    )
+    if (
+        roster_person_id
+        and previous_participation
+        and previous_participation["scoring_sequence"] is not None
+        and roster_person_id != previous_participation["person_id"]
+    ):
+        raise ApiError(
+            409,
+            "REVIEW_IDENTITY_LOCKED",
+            "An allocated participation cannot be transferred to another student",
+        )
     reference(connection, "participation_roles", role_id)
     if result_id:
         reference(connection, "participation_results", result_id)
@@ -239,7 +308,28 @@ def update_review_item(
         "EVENT_REVIEW_ITEM_UPDATED",
         "Registration",
         registration_id,
-        {"eventId": event_id, "attendance": attendance_decision, "match": match_state},
+        {
+            "eventId": event_id,
+            "reason": reason,
+            "before": {
+                key: current[key]
+                for key in (
+                    "attendance_decision",
+                    "role_id",
+                    "result_id",
+                    "roster_person_id",
+                    "match_state",
+                    "decision_reason",
+                )
+            },
+            "after": {
+                "attendance_decision": attendance_decision,
+                "role_id": role_id,
+                "result_id": result_id,
+                "roster_person_id": None if reject_match else roster_person_id,
+                "match_state": match_state,
+            },
+        },
     )
 
 
@@ -259,6 +349,14 @@ def approve_review(
         or event["activity_review_state"] != "PENDING"
     ):
         raise ApiError(409, "REVIEW_NOT_PENDING", "Event review is not pending")
+    if event["activity_reviewed_at"]:
+        actor = row(
+            connection,
+            "SELECT system_role FROM staff_users WHERE id=:id",
+            {"id": actor_id},
+        )
+        if not actor or actor["system_role"] != "SUPER_ADMIN":
+            raise ApiError(403, "FORBIDDEN", "Only SUPER_ADMIN may approve corrections")
     if not event["level_id"] or not event["season_id"]:
         raise ApiError(409, "SCORING_SETUP_REQUIRED", "Season and level are required")
     if (
@@ -302,6 +400,23 @@ def approve_review(
     for item in items:
         if item["status"] != "ACTIVE":
             continue
+        existing = row(
+            connection,
+            "SELECT * FROM participations WHERE registration_id=:id FOR UPDATE",
+            {"id": item["registration_id"]},
+        )
+        eligible = (
+            item["attendance_decision"] == "PRESENT"
+            and item["person_type"] == "KAIT_STUDENT"
+            and item["match_state"] != "REJECTED"
+        )
+        if existing and existing["status"] == "CONFIRMED" and not eligible:
+            cancel_participation(
+                connection,
+                existing["id"],
+                actor_id,
+                item["decision_reason"] or "Исправление итоговой ведомости",
+            )
         if item["attendance_decision"] == "ABSENT":
             summary["absent"] += 1
             continue
@@ -312,6 +427,12 @@ def approve_review(
         if not roster_id:
             raise ApiError(409, "ROSTER_MATCH_REQUIRED", "Student link is missing")
         if item["person_id"] != roster_id:
+            if existing and existing["scoring_sequence"] is not None:
+                raise ApiError(
+                    409,
+                    "REVIEW_IDENTITY_LOCKED",
+                    "An allocated participation cannot be transferred to another student",
+                )
             collision = row(
                 connection,
                 """SELECT id FROM registrations WHERE event_id=:event AND person_id=:person
@@ -335,6 +456,16 @@ def approve_review(
                 connection,
                 "UPDATE participations SET person_id=:person WHERE registration_id=:registration AND status='DRAFT'",
                 {"person": roster_id, "registration": item["registration_id"]},
+            )
+        if existing:
+            update_participation(
+                connection,
+                existing["id"],
+                actor_id,
+                item["role_id"],
+                item["result_id"],
+                {"role_id", "result_id"},
+                item["decision_reason"] or "Подтверждено по итоговой ведомости",
             )
         participation_id = confirm_registration(
             connection,

@@ -126,6 +126,8 @@ export const EventStreamsEditor = ({
           'Время потока должно находиться в пределах начала и окончания мероприятия.',
         CAPACITY_BELOW_ACTIVE_REGISTRATIONS:
           'Нельзя уменьшить лимит ниже числа зарегистрированных в потоке.',
+        EVENT_REGISTRATION_LIMIT:
+          'Общая вместимость всех потоков не может превышать 5000 мест.',
       };
       setNotice(
         error instanceof AdminApiError
@@ -211,7 +213,7 @@ export const EventStreamsEditor = ({
                 type="number"
                 required
                 min={1}
-                max={1_000_000}
+                max={5000}
                 defaultValue={editing?.capacity ?? 30}
               />
             </label>

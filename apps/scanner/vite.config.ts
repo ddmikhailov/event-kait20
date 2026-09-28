@@ -23,6 +23,7 @@ export default defineConfig({
         lang: 'ru',
       },
       workbox: {
+        clientsClaim: true,
         cleanupOutdatedCaches: true,
         navigateFallback: `${scannerBase}index.html`,
       },

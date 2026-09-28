@@ -87,6 +87,46 @@ export type AttendanceSyncResponse = z.infer<
   typeof attendanceSyncResponseSchema
 >;
 
+export const rejectedAttendanceReasonSchema = z.enum([
+  'INVALID_REGISTRATION',
+  'REGISTRATION_ANNULLED',
+  'INVALID_TIMESTAMP',
+  'CLIENT_EVENT_CONFLICT',
+]);
+export const rejectedAttendanceHandoffRequestSchema = z.object({
+  deviceId: uuidSchema,
+  item: attendanceSyncItemSchema,
+  rejectionStatus: rejectedAttendanceReasonSchema,
+});
+export type RejectedAttendanceHandoffRequest = z.infer<
+  typeof rejectedAttendanceHandoffRequestSchema
+>;
+export const rejectedAttendanceHandoffResponseSchema = z.object({
+  clientEventId: uuidSchema,
+  status: z.enum(['OPEN', 'RESOLVED']),
+});
+export const rejectedAttendanceCaseSchema = z.object({
+  clientEventId: uuidSchema,
+  registrationId: uuidSchema,
+  rejectionStatus: rejectedAttendanceReasonSchema,
+  status: z.enum(['OPEN', 'RESOLVED']),
+  lastName: z.string().nullable(),
+  firstName: z.string().nullable(),
+  middleName: z.string().nullable(),
+  studyGroup: z.string().nullable(),
+  createdAt: z.iso.datetime({ offset: true }),
+});
+export const rejectedAttendanceCaseListSchema = z.object({
+  items: z.array(rejectedAttendanceCaseSchema),
+  hasNext: z.boolean(),
+});
+export type RejectedAttendanceCaseList = z.infer<
+  typeof rejectedAttendanceCaseListSchema
+>;
+export const rejectedAttendanceResolveRequestSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+});
+
 export const offlineBundleResponseSchema = z.object({
   eventId: uuidSchema,
   version: z.string().regex(/^\d+$/),

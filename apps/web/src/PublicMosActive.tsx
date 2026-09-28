@@ -16,11 +16,62 @@ const loadError = (error: unknown) =>
     ? 'Слишком много запросов. Попробуйте через минуту.'
     : 'Не удалось загрузить данные. Обновите страницу и попробуйте снова.';
 
+const catalogParams = () =>
+  new URLSearchParams(
+    typeof window === 'undefined' ? '' : window.location.search,
+  );
+
+const initialQuery = () => {
+  const value = catalogParams().get('q')?.trim() ?? '';
+  return value.length >= 2 && value.length <= 80 ? value : '';
+};
+
+const boundedOffset = (value: string | null) => {
+  const number = Number(value);
+  return value && Number.isInteger(number) && number >= 0 && number <= 10_000
+    ? number
+    : 0;
+};
+
+const boundedPage = (value: string | null) => {
+  const number = Number(value);
+  return value && Number.isInteger(number) && number >= 1 && number <= 401
+    ? number
+    : 1;
+};
+
+const replaceParams = (changes: Record<string, string | null>) => {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  for (const [key, value] of Object.entries(changes)) {
+    if (value) url.searchParams.set(key, value);
+    else url.searchParams.delete(key);
+  }
+  window.history.replaceState(null, '', url);
+};
+
+const profileHref = (slug: string) => {
+  const params = catalogParams();
+  params.delete('page');
+  params.delete('history');
+  return `/mos-active/students/${encodeURIComponent(slug)}?${params.toString()}`;
+};
+
+const catalogHref = () => {
+  const params = catalogParams();
+  params.delete('page');
+  params.delete('history');
+  const search = params.toString();
+  return `/mos-active${search ? `?${search}` : ''}`;
+};
+
 const MosActiveLeaderboard = () => {
   const [seasons, setSeasons] = useState<PublicLeaderboardSeasons>();
   const [seasonId, setSeasonId] = useState('');
   const [ranking, setRanking] = useState<LeaderboardResponse>();
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffset] = useState(() =>
+    boundedOffset(catalogParams().get('rankOffset')),
+  );
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -30,7 +81,13 @@ const MosActiveLeaderboard = () => {
       .then((result) => {
         if (!cancelled) {
           setSeasons(result);
-          setSeasonId(result.items[0]?.id ?? '');
+          const requested = catalogParams().get('season');
+          const selected =
+            result.items.find((item) => item.id === requested)?.id ??
+            result.items[0]?.id ??
+            '';
+          setSeasonId(selected);
+          if (selected) replaceParams({ season: selected });
         }
       })
       .catch((caught: unknown) => {
@@ -79,6 +136,7 @@ const MosActiveLeaderboard = () => {
               setRanking(undefined);
               setOffset(0);
               setSeasonId(event.target.value);
+              replaceParams({ season: event.target.value, rankOffset: null });
             }}
           >
             {seasons.items.map((season) => (
@@ -105,9 +163,7 @@ const MosActiveLeaderboard = () => {
           <ol className="mos-active-list mos-active-ranking" start={offset + 1}>
             {ranking.items.map((item) => (
               <li key={item.publicSlug}>
-                <a
-                  href={`/mos-active/students/${encodeURIComponent(item.publicSlug)}`}
-                >
+                <a href={profileHref(item.publicSlug)}>
                   <strong>
                     {item.rank}. {item.displayName}
                   </strong>
@@ -122,19 +178,24 @@ const MosActiveLeaderboard = () => {
               disabled={offset === 0}
               onClick={() => {
                 setRanking(undefined);
-                setOffset(Math.max(0, offset - ranking.limit));
+                const next = Math.max(0, offset - ranking.limit);
+                setOffset(next);
+                replaceParams({
+                  season: seasonId,
+                  rankOffset: next ? String(next) : null,
+                });
               }}
             >
               Назад
             </button>
             <button
               type="button"
-              disabled={
-                ranking.items.length < ranking.limit || offset >= 10_000
-              }
+              disabled={!ranking.hasNext || offset >= 10_000}
               onClick={() => {
                 setRanking(undefined);
-                setOffset(offset + ranking.limit);
+                const next = offset + ranking.limit;
+                setOffset(next);
+                replaceParams({ season: seasonId, rankOffset: String(next) });
               }}
             >
               Далее
@@ -147,9 +208,12 @@ const MosActiveLeaderboard = () => {
 };
 
 export const MosActiveCatalog = () => {
-  const [input, setInput] = useState('');
-  const [query, setQuery] = useState('');
-  const [offset, setOffset] = useState(0);
+  const [input, setInput] = useState(initialQuery);
+  const [query, setQuery] = useState(initialQuery);
+  const [searchAttempt, setSearchAttempt] = useState(0);
+  const [offset, setOffset] = useState(() =>
+    boundedOffset(catalogParams().get('studentOffset')),
+  );
   const [data, setData] = useState<PublicStudentList>();
   const [error, setError] = useState<string>();
 
@@ -169,7 +233,7 @@ export const MosActiveCatalog = () => {
     return () => {
       cancelled = true;
     };
-  }, [query, offset]);
+  }, [query, offset, searchAttempt]);
 
   const search = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -180,7 +244,10 @@ export const MosActiveCatalog = () => {
       return;
     }
     setOffset(0);
-    setQuery(input.trim());
+    const next = input.trim();
+    setQuery(next);
+    replaceParams({ q: next, studentOffset: null });
+    setSearchAttempt((current) => current + 1);
     setData(undefined);
     setError(undefined);
   };
@@ -233,9 +300,7 @@ export const MosActiveCatalog = () => {
           <ul className="mos-active-list">
             {data.items.map((student) => (
               <li key={student.publicSlug}>
-                <a
-                  href={`/mos-active/students/${encodeURIComponent(student.publicSlug)}`}
-                >
+                <a href={profileHref(student.publicSlug)}>
                   <strong>{student.displayName}</strong>
                 </a>
               </li>
@@ -247,17 +312,21 @@ export const MosActiveCatalog = () => {
               disabled={offset === 0}
               onClick={() => {
                 setData(undefined);
-                setOffset(Math.max(0, offset - data.limit));
+                const next = Math.max(0, offset - data.limit);
+                setOffset(next);
+                replaceParams({ studentOffset: next ? String(next) : null });
               }}
             >
               Назад
             </button>
             <button
               type="button"
-              disabled={data.items.length < data.limit || offset >= 10_000}
+              disabled={!data.hasNext || offset >= 10_000}
               onClick={() => {
                 setData(undefined);
-                setOffset(offset + data.limit);
+                const next = offset + data.limit;
+                setOffset(next);
+                replaceParams({ studentOffset: String(next) });
               }}
             >
               Далее
@@ -270,11 +339,19 @@ export const MosActiveCatalog = () => {
 };
 
 export const MosActiveProfile = ({ slug }: { slug: string }) => {
+  const [selectedSeason] = useState(() => catalogParams().get('season'));
+  const [allHistory, setAllHistory] = useState(
+    () => catalogParams().get('history') === 'all',
+  );
   const [profile, setProfile] = useState<PublicProfile>();
   const [participations, setParticipations] =
     useState<PublicParticipationList>();
-  const [participationPage, setParticipationPage] = useState(1);
-  const [error, setError] = useState<string>();
+  const [participationPage, setParticipationPage] = useState(() =>
+    boundedPage(catalogParams().get('page')),
+  );
+  const [participationAttempt, setParticipationAttempt] = useState(0);
+  const [profileError, setProfileError] = useState<string>();
+  const [participationError, setParticipationError] = useState<string>();
 
   useEffect(() => {
     let cancelled = false;
@@ -285,7 +362,7 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
       })
       .catch((caught: unknown) => {
         if (!cancelled)
-          setError(
+          setProfileError(
             caught instanceof PublicApiError && caught.status === 404
               ? 'Профиль не найден или больше не опубликован.'
               : loadError(caught),
@@ -299,34 +376,55 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
   useEffect(() => {
     if (!profile) return;
     let cancelled = false;
+    setParticipations(undefined);
+    setParticipationError(undefined);
     publicApi
-      .studentParticipations(slug, participationPage)
+      .studentParticipations(
+        slug,
+        participationPage,
+        allHistory ? undefined : (selectedSeason ?? undefined),
+      )
       .then((result) => {
         if (!cancelled) setParticipations(result);
       })
       .catch((caught: unknown) => {
-        if (
-          !cancelled &&
-          !(caught instanceof PublicApiError && caught.status === 404)
-        )
-          setError(loadError(caught));
+        if (!cancelled) setParticipationError(loadError(caught));
       });
     return () => {
       cancelled = true;
     };
-  }, [profile, slug, participationPage]);
+  }, [
+    profile,
+    slug,
+    participationPage,
+    participationAttempt,
+    allHistory,
+    selectedSeason,
+  ]);
+
+  const changeParticipationPage = (next: number) => {
+    setParticipationPage(next);
+    replaceParams({ page: next > 1 ? String(next) : null });
+  };
+
+  const toggleHistory = () => {
+    const next = !allHistory;
+    setAllHistory(next);
+    setParticipationPage(1);
+    replaceParams({ history: next ? 'all' : null, page: null });
+  };
 
   return (
     <main className="catalog-page mos-active-page">
-      <a className="back-link" href="/mos-active">
+      <a className="back-link" href={catalogHref()}>
         ← Все студенты
       </a>
-      {error && (
+      {profileError && (
         <p role="alert" className="message error">
-          {error}
+          {profileError}
         </p>
       )}
-      {!profile && !error && (
+      {!profile && !profileError && (
         <p className="calendar-state">Загружаем профиль…</p>
       )}
       {profile && (
@@ -337,9 +435,40 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
             <p>Учебная группа: {profile.studyGroup ?? 'не указана'}</p>
             <p>Отделение/площадка: {profile.campus ?? 'не указана'}</p>
           </header>
+          {selectedSeason && (
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={toggleHistory}
+            >
+              {allHistory
+                ? 'Показать начисления выбранного сезона'
+                : 'Показать начисления за все сезоны'}
+            </button>
+          )}
+          {participationError && (
+            <div role="alert" className="message error">
+              <p>{participationError}</p>
+              <button
+                type="button"
+                onClick={() =>
+                  setParticipationAttempt((current) => current + 1)
+                }
+              >
+                Повторить загрузку начислений
+              </button>
+            </div>
+          )}
+          {!participations && !participationError && (
+            <p className="calendar-state">Загружаем начисления…</p>
+          )}
           {participations && (
             <section className="mos-active-section">
-              <h2>Баллы за мероприятия</h2>
+              <h2>
+                {selectedSeason && !allHistory
+                  ? 'Баллы за мероприятия выбранного сезона'
+                  : 'Баллы за мероприятия — все сезоны'}
+              </h2>
               {participations.items.length === 0 && (
                 <p>Начислений за мероприятия пока нет.</p>
               )}
@@ -353,10 +482,8 @@ export const MosActiveProfile = ({ slug }: { slug: string }) => {
               </ul>
               <PageControls
                 page={participationPage}
-                hasNext={
-                  participations.items.length === participations.pageSize
-                }
-                onPage={setParticipationPage}
+                hasNext={participations.hasNext}
+                onPage={changeParticipationPage}
               />
             </section>
           )}

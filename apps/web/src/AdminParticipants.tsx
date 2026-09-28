@@ -17,6 +17,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
 import { AdminMosActivePublication } from './AdminMosActivePublication.js';
+import { AdminRosterMetadata } from './AdminRosterMetadata.js';
+import { AdminRejectedAttendance } from './AdminRejectedAttendance.js';
 import { EventParticipationWorkspace } from './AdminActivity.js';
 import { downloadEventExcel, EventExcel } from './AdminExcel.js';
 import { OnsiteStreamSelector } from './EventStreams.js';
@@ -237,6 +239,7 @@ export const EventParticipants = ({
             )}
           </div>
         </header>
+        <AdminRejectedAttendance eventId={event.id} />
         {notice && <ParticipantNotice notice={notice} />}
         <RegistrationFilters
           query={query}
@@ -817,6 +820,8 @@ export const PeopleDirectory = ({
   const [query, setQuery] = useState('');
   const [draftQuery, setDraftQuery] = useState('');
   const [page, setPage] = useState(1);
+  const [dedupOnly, setDedupOnly] = useState(false);
+  const loadVersion = useRef(0);
   const [selected, setSelected] = useState<PersonDetailResponse>();
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
@@ -825,6 +830,7 @@ export const PeopleDirectory = ({
   const [rosterPreview, setRosterPreview] = useState<{
     fileHash: string;
     students: number;
+    skipped: number;
   }>();
   const previewRoster = async () => {
     if (!rosterFile) return;
@@ -852,7 +858,7 @@ export const PeopleDirectory = ({
       );
       setNotice({
         kind: 'success',
-        text: `Создано публичных профилей студентов: ${result.created}.`,
+        text: `Создано публичных профилей студентов: ${result.created}. Пропущено точных совпадений: ${result.skipped}.`,
       });
       setRosterPreview(undefined);
       setRosterFile(undefined);
@@ -865,15 +871,17 @@ export const PeopleDirectory = ({
     }
   };
   const load = useCallback(async () => {
+    const version = ++loadVersion.current;
     setBusy(true);
     try {
-      setResponse(await adminApi.people(query, page));
+      const next = await adminApi.people(query, page, 25, dedupOnly);
+      if (version === loadVersion.current) setResponse(next);
     } catch (error) {
-      setNotice(participantError(error));
+      if (version === loadVersion.current) setNotice(participantError(error));
     } finally {
-      setBusy(false);
+      if (version === loadVersion.current) setBusy(false);
     }
-  }, [page, query]);
+  }, [page, query, dedupOnly]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -925,6 +933,10 @@ export const PeopleDirectory = ({
               Отчество, Группа».
             </p>
             <p>
+              Повторная загрузка пропускает точные совпадения. Отличающиеся
+              данные существующего студента требуют отдельной проверки.
+            </p>
+            <p>
               Перед загрузкой реальных данных настройте резервное копирование.
               Все загруженные профили сразу появятся в МосАктиве.
             </p>
@@ -949,8 +961,9 @@ export const PeopleDirectory = ({
             </button>
             {rosterPreview && (
               <p>
-                Новых студентов: {rosterPreview.students}. Их профили будут
-                опубликованы с нулём баллов.
+                Новых студентов: {rosterPreview.students}. Точных совпадений:{' '}
+                {rosterPreview.skipped}. Новые профили будут опубликованы с
+                нулём баллов.
               </p>
             )}
             {rosterPreview && (
@@ -984,6 +997,23 @@ export const PeopleDirectory = ({
             Найти
           </Button>
         </form>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={dedupOnly}
+            onChange={(event) => {
+              setDedupOnly(event.target.checked);
+              setPage(1);
+            }}
+          />
+          Только возможные дубли
+        </label>
+        {dedupOnly && (
+          <p className="muted">
+            Здесь карточки, для которых система обнаружила неоднозначное
+            совпадение. Отметка ещё не означает, что это один и тот же человек.
+          </p>
+        )}
         <PeopleTable items={response?.items ?? []} busy={busy} onOpen={open} />
         {response && (
           <Pagination
@@ -1069,6 +1099,8 @@ const PersonDetail = ({
 }) => {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
+  const [rosterDirty, setRosterDirty] = useState(false);
+  const [rosterBusy, setRosterBusy] = useState(false);
   const save = async (form: FormData) => {
     setBusy(true);
     try {
@@ -1088,7 +1120,19 @@ const PersonDetail = ({
   return (
     <main className="admin-shell">
       <header className="admin-editor-header">
-        <button className="text-button" onClick={onBack}>
+        <button
+          className="text-button"
+          disabled={busy || rosterBusy}
+          onClick={() => {
+            if (
+              !rosterDirty ||
+              window.confirm(
+                'В данных контингента есть несохранённые правки. Вернуться к списку и сбросить их?',
+              )
+            )
+              onBack();
+          }}
+        >
           ← Общая база
         </button>
         {person.dedupReviewRequired && (
@@ -1104,7 +1148,11 @@ const PersonDetail = ({
             </div>
           </div>
           {notice && <ParticipantNotice notice={notice} />}
-          <ParticipantForm participant={person} busy={busy} onSubmit={save} />
+          <ParticipantForm
+            participant={person}
+            busy={busy || rosterBusy || rosterDirty}
+            onSubmit={save}
+          />
         </section>
         <aside className="admin-panel participant-history">
           <h2>История участий</h2>
@@ -1123,14 +1171,13 @@ const PersonDetail = ({
         </aside>
       </div>
       {person.roster && (
-        <section className="admin-panel">
-          <h2>Данные контингента</h2>
-          <p>Статус обучения: {person.roster.educationStatus ?? 'Не указан'}</p>
-          <p>Площадка: {person.roster.campusAddress ?? 'Не указана'}</p>
-          <p>Курс: {person.roster.course ?? 'Не указан'}</p>
-          <p>Специальность: {person.roster.programName ?? 'Не указана'}</p>
-          <p>Код специальности: {person.roster.programCode ?? 'Не указан'}</p>
-        </section>
+        <AdminRosterMetadata
+          person={person}
+          disabled={busy}
+          onChanged={onChanged}
+          onDirtyChange={setRosterDirty}
+          onBusyChange={setRosterBusy}
+        />
       )}
       {role === 'SUPER_ADMIN' && person.personType === 'KAIT_STUDENT' && (
         <AdminMosActivePublication personId={person.id} />
@@ -1261,6 +1308,8 @@ const participantError = (error: unknown): Notice => {
       REGISTRATION_NOT_FOUND: 'Регистрация не найдена',
       REGISTRATION_ANNULLED: 'Регистрация уже аннулирована',
       CAPACITY_FULL: 'Свободных мест нет',
+      EVENT_REGISTRATION_LIMIT:
+        'Достигнут предел 5000 действующих регистраций. Разделите участников на отдельные мероприятия.',
       STREAM_REQUIRED: 'Выберите поток мероприятия',
       STREAM_INVALID: 'Поток недоступен. Обновите список',
       STREAM_ALREADY_SELECTED:

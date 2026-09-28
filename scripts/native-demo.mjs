@@ -12,23 +12,35 @@ import { spawn, spawnSync } from 'node:child_process';
 import { join, relative, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
-const runtime = resolve(root, '.runtime', 'native-demo');
+const e2e = process.env.DEMO_INSTANCE === 'e2e';
+const storageName = e2e
+  ? 'event-registration-e2e-demo'
+  : 'event-registration-native-demo';
+const runtime = resolve(
+  root,
+  '.runtime',
+  e2e ? 'e2e-native-demo' : 'native-demo',
+);
 const storageRuntime =
   process.platform === 'win32' && process.env.LOCALAPPDATA
-    ? resolve(process.env.LOCALAPPDATA, 'event-registration-native-demo')
+    ? resolve(process.env.LOCALAPPDATA, storageName)
     : runtime;
 const dataDirectory = join(storageRuntime, 'mysql-data');
 const pidFile = join(runtime, 'controller.pid');
 const mysqlInitFile = join(storageRuntime, 'mysql-init.sql');
-const envFile = resolve(root, '.demo.env');
-const mysqlPort = 3307;
+const envFile = e2e ? join(runtime, 'demo.env') : resolve(root, '.demo.env');
+const mysqlPort = e2e ? 3308 : 3307;
 const processes = [];
 let stopping = false;
+
+const ownsController = () =>
+  existsSync(pidFile) &&
+  Number(readFileSync(pidFile, 'utf8').trim()) === process.pid;
 
 const fail = (message) => {
   console.error(`\n${message}`);
   for (const child of processes.toReversed()) stopTree(child.pid);
-  if (existsSync(pidFile)) rmSync(pidFile, { force: true });
+  if (ownsController()) rmSync(pidFile, { force: true });
   if (existsSync(mysqlInitFile)) rmSync(mysqlInitFile, { force: true });
   process.exit(1);
 };
@@ -47,11 +59,7 @@ const safeStorageRuntimePath = (path) => {
   }
   const localAppData = resolve(process.env.LOCALAPPDATA);
   const part = relative(localAppData, path);
-  if (
-    !part ||
-    part.startsWith('..') ||
-    !part.startsWith('event-registration-native-demo')
-  ) {
+  if (!part || part.startsWith('..') || part !== storageName) {
     throw new Error(`Refusing to modify an unsafe demo storage path: ${path}`);
   }
 };
@@ -65,6 +73,7 @@ const parseEnv = (source) =>
   );
 
 const ensureEnvironment = () => {
+  mkdirSync(runtime, { recursive: true });
   if (!existsSync(envFile)) {
     const secret = () => randomBytes(32).toString('base64url');
     const password = () => `Demo-${randomBytes(18).toString('base64url')}`;
@@ -213,7 +222,7 @@ const stop = async (exitCode = 0) => {
   stopping = true;
   console.log('\nStopping native demo...');
   for (const child of processes.toReversed()) stopTree(child.pid);
-  if (existsSync(pidFile)) rmSync(pidFile, { force: true });
+  if (ownsController()) rmSync(pidFile, { force: true });
   if (existsSync(mysqlInitFile)) rmSync(mysqlInitFile, { force: true });
   setTimeout(() => process.exit(exitCode), 250).unref();
 };
@@ -370,9 +379,13 @@ const waitForHttp = async (url) => {
 
 const start = async () => {
   if (existsSync(pidFile)) {
-    fail(
-      'The native demo already appears to be running. Use pnpm demo:down first.',
-    );
+    const pid = Number.parseInt(readFileSync(pidFile, 'utf8').trim(), 10);
+    if (isDemoController(pid)) {
+      fail(
+        'The native demo already appears to be running. Use pnpm demo:down first.',
+      );
+    }
+    rmSync(pidFile, { force: true });
   }
   const values = ensureEnvironment();
   const python = findPython();
@@ -448,12 +461,27 @@ const start = async () => {
       'bin',
       'vite.js',
     );
+  for (const workspace of ['contracts', 'utils', 'ui']) {
+    run(
+      process.execPath,
+      [
+        resolve(root, 'node_modules/typescript/bin/tsc'),
+        '-p',
+        `packages/${workspace}/tsconfig.build.json`,
+      ],
+      {
+        env: environment,
+        label: `Build shared ${workspace}`,
+      },
+    );
+  }
+  const frontendEnvironment = { ...environment, NODE_ENV: 'production' };
   run(process.execPath, [vite('web'), 'build', 'apps/web'], {
-    env: environment,
+    env: frontendEnvironment,
     label: 'Web production build',
   });
   run(process.execPath, [vite('scanner'), 'build', 'apps/scanner'], {
-    env: environment,
+    env: frontendEnvironment,
     label: 'Scanner production build',
   });
   spawnManaged(

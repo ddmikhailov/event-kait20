@@ -5,16 +5,17 @@ from __future__ import annotations
 import hashlib
 import io
 import secrets
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from openpyxl import load_workbook
 
-from ..database import Database, execute, row
+from ..database import Database, execute, row, rows
 from ..dependencies import Staff, csrf_super_admin, database
 from ..errors import ApiError
 from ..registration_service import create_person
 from ..service_utils import audit
+from ..xlsx_limits import validate_sheet_grid
 from .excel import MAX_FILE, MAX_ROWS, XLSX_MIME, _validate_xlsx_archive
 
 router = APIRouter(prefix="/admin/activity/roster", tags=["roster"])
@@ -70,7 +71,10 @@ def parse_roster(source: bytes) -> list[dict[str, str | None]]:
         raise roster_error("UNREADABLE_FILE")
     try:
         _validate_xlsx_archive(source)
+        validate_sheet_grid(source)
     except ApiError as error:
+        if error.code == "XLSX_GRID_TOO_LARGE":
+            raise roster_error("GRID_TOO_LARGE") from error
         raise roster_error("UNSAFE_ARCHIVE") from error
     try:
         workbook = load_workbook(io.BytesIO(source), read_only=False, data_only=False)
@@ -194,16 +198,20 @@ def parse_roster(source: bytes) -> list[dict[str, str | None]]:
         workbook.close()
 
 
-def assert_new_students(
-    connection: Any, tenant_id: str, students: list[dict[str, str | None]]
-) -> None:
+def new_students(
+    connection: Any, tenant_id: str, students: list[dict[str, str | None]], mode: str
+) -> list[dict[str, str | None]]:
+    new = []
     for student in students:
-        found = row(
+        found = rows(
             connection,
-            """SELECT p.id FROM student_roster_members member JOIN persons p ON p.id=member.person_id
+            """SELECT p.last_name,p.first_name,p.middle_name,p.study_group,
+            member.education_status,member.campus_address,member.course_label,
+            member.program_name,member.program_code
+            FROM student_roster_members member JOIN persons p ON p.id=member.person_id
             WHERE p.tenant_id=:tenant AND p.merged_into_id IS NULL
               AND p.last_name=:last AND p.first_name=:first
-              AND (p.middle_name <=> :middle) AND p.study_group=:group LIMIT 1""",
+              AND (p.middle_name <=> :middle) AND p.study_group=:group LIMIT 2""",
             {
                 "tenant": tenant_id,
                 "last": student["last_name"],
@@ -213,12 +221,25 @@ def assert_new_students(
             },
         )
         if found:
+            if mode == "SKIP_EXACT":
+                if len(found) == 1 and all(
+                    cell_text(found[0][key]).casefold() == cell_text(value).casefold()
+                    for key, value in student.items()
+                ):
+                    continue
+                raise ApiError(
+                    409,
+                    "ROSTER_STUDENT_CONFLICT",
+                    "Existing student data differs or is ambiguous; review manually",
+                )
             raise ApiError(
                 409, "ROSTER_STUDENT_EXISTS", "A student is already in the roster"
             )
+        new.append(student)
+    return new
 
 
-async def upload(file: UploadFile) -> bytes:
+def upload(file: UploadFile) -> bytes:
     if not (file.filename or "").lower().endswith(".xlsx") or file.content_type not in (
         XLSX_MIME,
         "application/octet-stream",
@@ -226,34 +247,46 @@ async def upload(file: UploadFile) -> bytes:
         None,
     ):
         raise roster_error("FILE_TYPE")
-    return await file.read(MAX_FILE + 1)
+    return file.file.read(MAX_FILE + 1)
 
 
 @router.post("/preview")
-async def preview(
+def preview(
     file: Annotated[UploadFile, File()],
     staff: Annotated[Staff, Depends(csrf_super_admin)],
     db: Annotated[Database, Depends(database)],
+    mode: Annotated[Literal["REJECT", "SKIP_EXACT"], Form()] = "REJECT",
 ) -> dict[str, Any]:
-    source = await upload(file)
+    source = upload(file)
     students = parse_roster(source)
     with db.connect() as connection:
-        assert_new_students(connection, staff.tenant_id, students)
-    return {"fileHash": hashlib.sha256(source).hexdigest(), "students": len(students)}
+        pending = new_students(connection, staff.tenant_id, students, mode)
+    return {
+        "fileHash": hashlib.sha256(source).hexdigest(),
+        "students": len(pending),
+        "skipped": len(students) - len(pending),
+    }
 
 
 @router.post("/import", status_code=201)
-async def import_roster(
+def import_roster(
     file: Annotated[UploadFile, File()],
     file_hash: Annotated[str, Form(alias="fileHash")],
     staff: Annotated[Staff, Depends(csrf_super_admin)],
     db: Annotated[Database, Depends(database)],
+    mode: Annotated[Literal["REJECT", "SKIP_EXACT"], Form()] = "REJECT",
 ) -> dict[str, int]:
-    source = await upload(file)
+    source = upload(file)
     if hashlib.sha256(source).hexdigest() != file_hash:
         raise ApiError(409, "ROSTER_FILE_CHANGED", "Workbook changed after preview")
     students = parse_roster(source)
     with db.transaction() as connection:
+        # Serialize imports across organizations in the same tenant.
+        row(
+            connection,
+            "SELECT id FROM tenants WHERE id=:id FOR UPDATE",
+            {"id": staff.tenant_id},
+        )
         organization = row(
             connection,
             "SELECT name FROM organizations WHERE id=:id AND tenant_id=:tenant FOR UPDATE",
@@ -261,8 +294,9 @@ async def import_roster(
         )
         if not organization:
             raise ApiError(404, "ORGANIZATION_NOT_FOUND", "Organization not found")
-        assert_new_students(connection, staff.tenant_id, students)
-        for student in students:
+        pending = new_students(connection, staff.tenant_id, students, mode)
+        skipped = len(students) - len(pending)
+        for student in pending:
             person_id = create_person(
                 connection,
                 {
@@ -298,6 +332,6 @@ async def import_roster(
             "STUDENT_ROSTER_IMPORTED",
             "Organization",
             staff.organization_id,
-            {"students": len(students)},
+            {"students": len(pending), "skipped": skipped, "mode": mode},
         )
-    return {"created": len(students)}
+    return {"created": len(pending), "skipped": skipped}

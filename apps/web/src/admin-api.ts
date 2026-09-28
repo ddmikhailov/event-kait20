@@ -4,6 +4,8 @@ import {
   activityReferenceListSchema,
   activityReferenceSchema,
   acceptedResponseSchema,
+  rejectedAttendanceCaseListSchema,
+  rejectedAttendanceHandoffResponseSchema,
   streamResponseSchema,
   streamListResponseSchema,
   type StreamValues,
@@ -57,6 +59,7 @@ import {
   formFieldResponseSchema,
   sessionResponseSchema,
   type AcceptedResponse,
+  type RejectedAttendanceCaseList,
   type AchievementCreateRequest,
   type AchievementDecisionRequest,
   type AchievementMutationResponse,
@@ -87,6 +90,7 @@ import {
   type LoginRequest,
   type OnsiteRegistrationResponse,
   type PersonDetailResponse,
+  type UpdateRosterMetadataRequest,
   type PersonListResponse,
   type ParticipationAssignRequest,
   type ParticipationCancelRequest,
@@ -167,6 +171,7 @@ export class AdminApiClient {
   public previewRoster(file: File): Promise<RosterPreview> {
     const form = new FormData();
     form.set('file', file);
+    form.set('mode', 'SKIP_EXACT');
     return this.request(
       '/admin/activity/roster/preview',
       { method: 'POST', body: form },
@@ -178,6 +183,7 @@ export class AdminApiClient {
     const form = new FormData();
     form.set('file', file);
     form.set('fileHash', fileHash);
+    form.set('mode', 'SKIP_EXACT');
     return this.request(
       '/admin/activity/roster/import',
       { method: 'POST', body: form },
@@ -509,9 +515,11 @@ export class AdminApiClient {
     );
   }
 
-  public pendingEventReviews(): Promise<PendingEventReviews> {
+  public pendingEventReviews(
+    state: 'PENDING' | 'APPROVED' = 'PENDING',
+  ): Promise<PendingEventReviews> {
     return this.request(
-      '/admin/activity/reviews/pending',
+      `/admin/activity/reviews/pending?state=${state}`,
       { method: 'GET' },
       pendingEventReviewsSchema,
     );
@@ -529,6 +537,17 @@ export class AdminApiClient {
     return this.request(
       `/admin/events/${encodeURIComponent(eventId)}/review/refresh`,
       { method: 'POST' },
+      eventReviewSchema,
+    );
+  }
+
+  public reopenEventReview(
+    eventId: string,
+    reason: string,
+  ): Promise<EventReview> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/review/reopen`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
       eventReviewSchema,
     );
   }
@@ -810,6 +829,29 @@ export class AdminApiClient {
     );
   }
 
+  public rejectedAttendance(
+    eventId: string,
+    offset = 0,
+  ): Promise<RejectedAttendanceCaseList> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/attendance/rejections?limit=50&offset=${offset}`,
+      { method: 'GET' },
+      rejectedAttendanceCaseListSchema,
+    );
+  }
+
+  public resolveRejectedAttendance(
+    eventId: string,
+    clientEventId: string,
+    reason: string,
+  ): Promise<{ clientEventId: string; status: 'OPEN' | 'RESOLVED' }> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/attendance/rejections/${encodeURIComponent(clientEventId)}`,
+      { method: 'PATCH', body: JSON.stringify({ reason }) },
+      rejectedAttendanceHandoffResponseSchema,
+    );
+  }
+
   public formFields(eventId: string): Promise<FormFieldListResponse> {
     return this.request(
       `/admin/events/${encodeURIComponent(eventId)}/form-fields`,
@@ -932,12 +974,14 @@ export class AdminApiClient {
     query = '',
     page = 1,
     pageSize = 25,
+    dedupReviewRequired = false,
   ): Promise<PersonListResponse> {
     const parameters = new URLSearchParams({
       query,
       page: String(page),
       pageSize: String(pageSize),
     });
+    if (dedupReviewRequired) parameters.set('dedupReviewRequired', 'true');
     return this.request(
       `/admin/people?${parameters.toString()}`,
       { method: 'GET' },
@@ -959,6 +1003,17 @@ export class AdminApiClient {
   ): Promise<PersonDetailResponse> {
     return this.request(
       `/admin/people/${encodeURIComponent(personId)}`,
+      { method: 'PATCH', body: JSON.stringify(values) },
+      personDetailResponseSchema,
+    );
+  }
+
+  public updateRosterMetadata(
+    personId: string,
+    values: UpdateRosterMetadataRequest,
+  ): Promise<PersonDetailResponse> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/roster-metadata`,
       { method: 'PATCH', body: JSON.stringify(values) },
       personDetailResponseSchema,
     );

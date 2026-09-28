@@ -21,6 +21,7 @@ from .event_review import enqueue_due_reviews
 from .routers import (
     activity,
     attendance,
+    attendance_handoff,
     auth,
     events,
     excel,
@@ -200,6 +201,8 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
         participants.registrations,
         participants.scanner,
         attendance.router,
+        attendance_handoff.scanner,
+        attendance_handoff.admin,
         activity.admin,
         activity.event_admin,
         activity.person_admin,

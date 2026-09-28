@@ -153,6 +153,7 @@ export type Participation = z.infer<typeof participationSchema>;
 export type ParticipationList = z.infer<typeof participationListSchema>;
 
 export const eventReviewItemSchema = z.object({
+  version: z.string().regex(/^[a-f0-9]{64}$/),
   registrationId: uuidSchema,
   lastName: z.string(),
   firstName: z.string(),
@@ -181,14 +182,19 @@ export const eventReviewSchema = z.object({
   eventId: uuidSchema,
   title: z.string(),
   state: z.enum(['NOT_STARTED', 'PENDING', 'APPROVED']),
+  isCorrection: z.boolean().default(false),
   items: z.array(eventReviewItemSchema),
 });
 export const eventReviewDecisionSchema = z.object({
+  expectedVersion: z.string().regex(/^[a-f0-9]{64}$/),
   attendanceDecision: z.enum(['PRESENT', 'ABSENT']),
   roleId: uuidSchema,
   resultId: uuidSchema.nullable(),
   rosterPersonId: uuidSchema.nullable(),
   rejectMatch: z.boolean(),
+  reason: z.string().trim().min(3).max(500),
+});
+export const eventReviewReopenSchema = z.object({
   reason: z.string().trim().min(3).max(500),
 });
 export const eventReviewApprovalSchema = z.object({
@@ -220,13 +226,15 @@ export type RosterSearch = z.infer<typeof rosterSearchSchema>;
 export const rosterPreviewSchema = z
   .object({
     fileHash: z.string().regex(/^[a-f0-9]{64}$/),
-    students: z.number().int().positive().max(5000),
+    students: z.number().int().nonnegative().max(5000),
+    skipped: z.number().int().nonnegative().max(5000).default(0),
   })
   .strict();
 export type RosterPreview = z.infer<typeof rosterPreviewSchema>;
 export const rosterImportSchema = z
   .object({
-    created: z.number().int().positive().max(5000),
+    created: z.number().int().nonnegative().max(5000),
+    skipped: z.number().int().nonnegative().max(5000).default(0),
   })
   .strict();
 export type RosterImport = z.infer<typeof rosterImportSchema>;
@@ -238,6 +246,7 @@ export const rosterValidationDetailsSchema = z.object({
     'FILE_TOO_LARGE',
     'UNREADABLE_FILE',
     'UNSAFE_ARCHIVE',
+    'GRID_TOO_LARGE',
     'SHEET_COUNT',
     'HEADERS',
     'MERGED_CELLS',
@@ -387,6 +396,7 @@ export const publicStudentSchema = z
 export const publicStudentListSchema = z
   .object({
     items: z.array(publicStudentSchema),
+    hasNext: z.boolean(),
     limit: z.number().int().positive(),
     offset: z.number().int().nonnegative(),
   })
@@ -405,6 +415,7 @@ export const publicParticipationListSchema = z
     ),
     page: z.number().int().positive(),
     pageSize: z.number().int().positive(),
+    hasNext: z.boolean(),
   })
   .strict();
 export type PublicParticipationList = z.infer<
@@ -425,6 +436,7 @@ export const leaderboardResponseSchema = z
     ),
     limit: z.number().int().positive(),
     offset: z.number().int().nonnegative(),
+    hasNext: z.boolean(),
   })
   .strict();
 export type LeaderboardResponse = z.infer<typeof leaderboardResponseSchema>;

@@ -38,6 +38,7 @@ from ..registration_service import (
 from ..schemas import ExcelCommitRequest, ParticipantValues
 from ..service_utils import audit, db_json, json_value
 from ..streams import selected_stream
+from ..xlsx_limits import validate_sheet_grid
 
 router = APIRouter(prefix="/admin/events", tags=["excel"])
 MAX_FILE = 5 * 1024 * 1024
@@ -408,6 +409,7 @@ def _parse(
     if not source or len(source) > MAX_FILE or not source.startswith(b"PK"):
         raise ApiError(400, "VALIDATION_ERROR", "A valid XLSX up to 5 MiB is required")
     _validate_xlsx_archive(source)
+    validate_sheet_grid(source)
     try:
         workbook = load_workbook(io.BytesIO(source), data_only=False, read_only=False)
     except Exception as error:
@@ -645,7 +647,7 @@ def _classify(
 
 
 @router.post("/{event_id}/import/preview", status_code=201)
-async def preview(
+def preview(
     event_id: UUID,
     file: Annotated[UploadFile, File()],
     staff: Annotated[Staff, Depends(csrf_administrator)],
@@ -653,7 +655,7 @@ async def preview(
     mapping: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
     _validate_upload(file)
-    source = await file.read(MAX_FILE + 1)
+    source = file.file.read(MAX_FILE + 1)
     expires = datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=24)
     with db.transaction() as connection:
         event = _event(
@@ -1013,22 +1015,48 @@ def export(
         )
         fields = rows(
             connection,
-            """SELECT id,label FROM event_form_fields
+            """SELECT id,label,type FROM event_form_fields
                WHERE event_id=:event ORDER BY sort_order,created_at,id""",
             {"event": str(event_id)},
         )
         answers = rows(
             connection,
-            """SELECT a.registration_id,a.field_id,a.answer
+            """SELECT a.registration_id,a.field_id,a.field_label_snapshot,a.field_type_snapshot,a.answer
                FROM registration_answers a
                JOIN registrations r ON r.id=a.registration_id
                WHERE r.event_id=:event""",
             {"event": str(event_id)},
         )
-    answer_by_registration = {
-        (answer["registration_id"], answer["field_id"]): _export_answer(
-            answer["answer"]
+    export_fields: list[dict[str, Any]] = []
+    for field in fields:
+        versions = sorted(
+            {
+                (
+                    str(answer["field_label_snapshot"]),
+                    str(answer["field_type_snapshot"]),
+                )
+                for answer in answers
+                if answer["field_id"] == field["id"]
+            }
         )
+        if not versions:
+            versions = [(field["label"], field["type"])]
+        for label, field_type in versions:
+            export_fields.append(
+                {
+                    "id": field["id"],
+                    "snapshot_label": label,
+                    "type": field_type,
+                    "label": label if len(versions) == 1 else f"{label} [{field_type}]",
+                }
+            )
+    answer_by_registration = {
+        (
+            answer["registration_id"],
+            answer["field_id"],
+            answer["field_label_snapshot"],
+            answer["field_type_snapshot"],
+        ): _export_answer(answer["answer"])
         for answer in answers
     }
     workbook = Workbook()
@@ -1056,7 +1084,7 @@ def export(
         "Роль участия",
         "Результат участия",
         "Начисленные баллы",
-        *_custom_headers(fields),
+        *_custom_headers(export_fields),
     ]
     sheet.append(columns)
     for item in registrations:
@@ -1087,8 +1115,15 @@ def export(
                     item["participation_result"],
                     str(item["score_awarded"] or "0.0000"),
                     *(
-                        answer_by_registration.get((item["id"], field["id"]))
-                        for field in fields
+                        answer_by_registration.get(
+                            (
+                                item["id"],
+                                field["id"],
+                                field["snapshot_label"],
+                                field["type"],
+                            )
+                        )
+                        for field in export_fields
                     ),
                 )
             ]

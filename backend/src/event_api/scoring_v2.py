@@ -113,7 +113,8 @@ def assign_scoring_sequence(
     baseline = row(
         connection,
         """SELECT COUNT(DISTINCT p.id) AS historical_count,
-          COALESCE(MAX(p.scoring_sequence),0) AS max_sequence
+          COALESCE((SELECT MAX(allocated.scoring_sequence) FROM participations allocated
+            WHERE allocated.person_id=:person),0) AS max_sequence
         FROM participations p JOIN events e ON e.id=p.event_id
         WHERE p.person_id=:person AND e.season_id IS NOT NULL AND p.id<>:participation
           AND (

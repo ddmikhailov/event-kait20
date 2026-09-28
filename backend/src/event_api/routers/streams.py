@@ -125,6 +125,19 @@ def save_stream(
             )
             if total and total["total"] >= 100:
                 raise ApiError(409, "CONFLICT", "Maximum 100 streams per event")
+        other_capacity = row(
+            connection,
+            "SELECT COALESCE(SUM(capacity),0) AS total FROM event_streams WHERE event_id=:event AND id<>:id FOR UPDATE",
+            {"event": event_id_s, "id": identity},
+        )
+        if (
+            int(other_capacity["total"] if other_capacity else 0) + values.capacity
+            > 5000
+        ):
+            raise ApiError(
+                409, "EVENT_REGISTRATION_LIMIT", "Combined stream capacity exceeds 5000"
+            )
+        if not existing:
             execute(
                 connection,
                 """INSERT INTO event_streams (id,event_id,title,start_at,end_at,capacity,sort_order,active,created_at,updated_at)

@@ -1160,6 +1160,22 @@ textarea {
   display: grid;
   gap: 1rem;
 }
+.roster-metadata-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.roster-metadata-fields legend {
+  margin-bottom: 1rem;
+  font-weight: 700;
+}
+.roster-metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
 .admin-form label,
 .field-form label,
 .admin-auth-card label {
@@ -1524,7 +1540,7 @@ textarea {
   padding: 0.9rem 0;
 }
 .participant-history article > span {
-  color: #777589;
+  color: #625f75;
   font-size: 0.75rem;
 }
 
@@ -2167,6 +2183,15 @@ textarea {
   background: #fff;
   box-shadow: 0 0.5rem 1.5rem rgb(43 44 124 / 5%);
 }
+.review-card-controls {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  gap: 1rem;
+}
+
 .review-card-header {
   display: flex;
   align-items: baseline;

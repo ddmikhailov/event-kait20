@@ -318,6 +318,10 @@ const excelNotice = (error: unknown) => ({
   kind: 'error' as const,
   text:
     error instanceof AdminApiError
-      ? error.message
+      ? error.code === 'EVENT_REGISTRATION_LIMIT'
+        ? 'Импорт превышает предел 5000 действующих регистраций. Изменения не сохранены; разделите участников на отдельные мероприятия.'
+        : error.code === 'XLSX_GRID_TOO_LARGE'
+          ? 'Слишком большой диапазон ячеек. Скопируйте только данные в новую книгу и проверьте файл снова.'
+          : error.message
       : 'Операция с Excel не выполнена.',
 });

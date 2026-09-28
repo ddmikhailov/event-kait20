@@ -327,6 +327,29 @@ export class ScannerDatabase extends Dexie {
       .sortBy('createdAt');
   }
 
+  public async acknowledgeRejectedHandoff(
+    item: PendingAttendanceRecord,
+  ): Promise<boolean> {
+    return this.transaction('rw', this.pendingAttendance, async () => {
+      const current = await this.pendingAttendance.get(item.clientEventId);
+      if (
+        !current ||
+        current.status !== 'REJECTED' ||
+        current.rejectionStatus !== item.rejectionStatus ||
+        current.eventId !== item.eventId ||
+        current.registrationId !== item.registrationId ||
+        current.deviceId !== item.deviceId ||
+        current.mode !== item.mode ||
+        current.source !== item.source ||
+        current.deviceScannedAt !== item.deviceScannedAt ||
+        current.estimatedScannedAt !== item.estimatedScannedAt
+      )
+        return false;
+      await this.pendingAttendance.delete(item.clientEventId);
+      return true;
+    });
+  }
+
   public async markSyncing(clientEventIds: string[]): Promise<void> {
     await this.updatePendingStatus(clientEventIds, 'SYNCING');
   }

@@ -1,5 +1,6 @@
 import {
   attendanceSyncResponseSchema,
+  rejectedAttendanceHandoffResponseSchema,
   streamListResponseSchema,
   type StreamListResponse,
   formFieldListResponseSchema,
@@ -11,6 +12,7 @@ import {
   sessionResponseSchema,
   type AttendanceSyncRequest,
   type AttendanceSyncResponse,
+  type RejectedAttendanceHandoffRequest,
   type FormFieldListResponse,
   type LoginRequest,
   type OfflineBundleResponse,
@@ -118,6 +120,17 @@ export class ScannerApiClient {
       `/scanner/events/${encodeURIComponent(eventId)}/attendance/sync`,
       { method: 'POST', body: JSON.stringify(body) },
       attendanceSyncResponseSchema,
+    );
+  }
+
+  public handoffRejected(
+    eventId: string,
+    body: RejectedAttendanceHandoffRequest,
+  ): Promise<{ clientEventId: string; status: 'OPEN' | 'RESOLVED' }> {
+    return this.request(
+      `/scanner/events/${encodeURIComponent(eventId)}/attendance/rejections`,
+      { method: 'POST', body: JSON.stringify(body) },
+      rejectedAttendanceHandoffResponseSchema,
     );
   }
 

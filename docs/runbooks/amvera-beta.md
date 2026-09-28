@@ -84,6 +84,18 @@ email-dependent registration, recovery and invitation flows are unverified.
    registration flows using fictional identities first. Mark email-dependent
    checks blocked until test SMTP is configured.
 
+## Scanner client update check
+
+After deploying the update UI, initially close and reopen older Scanner clients
+between scanning sessions, without clearing site data. Subsequent releases show
+**Обновить Scanner** on the event selection screen; apply there after current
+operations finish. The shell-ready message does not replace Event preparation.
+Use fictional attendance to verify a queued offline mark survives the update
+and syncs after reconnect. Keep a second scanning tab open to check that applying
+an update elsewhere does not reload it. Do not use logout as an update procedure:
+logout has its own explicit local-data deletion semantics. This local browser
+test is not evidence of successful deployment or testing on physical phones.
+
 ## Limits before any real use
 
 The `Начальный` MySQL tariff has no managed backups. Before importing real

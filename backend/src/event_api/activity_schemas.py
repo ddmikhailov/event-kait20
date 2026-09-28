@@ -23,7 +23,12 @@ Reason = Annotated[
 ]
 
 
+class EventReviewReopen(Contract):
+    reason: Reason
+
+
 class EventReviewDecision(Contract):
+    expected_version: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
     attendance_decision: Literal["PRESENT", "ABSENT"]
     role_id: UUID
     result_id: UUID | None = None

@@ -104,6 +104,12 @@ EventAccess and returns the documented minimum display snapshot; it does not
 return email or birth date. Audit metadata for participant edits stores changed
 field names and control flags, not before/after PII values.
 
+Roster metadata edits use the same administrator/tenant boundary and CSRF guard.
+They require a reason and an optimistic version check under row locks. Only the
+campus address is exposed by public profiles; education status, course, program,
+code, edit reason and version token remain in the staff API. Changes do not
+automatically expand profile visibility or modify historical registrations.
+
 ## 8. Offline PII
 
 Scanner caches minimum fields only. Cache lifecycle:
@@ -242,7 +248,22 @@ removed. Public activity requests retain a shared rate limit and responses use
 Scanner has no Activity administration permission; manual score adjustment and
 global configuration remain SUPER_ADMIN-only.
 
+Reopening an approved Event review requires SUPER_ADMIN and a reason. The prior
+approval timestamp is retained: subsequent refresh, decision writes and approval
+enforce SUPER_ADMIN on the server, including direct API calls. Prior decisions
+are copied to audit_log before editing; correction drafts do not mutate scores.
+An allocated participation cannot be moved to another Person through review.
+Concurrent decision edits require an opaque version incorporating Scanner state.
+
 ScoringPolicy lifecycle, Season policy assignment and Person Status writes are
 SUPER_ADMIN-only and derive Organization from authenticated staff context.
 Client-supplied organization authority is not accepted. Preview is authenticated
 administration functionality; calculation snapshots are not public.
+
+Rejected Scanner marks are transferred only through an authenticated,
+CSRF-protected same-Event endpoint. SCANNER requires EventAccess. The case
+stores the original mark and a rejection code, but no full QR payload or
+participant profile. Only SUPER_ADMIN/ORGANIZER can view or close cases within
+their Tenant and Organization. A missing registration remains unnamed in the
+response; the administrator verifies the case before any separate attendance
+correction. Handoff never changes attendance or points.

@@ -188,9 +188,10 @@ ordered list and are validated by the shared API contracts and the server.
 
 ## 7. Admin — Global People
 
-- `GET /admin/people?query=&page=&pageSize=`
+- `GET /admin/people?query=&page=&pageSize=&dedupReviewRequired=true`
 - `GET /admin/people/:personId`
 - `PATCH /admin/people/:personId`
+- `PATCH /admin/people/:personId/roster-metadata`
 
 Person detail returns current canonical data and Registration history. Updating Person does not rewrite existing Registration snapshots.
 
@@ -200,6 +201,24 @@ audited with changed field names only; PII values are not copied to audit
 metadata.
 
 Manual merge endpoint is intentionally deferred until merge UX/rules are designed.
+
+`dedupReviewRequired` is an optional boolean filter; when omitted, both flagged
+and unflagged people are returned. Filtering and counts remain tenant-scoped,
+with the existing page size limit of 100. A flag signals an ambiguous match,
+not proof that two records belong to one person.
+
+Person detail includes nullable `rosterVersion`, an opaque token for current
+roster metadata. SUPER_ADMIN/ORGANIZER may PATCH `roster-metadata` with all five
+nullable fields (`educationStatus`, `campusAddress`, `course`, `programName`,
+`programCode`, nonempty text up to 120 characters or null), `expectedVersion`
+and `reason` (3…500 characters). This does not add a person to the roster.
+The server locks Person and StudentRosterMember, rejects an outdated token with
+`409 ROSTER_METADATA_CHANGED`, and returns the refreshed Person detail. A missing
+roster record yields `404 ROSTER_STUDENT_REQUIRED`; an out-of-tenant or merged
+Person yields 404. Audit records actor, changed field names and the reason,
+without duplicating old/new metadata values. No Registration, Participation,
+StudentMembership or ledger rows change. The only publicly exposed metadata
+field remains the campus address; the version token and reason are private.
 
 The administrator Web workspace exposes this as a separate global People
 directory. Editing the current Person card never rewrites Registration
@@ -446,6 +465,33 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
 
 ## Activity API
 
+Открытие регистрации (`POST /admin/events` или переход в `REGISTRATION_OPEN`)
+требует сезон, уровень и назначенную сезону политику v2, действующую на `startAt`:
+опубликованную/исторически действовавшую версию, базу активной роли `PARTICIPANT`
+и множитель выбранного активного уровня. Неполные настройки допускаются в `DRAFT`.
+Проверка повторяется при изменении сезона, уровня или даты начала уже открытого
+мероприятия. Ошибка `409 SCORING_SETUP_REQUIRED` содержит `details.reason`:
+`SEASON_REQUIRED`, `LEVEL_REQUIRED`, `POLICY_REQUIRED`, `POLICY_VERSION_REQUIRED`,
+`PARTICIPANT_BASE_REQUIRED`, `LEVEL_MULTIPLIER_REQUIRED`.
+Готовность других назначенных ролей/результатов дополнительно проверяется при
+утверждении ведомости; изменение справочников после публикации может потребовать
+их настройки перед утверждением.
+
+Вместимость мероприятия и отдельного потока — 1…5000. Сумма вместимостей всех
+потоков не больше 5000. Добавление 5001-й ACTIVE регистрации возвращает
+`409 EVENT_REGISTRATION_LIMIT`, включая XLSX и подтверждённое добавление сверх
+вместимости; проверка выполняется под блокировкой Event. Отмена регистрации
+освобождает место. Лимит обычной вместимости остаётся отдельной проверкой.
+
+Ответ Event содержит `reviewPreparationError` (код или null) и `reviewRetryAt`
+(дата UTC или null). После ошибки автоматической подготовки ведомости Event
+сохраняет прежний статус, получает задержку повтора 5 минут и временно исключается
+из пакета планировщика (до 20 событий). Следующий проход может обрабатывать
+более поздние мероприятия. Успешная подготовка очищает ошибку и дату повтора.
+Ручное завершение доступно без ожидания повтора. Исторические мероприятия с более
+чем 5000 ACTIVE регистраций не обрезаются и не получают частичного начисления;
+`EVENT_COMPLETION_TOO_LARGE` требует разбора администратором.
+
 `PATCH /admin/events/:eventId` с `status=COMPLETED` создаёт ведомость проверки
 без начисления баллов. `completionSummary` содержит `registrations`, `present`,
 `absent`. Планировщик в production выполняет тот же переход через 24 часа после
@@ -454,13 +500,26 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
 подтверждённого участия возвращают `409 USE_EVENT_REVIEW`. Старые Events
 сохраняют прежний API для исторических корректировок.
 
-- `GET /admin/activity/reviews/pending` — очередь завершённых Events.
+- `GET /admin/activity/reviews/pending?state=PENDING|APPROVED` — очередь завершённых Events (по умолчанию PENDING; до 100 записей).
 - `GET /admin/events/:eventId/review` — все активные регистрации и решения.
 - `POST /admin/events/:eventId/review/refresh` — новые отметки Scanner.
 - `PATCH /admin/events/:eventId/review/:registrationId` — посещение, роль,
   результат, связь с контингентом или отклонение с обязательной причиной.
+  Обязательный `expectedVersion` берётся из `items[].version` последнего GET/PATCH.
+  Изменившееся решение или отметка Scanner возвращает `409 REVIEW_ITEM_CHANGED`.
+  Клиент сохраняет черновик; сотрудник отменяет его, обновляет список и сверяет заново.
 - `POST /admin/events/:eventId/review/approve` — атомарное начисление после
   проверки всех записей; повторы дают `409 REVIEW_NOT_PENDING`.
+- `POST /admin/events/:eventId/review/reopen` — только SUPER_ADMIN; JSON `{reason}`,
+  3–500 символов. Только COMPLETED + APPROVED. Снимки предыдущих решений
+  записываются в `audit_log` (`EVENT_REVIEW_SNAPSHOT`), состояние становится PENDING.
+  `isCorrection=true` в ответе означает ранее утверждённую ведомость; её PATCH,
+  refresh и approve доступны только SUPER_ADMIN. Открытие и правки черновика
+  не меняют баллы. Утверждение атомарно отменяет исключённые участия через REVERSAL
+  и пересчитывает изменённые роли/результаты. Неизменённые участия не начисляются повторно.
+  Ошибка расчёта откатывает всю транзакцию. Выданный `scoring_sequence` сохраняется.
+  Перенос участия с выданным номером другому Person запрещён (`REVIEW_IDENTITY_LOCKED`);
+  слияние людей требует отдельного процесса. Исходные регистрационные снимки не меняются.
 - `GET /admin/activity/roster/search?q=` — поиск кандидата для связи.
 - `POST /admin/people/:personId/roster` — ручное включение в контингент.
 - `POST /admin/activity/roster/preview|import` — SUPER_ADMIN, XLSX до 5 МБ,
@@ -478,8 +537,24 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
   Ошибки формата возвращают `error.details.reason` и, когда применимо,
   `row`, `column`, `firstRow`, `maxLength`; номера строк/столбцов начинаются с 1.
   Допустимые причины определены в `rosterValidationDetailsSchema`.
-  Значения ячеек в ошибки не включаются. Повторный импорт существующего
-  студента по-прежнему отклоняется, а изменение файла требует новой проверки.
+  Значения ячеек в ошибки не включаются. Form-поле `mode=SKIP_EXACT` пропускает
+  единственное точное совпадение ФИО, группы и всех метаданных с учётом регистра
+  и нормализации пробелов. При неоднозначности или отличии метаданных возвращается
+  `409 ROSTER_STUDENT_CONFLICT`; изменений нет. Пропуск не обновляет и не объединяет Person.
+  Отсутствующий mode сохраняет прежний режим REJECT (`ROSTER_STUDENT_EXISTS`).
+  Preview возвращает `students` (новые, включая 0) и `skipped`; import — `created`
+  и `skipped`. Повторная проверка выполняется в транзакции с блокировкой Tenant;
+  параллельный импорт не создаёт копии. Изменение файла требует новой проверки.
+  Оба XLSX-импорта до openpyxl проверяют физическую сетку: до 50 000 строк,
+  256 столбцов и 1 000 000 ячеек прямоугольника/работы объединений на лист.
+  Превышение возвращает `XLSX_GRID_TOO_LARGE` (для реестра — reason GRID_TOO_LARGE).
+  Обычное хвостовое форматирование в пределах бюджета допускается.
+
+Повтор публичной регистрации с тем же requestId не создаёт нового письма,
+включая попытку восстановления уже существующей регистрации. Новый requestId
+может поставить билет на сохранённый адрес не чаще раза в пять минут;
+пока есть QUEUED/SENDING, новая доставка не создаётся. `recoveryQueued=true`
+также покрывает уже поставленную доставку; адрес и билет в повторном ответе не раскрываются.
 
 - `GET/POST/PATCH /admin/activity/seasons|roles|results|categories|levels`
 - `GET/POST/PATCH /admin/activity/scoring-rules`
@@ -491,8 +566,11 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
 - `POST/PATCH /admin/people/:personId/achievements`
 - `GET /public/profiles/:slug` — опубликованная карточка: фамилия с
   инициалами, группа и площадка из реестра.
-- `GET /public/profiles/:slug/participations` — только мероприятия с
-  положительным итогом начислений: название и баллы, без роли и результата.
+- `GET /public/profiles/:slug/participations?page=&pageSize=&seasonId=` — только
+  мероприятия с положительным итогом начислений: название и баллы, без роли и
+  результата. `seasonId` необязателен; если указан, сезон должен принадлежать
+  публичной организации, иначе 404. Без него возвращается вся история.
+  `pageSize` ≤100, `page` ≤401.
 - `GET /public/students?q=&limit=&offset=` — bounded directory of published
   KAIT student profiles; `q` searches surname or group, `limit` is at most 50,
   `offset` is at most 10000. It returns only opaque slugs and surname with
@@ -501,6 +579,12 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
   surname with initials and season total derived from Event participations.
 - `GET /public/leaderboard/seasons` — public season identifiers and names for
   the ranking selector; returns at most 50 seasons in the current organization.
+
+Все три публичных списка (`students`, `leaderboard`, `participations`) возвращают
+`hasNext`: сервер выбирает на одну строку больше лимита, но лишнюю строку не
+отдаёт. При точном кратном числа записей размеру страницы последняя страница
+не ведёт к пустой следующей. Сначала развернуть API с `hasNext`, затем Web:
+новый клиент ожидает это поле в общем контракте.
 
 Global configuration, publication and manual score adjustments are SUPER_ADMIN
 operations. Participation operations accept SUPER_ADMIN/ORGANIZER. Scanner is
@@ -553,3 +637,20 @@ are admin-only and are not exposed by public leaderboard APIs. Snapshot
 separate `YYYY-MM-DD` value. Season assignment returns
 `SEASON_SCORING_POLICY_RETROACTIVE_CONFLICT` rather than crossing existing v1
 award history.
+
+## Rejected Scanner attendance handoff
+
+`POST /scanner/events/{eventId}/attendance/rejections` accepts `{deviceId,
+item, rejectionStatus}` with the original attendance sync item and a rejection
+status. It requires a staff session and CSRF token; SCANNER also needs
+EventAccess. Repeating the exact payload for the same `clientEventId` returns
+the existing `OPEN` or `RESOLVED` status. A changed payload returns
+`HANDOFF_CONFLICT`. This request never confirms attendance.
+
+`GET /admin/events/{eventId}/attendance/rejections?limit=50&offset=0` lists
+open cases for SUPER_ADMIN/ORGANIZER, with a bounded page and `hasNext`.
+Unknown registrations have null name/group fields. `PATCH` on the same path
+with `/{clientEventId}` and `{reason}` (3–500 characters) closes the case;
+repeating a closure returns `HANDOFF_ALREADY_RESOLVED`. Closing a case does not
+change attendance or points. Deploy migration 020 and the backend endpoint
+before releasing the Scanner and administrator clients.

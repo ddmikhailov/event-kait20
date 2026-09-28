@@ -51,6 +51,8 @@ def event_response(item: RowMapping) -> dict[str, Any]:
         "levelName": item.get("level_name"),
         "boostMultiplier": str(item["boost_multiplier"]),
         "activityReviewState": item["activity_review_state"],
+        "reviewPreparationError": item["review_preparation_error"],
+        "reviewRetryAt": serial(item["review_retry_at"]),
         "coverObjectKey": item["cover_object_key"],
         "startAt": serial(item["start_at"]),
         "endAt": serial(item["end_at"]),

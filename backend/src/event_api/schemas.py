@@ -178,7 +178,7 @@ class EventValues(Contract):
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
     ]
     registration_deadline: datetime
-    capacity: int = Field(gt=0)
+    capacity: int = Field(gt=0, le=5000)
     status: EventStatus = EventStatus.DRAFT
 
 
@@ -233,7 +233,7 @@ class UpdateEventRequest(Contract):
         | None
     ) = None
     registration_deadline: datetime | None = None
-    capacity: int | None = Field(default=None, gt=0)
+    capacity: int | None = Field(default=None, gt=0, le=5000)
     status: EventStatus | None = None
 
     @model_validator(mode="after")
@@ -340,7 +340,7 @@ class StreamValues(Contract):
     ]
     start_at: datetime
     end_at: datetime
-    capacity: int = Field(gt=0, le=1_000_000)
+    capacity: int = Field(gt=0, le=5000)
     sort_order: int = Field(default=0, ge=0, le=100_000)
     active: bool = True
 

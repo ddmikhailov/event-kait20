@@ -22,6 +22,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type FormEvent,
   type ReactNode,
 } from 'react';
@@ -34,6 +35,8 @@ import {
   type PreparedEventRecord,
 } from './offline-database.js';
 import { QrCamera } from './QrCamera.js';
+import { ScannerUpdateNotice } from './ScannerUpdateNotice.js';
+import { scannerUpdates } from './pwa-updates.js';
 import {
   OfflineScannerError,
   scannerService,
@@ -59,12 +62,28 @@ export const App = () => {
     typeof navigator === 'undefined' ? true : navigator.onLine,
   );
   const [pendingCount, setPendingCount] = useState(0);
+  const [queueSummary, setQueueSummary] = useState({ pending: 0, rejected: 0 });
   const [feedback, setFeedback] = useState<Feedback>();
   const [busy, setBusy] = useState(false);
+  const [reconnecting, setReconnecting] = useState(0);
+  const updateState = useSyncExternalStore(
+    scannerUpdates.subscribe,
+    scannerUpdates.getSnapshot,
+    scannerUpdates.getSnapshot,
+  );
 
   const loadEvents = useCallback(async () => {
+    setView('loading');
     await scannerDatabase.clearExpired();
     try {
+      const [pending, rejected] = await Promise.all([
+        scannerDatabase.pendingCount(),
+        scannerDatabase.pendingAttendance
+          .where('status')
+          .equals('REJECTED')
+          .count(),
+      ]);
+      setQueueSummary({ pending, rejected });
       const session = await scannerApi.restoreSession();
       if (!session) {
         await scannerDatabase.revokeOfflineAccess();
@@ -111,7 +130,14 @@ export const App = () => {
 
   useEffect(() => {
     void loadEvents();
-    const updateOnline = () => setOnline(navigator.onLine);
+    const updateOnline = () => {
+      setOnline(navigator.onLine);
+      if (navigator.onLine) {
+        setFeedback((current) =>
+          current?.kind === 'offline' ? undefined : current,
+        );
+      }
+    };
     window.addEventListener('online', updateOnline);
     window.addEventListener('offline', updateOnline);
     return () => {
@@ -123,6 +149,7 @@ export const App = () => {
   useEffect(() => {
     if (!online || !selectedEvent || view !== 'scanner') return;
     let cancelled = false;
+    setReconnecting((count) => count + 1);
     void scannerService
       .reconnect(selectedEvent.id)
       .then(async () => {
@@ -134,7 +161,8 @@ export const App = () => {
         if (!cancelled) {
           setFeedback({ kind: 'error', text: messageForError(error) });
         }
-      });
+      })
+      .finally(() => setReconnecting((count) => count - 1));
     return () => {
       cancelled = true;
     };
@@ -230,7 +258,8 @@ export const App = () => {
       <EventScreen
         events={events}
         online={online}
-        busy={busy}
+        busy={busy || reconnecting > 0}
+        queueSummary={queueSummary}
         feedback={feedback}
         onOpen={prepareAndOpen}
         onLogout={logout}
@@ -245,6 +274,7 @@ export const App = () => {
         feedback={feedback}
         onFeedback={setFeedback}
         onPendingCount={setPendingCount}
+        parentBusy={busy || reconnecting > 0}
         onBack={() => {
           setSelectedEvent(undefined);
           setView('events');
@@ -260,7 +290,10 @@ export const App = () => {
           <img src="/kait20-logo.png" alt="КАИТ №20" />
         </a>
       </header>
-      {page}
+      {view === 'events' && (
+        <ScannerUpdateNotice busy={busy || reconnecting > 0} />
+      )}
+      <div inert={updateState.applying}>{page}</div>
     </>
   );
 };
@@ -322,6 +355,7 @@ const EventScreen = ({
   events,
   online,
   busy,
+  queueSummary,
   feedback,
   onOpen,
   onLogout,
@@ -329,6 +363,7 @@ const EventScreen = ({
   events: DisplayEvent[];
   online: boolean;
   busy: boolean;
+  queueSummary: { pending: number; rejected: number };
   feedback?: Feedback | undefined;
   onOpen: (event: DisplayEvent) => Promise<void>;
   onLogout: () => Promise<void>;
@@ -336,8 +371,9 @@ const EventScreen = ({
   <main className="event-shell">
     <TopBar
       online={online}
-      pendingCount={0}
-      rejectedCount={0}
+      pendingCount={queueSummary.pending}
+      rejectedCount={queueSummary.rejected}
+      busy={busy}
       onLogout={onLogout}
     />
     <header className="page-heading">
@@ -380,6 +416,7 @@ const ScannerScreen = ({
   onPendingCount,
   onBack,
   onLogout,
+  parentBusy,
 }: {
   event: DisplayEvent;
   online: boolean;
@@ -389,6 +426,7 @@ const ScannerScreen = ({
   onPendingCount: (count: number) => void;
   onBack: () => void;
   onLogout: () => Promise<void>;
+  parentBusy: boolean;
 }) => {
   const [participant, setParticipant] = useState<ScanResolution>();
   const [busy, setBusy] = useState(false);
@@ -400,6 +438,10 @@ const ScannerScreen = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<ScanResolution[]>([]);
   const [rejected, setRejected] = useState<PendingAttendanceRecord[]>([]);
+  const [rejectedNames, setRejectedNames] = useState<Record<string, string>>(
+    {},
+  );
+  const [handoffBusy, setHandoffBusy] = useState<string>();
   const [confirmMode, setConfirmMode] = useState<
     'MANUAL_CONFIRM' | 'MANUAL_SEARCH'
   >('MANUAL_CONFIRM');
@@ -412,6 +454,7 @@ const ScannerScreen = ({
   const [streams, setStreams] = useState<StreamResponse[]>([]);
   const [streamsRequired, setStreamsRequired] = useState(false);
   const syncInProgress = useRef(false);
+  const [synchronizing, setSynchronizing] = useState(false);
 
   const updatePending = useCallback(async () => {
     const [pending, rejectedItems] = await Promise.all([
@@ -420,7 +463,63 @@ const ScannerScreen = ({
     ]);
     onPendingCount(pending);
     setRejected(rejectedItems);
+    const names = await Promise.all(
+      rejectedItems.map(async (item) => {
+        const registration = await scannerDatabase.offlineRegistrations.get([
+          event.id,
+          item.registrationId,
+        ]);
+        return [
+          item.clientEventId,
+          registration
+            ? [
+                registration.lastName,
+                registration.firstName,
+                registration.studyGroup,
+              ]
+                .filter(Boolean)
+                .join(' · ')
+            : `Регистрация ${item.registrationId.slice(0, 8)}`,
+        ] as const;
+      }),
+    );
+    setRejectedNames(Object.fromEntries(names));
   }, [event.id, onPendingCount]);
+
+  const handoffRejected = async (item: PendingAttendanceRecord) => {
+    if (!online || !item.rejectionStatus || item.status !== 'REJECTED') return;
+    setHandoffBusy(item.clientEventId);
+    try {
+      const response = await scannerApi.handoffRejected(event.id, {
+        deviceId: item.deviceId,
+        item: {
+          clientEventId: item.clientEventId,
+          registrationId: item.registrationId,
+          mode: item.mode,
+          source: item.source,
+          deviceScannedAt: item.deviceScannedAt,
+          estimatedScannedAt: item.estimatedScannedAt,
+        },
+        rejectionStatus: item.rejectionStatus as
+          | 'INVALID_REGISTRATION'
+          | 'REGISTRATION_ANNULLED'
+          | 'INVALID_TIMESTAMP'
+          | 'CLIENT_EVENT_CONFLICT',
+      });
+      if (response.clientEventId !== item.clientEventId)
+        throw new Error('Ответ сервера не соответствует отметке');
+      await scannerDatabase.acknowledgeRejectedHandoff(item);
+      await updatePending();
+      onFeedback({
+        kind: 'success',
+        text: 'Отметка передана администратору на проверку.',
+      });
+    } catch (error) {
+      onFeedback({ kind: 'error', text: messageForError(error) });
+    } finally {
+      setHandoffBusy(undefined);
+    }
+  };
 
   useEffect(() => {
     void updatePending();
@@ -429,6 +528,7 @@ const ScannerScreen = ({
   const synchronizePending = useCallback(async () => {
     if (syncInProgress.current) return;
     syncInProgress.current = true;
+    setSynchronizing(true);
     try {
       await scannerService.flushPending(event.id);
       await updatePending();
@@ -442,6 +542,7 @@ const ScannerScreen = ({
       });
     } finally {
       syncInProgress.current = false;
+      setSynchronizing(false);
     }
   }, [event.id, onFeedback, updatePending]);
 
@@ -513,6 +614,7 @@ const ScannerScreen = ({
     async (qrPayload: string) => {
       if (
         actionLocked.current ||
+        parentBusy ||
         busy ||
         feedback?.kind === 'error' ||
         !qrPayload.trim()
@@ -536,7 +638,7 @@ const ScannerScreen = ({
         actionLocked.current = false;
       }
     },
-    [busy, event.id, fastMode, feedback, onFeedback, record],
+    [busy, parentBusy, event.id, fastMode, feedback, onFeedback, record],
   );
 
   const search = async () => {
@@ -638,11 +740,18 @@ const ScannerScreen = ({
         online={online}
         pendingCount={pendingCount}
         rejectedCount={rejected.length}
+        busy={busy || synchronizing || parentBusy}
         onSynchronize={synchronizePending}
         onLogout={onLogout}
       />
       <header className="scanner-heading">
-        <button className="text-button" onClick={onBack}>
+        <button
+          className="text-button"
+          disabled={busy || synchronizing || parentBusy}
+          onClick={() => {
+            if (!actionLocked.current && !syncInProgress.current) onBack();
+          }}
+        >
           ← Назад
         </button>
         <div>
@@ -704,7 +813,11 @@ const ScannerScreen = ({
       )}
       {workMode === 'scan' && (
         <QrCamera
-          active={feedback?.kind !== 'error' && (fastMode || !participant)}
+          active={
+            !parentBusy &&
+            feedback?.kind !== 'error' &&
+            (fastMode || !participant)
+          }
           onDecode={(value) => void resolve(value)}
         />
       )}
@@ -789,11 +902,36 @@ const ScannerScreen = ({
       {rejected.length > 0 && (
         <details className="rejected-sync">
           <summary>{rejected.length} отметок требуют проверки</summary>
+          <p>
+            После передачи администратор разберёт причину. Посещение и баллы
+            автоматически не изменятся.
+          </p>
           <ul>
             {rejected.map((item) => (
               <li key={item.clientEventId}>
-                <span>{item.registrationId}</span>
-                <strong>{item.rejectionStatus ?? 'SYNC_ERROR'}</strong>
+                <span>
+                  {rejectedNames[item.clientEventId] ?? 'Регистрация'}
+                </span>
+                <strong>
+                  {(
+                    {
+                      INVALID_REGISTRATION: 'Регистрация не найдена',
+                      REGISTRATION_ANNULLED: 'Регистрация аннулирована',
+                      INVALID_TIMESTAMP: 'Некорректное время отметки',
+                      CLIENT_EVENT_CONFLICT: 'Конфликт повторной отметки',
+                    } as Record<string, string>
+                  )[item.rejectionStatus ?? ''] ?? 'Причина неизвестна'}
+                </strong>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!online || Boolean(handoffBusy)}
+                  onClick={() => void handoffRejected(item)}
+                >
+                  {handoffBusy === item.clientEventId
+                    ? 'Передаём…'
+                    : 'Передать администратору'}
+                </button>
               </li>
             ))}
           </ul>
@@ -1070,12 +1208,14 @@ const TopBar = ({
   online,
   pendingCount,
   rejectedCount,
+  busy,
   onSynchronize,
   onLogout,
 }: {
   online: boolean;
   pendingCount: number;
   rejectedCount: number;
+  busy: boolean;
   onSynchronize?: (() => Promise<void>) | undefined;
   onLogout: () => Promise<void>;
 }) => (
@@ -1091,11 +1231,19 @@ const TopBar = ({
       <span className="sync-warning">{rejectedCount} отклонены</span>
     )}
     {online && pendingCount > 0 && onSynchronize && (
-      <button className="text-button" onClick={() => void onSynchronize()}>
+      <button
+        className="text-button"
+        disabled={busy}
+        onClick={() => void onSynchronize()}
+      >
         Синхронизировать
       </button>
     )}
-    <button className="text-button" onClick={() => void onLogout()}>
+    <button
+      className="text-button"
+      disabled={busy}
+      onClick={() => void onLogout()}
+    >
       Выйти
     </button>
   </div>
@@ -1177,6 +1325,8 @@ const messageForError = (error: unknown): string => {
       ACCESS_REVALIDATION_REQUIRED: 'Требуется повторный вход',
       OFFLINE_NOT_READY: 'Сначала подготовьте мероприятие онлайн',
       CAPACITY_FULL: 'На мероприятии нет свободных мест',
+      EVENT_REGISTRATION_LIMIT:
+        'Достигнут предел 5000 регистраций. Добавить сверх этого предела нельзя.',
       STREAM_REQUIRED: 'Выберите поток мероприятия',
       STREAM_INVALID:
         'Этот поток недоступен. Обновите страницу и выберите другой',

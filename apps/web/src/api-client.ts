@@ -87,9 +87,12 @@ export class PublicApiClient {
   public studentParticipations(
     slug: string,
     page = 1,
+    seasonId?: string,
   ): Promise<PublicParticipationList> {
+    const params = new URLSearchParams({ page: String(page), pageSize: '25' });
+    if (seasonId) params.set('seasonId', seasonId);
     return this.request(
-      `/public/profiles/${encodeURIComponent(slug)}/participations?page=${page}&pageSize=25`,
+      `/public/profiles/${encodeURIComponent(slug)}/participations?${params.toString()}`,
       { method: 'GET', cache: 'no-store' },
       publicParticipationListSchema,
     );

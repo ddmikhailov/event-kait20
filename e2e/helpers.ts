@@ -3,7 +3,15 @@ import { resolve } from 'node:path';
 
 export const demoCredentials = () => {
   const values = Object.fromEntries(
-    readFileSync(resolve(process.cwd(), '.demo.env'), 'utf8')
+    readFileSync(
+      resolve(
+        process.cwd(),
+        process.env.DEMO_INSTANCE === 'e2e'
+          ? '.runtime/e2e-native-demo/demo.env'
+          : '.demo.env',
+      ),
+      'utf8',
+    )
       .split(/\r?\n/)
       .filter((line) => line && !line.startsWith('#'))
       .map((line) => line.split(/=(.*)/s).slice(0, 2)),

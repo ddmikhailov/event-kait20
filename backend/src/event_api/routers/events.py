@@ -31,6 +31,7 @@ from ..schemas import (
     UpdateEventRequest,
     UpdateFormFieldRequest,
 )
+from ..scoring_readiness import require_scoring_ready
 from ..service_utils import (
     audit,
     db_json,
@@ -237,6 +238,14 @@ def create_event(
         if values.level_id:
             reference(connection, "event_levels", str(values.level_id))
         data = values.model_dump(mode="python")
+        if values.status == "REGISTRATION_OPEN":
+            require_scoring_ready(
+                connection,
+                str(values.season_id) if values.season_id else None,
+                str(values.level_id) if values.level_id else None,
+                values.start_at,
+                staff.organization_id,
+            )
         execute(
             connection,
             """INSERT INTO events
@@ -366,14 +375,60 @@ def update_event(
             "SELECT count(*) AS count FROM registrations WHERE event_id=:id AND status='ACTIVE'",
             {"id": event_id_s},
         )
-        if int(active["count"] if active else 0) > 0 and any(
-            field in changes and str(changes[field]) != str(existing[field])
+        changed_scoring = [
+            field
             for field in ("season_id", "level_id", "boost_multiplier")
+            if field in changes and str(changes[field]) != str(existing[field])
+        ]
+        if int(active["count"] if active else 0) > 0 and changed_scoring:
+            filling_missing = all(
+                field in ("season_id", "level_id")
+                and existing[field] is None
+                and changes[field] is not None
+                for field in changed_scoring
+            )
+            has_history = row(
+                connection,
+                """SELECT 1 FROM score_transactions st JOIN participations p ON p.id=st.participation_id
+                WHERE p.event_id=:event LIMIT 1""",
+                {"event": event_id_s},
+            )
+            if (
+                not filling_missing
+                or has_history
+                or existing["activity_review_state"] == "APPROVED"
+            ):
+                raise ApiError(
+                    409,
+                    "SCORING_CONFIG_LOCKED",
+                    "Scoring settings cannot change after registration",
+                )
+            audit(
+                connection,
+                staff.id,
+                "EVENT_SCORING_SETUP_REPAIRED",
+                "Event",
+                event_id_s,
+                {"fields": changed_scoring},
+            )
+        if next_status == "REGISTRATION_OPEN" and (
+            existing["status"] != "REGISTRATION_OPEN"
+            or any(
+                field in changes and str(changes[field]) != str(existing[field])
+                for field in ("season_id", "level_id")
+            )
+            or start != naive_utc(existing["start_at"])
         ):
-            raise ApiError(
-                409,
-                "SCORING_CONFIG_LOCKED",
-                "Scoring settings cannot change after registration",
+            require_scoring_ready(
+                connection,
+                str(changes.get("season_id", existing["season_id"]))
+                if changes.get("season_id", existing["season_id"])
+                else None,
+                str(changes.get("level_id", existing["level_id"]))
+                if changes.get("level_id", existing["level_id"])
+                else None,
+                start,
+                staff.organization_id,
             )
         if capacity != existing["capacity"] and capacity < int(
             active["count"] if active else 0
@@ -620,6 +675,13 @@ def purge_event(
                   OR entity_id IN (SELECT id FROM event_form_fields WHERE event_id=:event)
                   OR entity_id IN (SELECT id FROM event_streams WHERE event_id=:event)
                   OR entity_id IN (SELECT id FROM import_jobs WHERE event_id=:event)""",
+            {"event": event_id_s},
+        )
+        execute(
+            connection,
+            """DELETE FROM audit_log WHERE entity_type='ScannerRejectedAttendance'
+               AND entity_id IN (SELECT client_event_id FROM scanner_rejected_attendance
+                                 WHERE event_id=:event)""",
             {"event": event_id_s},
         )
         execute(

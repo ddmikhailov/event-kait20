@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+process.env.DEMO_INSTANCE = 'e2e';
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
@@ -15,7 +17,8 @@ export default defineConfig({
   projects: [
     {
       name: 'desktop-chromium',
-      testMatch: /critical\.spec\.ts/,
+      testMatch:
+        /(?:critical|review-ui|roster-ui|scanner-update|mosactive-navigation|attendance-handoff)\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },
     {
@@ -30,6 +33,6 @@ export default defineConfig({
     reuseExistingServer: process.env.E2E_REUSE_SERVER === 'true',
     timeout: 120_000,
     gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
-    env: { DEMO_PRINT_CREDENTIALS: 'false' },
+    env: { DEMO_PRINT_CREDENTIALS: 'false', DEMO_INSTANCE: 'e2e' },
   },
 });

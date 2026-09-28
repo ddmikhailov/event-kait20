@@ -1,6 +1,7 @@
 """Roster compatibility and validation, using fictional students only."""
 
 import io
+import zipfile
 from uuid import uuid4
 
 import pytest
@@ -54,6 +55,53 @@ def test_simple_roster_ignores_formatting_beyond_data() -> None:
     sheet.append(["Тестов", "Тест", None, "ТЕСТ-1"])
     sheet["G5"].font = Font(bold=True)
     assert len(parse_roster(workbook_bytes(book))) == 1
+
+
+@pytest.mark.parametrize("coordinate", ["D1048576", "XFD3", "Z50000"])
+def test_sparse_grid_is_rejected_before_workbook_materialization(
+    coordinate, monkeypatch
+):
+    book = Workbook()
+    sheet = book.active
+    sheet.append(list(HEADERS))
+    sheet.append(["Тестов", "Тест", None, "ТЕСТ-1"])
+    sheet[coordinate].font = Font(bold=True)
+    source = workbook_bytes(book)
+
+    def unexpected_load(*args, **kwargs):
+        pytest.fail("Oversized grid reached openpyxl")
+
+    monkeypatch.setattr("event_api.routers.roster.load_workbook", unexpected_load)
+    with pytest.raises(ApiError) as failure:
+        parse_roster(source)
+    assert failure.value.details == {"reason": "GRID_TOO_LARGE"}
+
+
+def test_oversized_merge_is_rejected_before_materialization(monkeypatch):
+    book = Workbook()
+    book.active.append(list(HEADERS))
+    book.active.append(["Тестов", "Тест", None, "ТЕСТ-1"])
+    source = workbook_bytes(book)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as original,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target,
+    ):
+        for info in original.infolist():
+            value = original.read(info.filename)
+            if info.filename == "xl/worksheets/sheet1.xml":
+                value = value.replace(
+                    b"</worksheet>",
+                    b'<mergeCells count="1"><mergeCell ref="A1:XFD1048576"/></mergeCells></worksheet>',
+                )
+            target.writestr(info, value)
+    monkeypatch.setattr(
+        "event_api.routers.roster.load_workbook",
+        lambda *args, **kwargs: pytest.fail("Large merge reached openpyxl"),
+    )
+    with pytest.raises(ApiError) as failure:
+        parse_roster(output.getvalue())
+    assert failure.value.details == {"reason": "GRID_TOO_LARGE"}
 
 
 @pytest.mark.parametrize(
@@ -188,12 +236,47 @@ def test_formatted_roster_preview_and_commit_with_generic_file_type(
         data={"fileHash": preview.json()["fileHash"]},
     )
     assert imported.status_code == 201, imported.text
-    assert imported.json() == {"created": 1}
+    assert imported.json() == {"created": 1, "skipped": 0}
     repeated = client.post(
         "/admin/activity/roster/preview", headers=headers, files=file
     )
     assert repeated.status_code == 409
     assert repeated.json()["error"]["code"] == "ROSTER_STUDENT_EXISTS"
+    safe_preview = client.post(
+        "/admin/activity/roster/preview",
+        headers=headers,
+        files=file,
+        data={"mode": "SKIP_EXACT"},
+    )
+    assert safe_preview.status_code == 200, safe_preview.text
+    assert safe_preview.json()["students"] == 0
+    assert safe_preview.json()["skipped"] == 1
+    safe_import = client.post(
+        "/admin/activity/roster/import",
+        headers=headers,
+        files=file,
+        data={"mode": "SKIP_EXACT", "fileHash": safe_preview.json()["fileHash"]},
+    )
+    assert safe_import.status_code == 201, safe_import.text
+    assert safe_import.json() == {"created": 0, "skipped": 1}
+    from sqlalchemy import text
+
+    parsed = parse_roster(file["file"][1])[0]
+    with client.app.state.database.transaction() as connection:
+        connection.execute(
+            text(
+                "UPDATE student_roster_members m JOIN persons p ON p.id=m.person_id SET m.campus_address='Исправлено вручную' WHERE p.study_group=:group"
+            ),
+            {"group": parsed["study_group"]},
+        )
+    conflict = client.post(
+        "/admin/activity/roster/preview",
+        headers=headers,
+        files=file,
+        data={"mode": "SKIP_EXACT"},
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["error"]["code"] == "ROSTER_STUDENT_CONFLICT"
 
 
 def test_preview_exposes_safe_row_diagnostics(client: TestClient) -> None:

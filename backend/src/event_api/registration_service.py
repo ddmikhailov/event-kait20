@@ -264,6 +264,20 @@ def create_registration(
     config: Settings,
     stream_id: str | None = None,
 ) -> tuple[str, str]:
+    # All entry points, including Excel and explicit overbooking, share this
+    # hard limit. Lock the Event so the boundary also holds under concurrency.
+    row(connection, "SELECT id FROM events WHERE id=:id FOR UPDATE", {"id": event_id})
+    total = row(
+        connection,
+        "SELECT COUNT(*) AS total FROM registrations WHERE event_id=:id AND status='ACTIVE' FOR UPDATE",
+        {"id": event_id},
+    )
+    if total and int(total["total"]) >= 5000:
+        raise ApiError(
+            409,
+            "EVENT_REGISTRATION_LIMIT",
+            "Maximum 5000 active registrations per Event",
+        )
     registration_id, public_id = str(uuid4()), str(uuid4())
     candidates = roster_candidates(connection, event_id, data)
     match_state = (
@@ -386,9 +400,23 @@ def public_repeat_response(
     event_id: str,
     registration_id: str,
     saved_email: str | None,
+    *,
+    replay: bool = False,
 ) -> dict[str, Any]:
-    if saved_email:
-        queue_ticket(connection, event_id, registration_id, saved_email)
+    if saved_email and not replay:
+        # Event/registration is locked by the caller. Concurrent retries cannot
+        # each enqueue a delivery; queued retries stay with the mail worker.
+        recent = row(
+            connection,
+            """SELECT id FROM email_deliveries
+            WHERE registration_id=:id AND type='REGISTRATION_TICKET'
+              AND (status IN ('QUEUED','SENDING')
+                   OR queued_at > UTC_TIMESTAMP(3) - INTERVAL 5 MINUTE)
+            LIMIT 1""",
+            {"id": registration_id},
+        )
+        if not recent:
+            queue_ticket(connection, event_id, registration_id, saved_email)
     return {
         "status": "ALREADY_REGISTERED",
         "recoveryQueued": bool(saved_email),
@@ -461,7 +489,11 @@ def register(
                 )
             if source == "PUBLIC_FORM":
                 return public_repeat_response(
-                    connection, event["id"], previous["id"], previous["email"]
+                    connection,
+                    event["id"],
+                    previous["id"],
+                    previous["email"],
+                    replay=True,
                 )
             return {
                 "status": "ALREADY_REGISTERED",
@@ -500,6 +532,19 @@ def register(
     )
     if existing:
         if source == "PUBLIC_FORM":
+            if request_hash:
+                execute(
+                    connection,
+                    """INSERT INTO registration_requests
+                    (request_hash,event_id,registration_id,payload_hash)
+                    VALUES (:key,:event,:registration,:payload)""",
+                    {
+                        "key": request_hash,
+                        "event": event["id"],
+                        "registration": existing["id"],
+                        "payload": payload_hash,
+                    },
+                )
             return public_repeat_response(
                 connection, event["id"], existing["id"], existing["email"]
             )

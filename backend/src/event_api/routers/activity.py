@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -13,6 +13,7 @@ from ..activity_schemas import (
     AchievementDecision,
     AchievementValues,
     EventReviewDecision,
+    EventReviewReopen,
     ManualAdjustmentRequest,
     ParticipationAssignRequest,
     ParticipationCancelRequest,
@@ -908,15 +909,20 @@ def search_participations(
 def pending_event_reviews(
     staff: Annotated[Staff, Depends(administrator)],
     db: Annotated[Database, Depends(database)],
+    state: Literal["PENDING", "APPROVED"] = "PENDING",
 ) -> dict[str, Any]:
     with db.connect() as connection:
         items = rows(
             connection,
             """SELECT e.id,e.title FROM events e JOIN organizations o ON o.id=e.organization_id
             WHERE o.tenant_id=:tenant AND e.organization_id=:organization
-              AND e.activity_review_state='PENDING' AND e.status='COMPLETED'
+              AND e.activity_review_state=:state AND e.status='COMPLETED'
             ORDER BY e.end_at DESC LIMIT 100""",
-            {"tenant": staff.tenant_id, "organization": staff.organization_id},
+            {
+                "tenant": staff.tenant_id,
+                "organization": staff.organization_id,
+                "state": state,
+            },
         )
     return {"items": [{"id": item["id"], "title": item["title"]} for item in items]}
 
@@ -993,6 +999,88 @@ def get_event_review(
             "eventId": str(event_id),
             "title": event["title"],
             "state": event["activity_review_state"],
+            "isCorrection": event["activity_reviewed_at"] is not None,
+            "items": review_items(connection, str(event_id)),
+        }
+
+
+def check_review_editor(event: Any, staff: Staff) -> None:
+    if event["activity_reviewed_at"] and staff.role != "SUPER_ADMIN":
+        raise ApiError(
+            403, "FORBIDDEN", "Only SUPER_ADMIN may correct an approved review"
+        )
+
+
+@event_admin.post("/{event_id}/review/reopen")
+def reopen_event_review(
+    event_id: UUID,
+    values: EventReviewReopen,
+    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.transaction() as connection:
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id, lock=True
+        )
+        if (
+            event["status"] != "COMPLETED"
+            or event["activity_review_state"] != "APPROVED"
+        ):
+            raise ApiError(
+                409, "REVIEW_NOT_APPROVED", "Only an approved review can be reopened"
+            )
+        # Preserve the complete previous decision before a correction can edit it.
+        previous = rows(
+            connection,
+            "SELECT * FROM event_participation_reviews WHERE event_id=:id ORDER BY registration_id FOR UPDATE",
+            {"id": str(event_id)},
+        )
+        for item in previous:
+            audit(
+                connection,
+                staff.id,
+                "EVENT_REVIEW_SNAPSHOT",
+                "Registration",
+                item["registration_id"],
+                {
+                    "eventId": str(event_id),
+                    "reason": values.reason,
+                    "approvedAt": serial(event["activity_reviewed_at"]),
+                    "approvedBy": event["activity_reviewed_by"],
+                    "decision": {
+                        key: serial(item[key])
+                        for key in (
+                            "attendance_decision",
+                            "scanner_first_attended_at",
+                            "role_id",
+                            "result_id",
+                            "roster_person_id",
+                            "match_state",
+                            "decision_reason",
+                            "reviewed_by",
+                            "reviewed_at",
+                        )
+                    },
+                },
+            )
+        execute(
+            connection,
+            "UPDATE events SET activity_review_state='PENDING',updated_at=UTC_TIMESTAMP(3) WHERE id=:id",
+            {"id": str(event_id)},
+        )
+        audit(
+            connection,
+            staff.id,
+            "EVENT_REVIEW_REOPENED",
+            "Event",
+            str(event_id),
+            {"reason": values.reason},
+        )
+        return {
+            "eventId": str(event_id),
+            "title": event["title"],
+            "state": "PENDING",
+            "isCorrection": True,
             "items": review_items(connection, str(event_id)),
         }
 
@@ -1009,6 +1097,7 @@ def refresh_event_review(
         )
         if event["activity_review_state"] != "PENDING":
             raise ApiError(409, "REVIEW_NOT_PENDING", "Event review is not pending")
+        check_review_editor(event, staff)
         execute(
             connection,
             """UPDATE event_participation_reviews review
@@ -1025,6 +1114,7 @@ def refresh_event_review(
             "eventId": str(event_id),
             "title": event["title"],
             "state": "PENDING",
+            "isCorrection": event["activity_reviewed_at"] is not None,
             "items": review_items(connection, str(event_id)),
         }
 
@@ -1043,6 +1133,7 @@ def patch_event_review(
         )
         if event["activity_review_state"] != "PENDING":
             raise ApiError(409, "REVIEW_NOT_PENDING", "Event review is not pending")
+        check_review_editor(event, staff)
         update_review_item(
             connection,
             str(event_id),
@@ -1055,11 +1146,13 @@ def patch_event_review(
             values.reject_match,
             values.reason,
             staff.tenant_id,
+            values.expected_version,
         )
         return {
             "eventId": str(event_id),
             "title": event["title"],
             "state": "PENDING",
+            "isCorrection": event["activity_reviewed_at"] is not None,
             "items": review_items(connection, str(event_id)),
         }
 
@@ -2186,7 +2279,7 @@ def public_students(
             {
                 "tenant": scope.tenant_id,
                 "query": search_pattern(q.strip()) if q else None,
-                "limit": limit,
+                "limit": limit + 1,
                 "offset": offset,
             },
         )
@@ -2196,10 +2289,11 @@ def public_students(
                 "publicSlug": item["public_slug"],
                 "displayName": public_display_name(item),
             }
-            for item in items
+            for item in items[:limit]
         ],
         "limit": limit,
         "offset": offset,
+        "hasNext": len(items) > limit,
     }
 
 
@@ -2244,22 +2338,34 @@ def public_profile(
 def public_participations(
     slug: str,
     db: Annotated[Database, Depends(database)],
-    page: int = Query(1, ge=1),
+    page: int = Query(1, ge=1, le=401),
     page_size: int = Query(25, alias="pageSize", ge=1, le=100),
+    season_id: Annotated[UUID | None, Query(alias="seasonId")] = None,
 ) -> dict[str, Any]:
     with db.connect() as connection:
         profile = public_profile_row(connection, slug)
+        if season_id is not None:
+            scope = default_tenant_scope(connection)
+            season = row(
+                connection,
+                "SELECT id FROM seasons WHERE id=:season AND organization_id=:organization",
+                {"season": str(season_id), "organization": scope.organization_id},
+            )
+            if not season:
+                raise ApiError(404, "SEASON_NOT_FOUND", "Season not found")
         items = rows(
             connection,
             """SELECT e.title,e.start_at,p.id,SUM(st.points) AS points
             FROM participations p JOIN events e ON e.id=p.event_id
             JOIN score_transactions st ON st.participation_id=p.id
             WHERE p.person_id=:person AND p.status='CONFIRMED'
+              AND (:season IS NULL OR st.season_id=:season)
             GROUP BY p.id,e.title,e.start_at HAVING points>0
             ORDER BY e.start_at DESC,p.id DESC LIMIT :limit OFFSET :offset""",
             {
                 "person": profile["person_id"],
-                "limit": page_size,
+                "season": str(season_id) if season_id else None,
+                "limit": page_size + 1,
                 "offset": (page - 1) * page_size,
             },
         )
@@ -2269,10 +2375,11 @@ def public_participations(
                 "eventTitle": item["title"],
                 "points": decimal_string(item["points"]),
             }
-            for item in items
+            for item in items[:page_size]
         ],
         "page": page,
         "pageSize": page_size,
+        "hasNext": len(items) > page_size,
     }
 
 
@@ -2311,7 +2418,7 @@ def leaderboard(
             {
                 "season": str(season_id),
                 "tenant": scope.tenant_id,
-                "limit": limit,
+                "limit": limit + 1,
                 "offset": offset,
             },
         )
@@ -2323,8 +2430,9 @@ def leaderboard(
                 "displayName": public_display_name(item),
                 "points": decimal_string(item["points"]),
             }
-            for index, item in enumerate(items)
+            for index, item in enumerate(items[:limit])
         ],
         "limit": limit,
         "offset": offset,
+        "hasNext": len(items) > limit,
     }

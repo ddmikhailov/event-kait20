@@ -1005,6 +1005,8 @@ const messageForError = (error: unknown): string => {
       EVENT_NOT_FOUND: 'Мероприятие не найдено',
       REGISTRATION_CLOSED: 'Регистрация закрыта',
       CAPACITY_FULL: 'Свободных мест больше нет',
+      EVENT_REGISTRATION_LIMIT:
+        'Достигнут предел регистраций. Обратитесь к организатору.',
       STREAM_REQUIRED: 'Выберите поток мероприятия',
       STREAM_INVALID:
         'Этот поток недоступен. Обновите страницу и выберите другой',

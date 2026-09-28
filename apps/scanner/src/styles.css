@@ -142,6 +142,32 @@ textarea {
   line-height: 1.5;
 }
 
+.scanner-update {
+  display: grid;
+  gap: 0.75rem;
+  width: min(calc(100% - 2rem), 54.5rem);
+  margin: 1rem auto 0;
+  padding: 1rem;
+  border: 1px solid #83639d;
+  border-radius: 1rem;
+  background: #191a35;
+  line-height: 1.5;
+}
+
+.scanner-update p {
+  margin: 0.5rem 0 0;
+  color: #d8d8e9;
+}
+
+.scanner-update button {
+  justify-self: start;
+}
+
+.text-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .event-shell,
 .scanner-shell {
   display: grid;

@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
+from publication_fixture import publication_fields
 from sqlalchemy import text
 
 from event_api.database import Database
@@ -237,6 +238,19 @@ def test_roster_import_creates_public_zero_profiles_and_rejects_duplicates(
         "/public/leaderboard", params={"seasonId": season.json()["id"]}
     )
     assert ranking.status_code == 200, ranking.text
+    assert isinstance(ranking.json()["hasNext"], bool)
+    only_one = client.get(
+        "/public/leaderboard",
+        params={"seasonId": season.json()["id"], "limit": 1},
+    ).json()
+    assert only_one["hasNext"] == (len(ranking.json()["items"]) > 1)
+    assert (
+        client.get(
+            "/public/students",
+            params={"q": "Демонстрационный", "limit": 1, "offset": 1},
+        ).json()["hasNext"]
+        is False
+    )
     assert any(
         item["publicSlug"] == student[3] and float(item["points"]) == 0
         for item in ranking.json()["items"]
@@ -355,6 +369,7 @@ def test_due_event_enters_review_24_hours_after_end(client: TestClient) -> None:
             "location": "КАИТ №20",
             "capacity": 10,
             "status": "REGISTRATION_OPEN",
+            **publication_fields(client),
         },
     )
     assert event.status_code == 201, event.text
@@ -397,6 +412,7 @@ def test_public_registration_matches_roster_by_full_name_and_group(
             "location": "КАИТ №20",
             "capacity": 10,
             "status": "REGISTRATION_OPEN",
+            **publication_fields(client),
             "levelId": "20000000-0000-4000-8000-000000000003",
         },
     )
@@ -461,12 +477,18 @@ def test_event_completion_scores_checked_in_students_once(client: TestClient) ->
             "registrationDeadline": (now - timedelta(hours=3)).isoformat(),
             "location": "КАИТ №20",
             "capacity": 20,
-            "status": "REGISTRATION_OPEN",
+            "status": "DRAFT",
             "seasonId": season.json()["id"],
         },
     )
     assert event.status_code == 201, event.text
     event_id = event.json()["id"]
+    # Historical open event: intentionally predates the publication readiness guard.
+    with database.transaction() as connection:
+        connection.execute(
+            text("UPDATE events SET status='REGISTRATION_OPEN' WHERE id=:id"),
+            {"id": event_id},
+        )
     roles = client.get("/admin/activity/roles").json()["items"]
     participant = next(item for item in roles if item["code"] == "PARTICIPANT")
     volunteer = next(item for item in roles if item["code"] == "VOLUNTEER")
@@ -602,7 +624,7 @@ def test_completed_event_waits_for_published_policy_before_approval(
             "registrationDeadline": (now - timedelta(hours=3)).isoformat(),
             "location": "КАИТ №20",
             "capacity": 10,
-            "status": "REGISTRATION_OPEN",
+            "status": "DRAFT",
             "seasonId": season.json()["id"],
             "levelId": "20000000-0000-4000-8000-000000000003",
             "boostMultiplier": "1.5",
@@ -610,6 +632,12 @@ def test_completed_event_waits_for_published_policy_before_approval(
     )
     assert event.status_code == 201, event.text
     event_id = event.json()["id"]
+    # Historical open event: intentionally predates the publication readiness guard.
+    with database.transaction() as connection:
+        connection.execute(
+            text("UPDATE events SET status='REGISTRATION_OPEN' WHERE id=:id"),
+            {"id": event_id},
+        )
     registration_id = create_registration(database, event_id, "review")
     with database.transaction() as connection:
         person_id = connection.execute(
@@ -718,13 +746,31 @@ def test_completed_event_waits_for_published_policy_before_approval(
         "reason": "Сверено по итоговой ведомости",
     }
     for attendance in ("ABSENT", "PRESENT"):
+        latest = client.get(
+            f"/admin/events/{event_id}/review", headers=organizer_headers
+        ).json()
         corrected = client.patch(
             f"/admin/events/{event_id}/review/{registration_id}",
             headers=organizer_headers,
-            json={**decision, "attendanceDecision": attendance},
+            json={
+                **decision,
+                "attendanceDecision": attendance,
+                "expectedVersion": latest["items"][0]["version"],
+            },
         )
         assert corrected.status_code == 200, corrected.text
         assert corrected.json()["items"][0]["attendanceDecision"] == attendance
+        stale = client.patch(
+            f"/admin/events/{event_id}/review/{registration_id}",
+            headers=organizer_headers,
+            json={
+                **decision,
+                "attendanceDecision": "ABSENT",
+                "expectedVersion": latest["items"][0]["version"],
+            },
+        )
+        assert stale.status_code == 409, stale.text
+        assert stale.json()["error"]["code"] == "REVIEW_ITEM_CHANGED"
     approval = client.post(
         f"/admin/events/{event_id}/review/approve", headers=organizer_headers
     )
@@ -761,6 +807,169 @@ def test_completed_event_waits_for_published_policy_before_approval(
     assert awarded_events.json()["items"] == [
         {"eventTitle": event.json()["title"], "points": "30.0000"}
     ]
+    season_awards = client.get(
+        f"/public/profiles/{slug}/participations",
+        params={"seasonId": season.json()["id"], "pageSize": 1},
+    )
+    assert season_awards.status_code == 200, season_awards.text
+    assert season_awards.json()["items"] == awarded_events.json()["items"]
+    assert season_awards.json()["hasNext"] is False
+    assert (
+        client.get(
+            f"/public/profiles/{slug}/participations",
+            params={"seasonId": str(uuid4())},
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/public/profiles/{slug}/participations", params={"page": 402}
+        ).status_code
+        == 400
+    )
+
+    # Corrections are separate reviews; opening/editing must not touch the ledger.
+    reopened = client.post(
+        f"/admin/events/{event_id}/review/reopen",
+        headers=admin_headers,
+        json={"reason": "Исправление ошибочного посещения"},
+    )
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["isCorrection"] is True
+    before_correction = client.get(f"/public/profiles/{slug}/participations").json()
+    assert before_correction == awarded_events.json()
+    client.cookies.clear()
+    auth = client.post(
+        "/auth/login",
+        headers=ORIGIN,
+        json={"email": organizer_email, "password": "review organizer password"},
+    )
+    organizer_headers = {**ORIGIN, "X-CSRF-Token": auth.json()["csrfToken"]}
+    for action in ("reopen", "refresh", "approve"):
+        denied = client.post(
+            f"/admin/events/{event_id}/review/{action}",
+            headers=organizer_headers,
+            json={"reason": "Не разрешено"} if action == "reopen" else None,
+        )
+        assert denied.status_code == 403, denied.text
+    denied_patch = client.patch(
+        f"/admin/events/{event_id}/review/{registration_id}",
+        headers=organizer_headers,
+        json={
+            **decision,
+            "attendanceDecision": "ABSENT",
+            "expectedVersion": reopened.json()["items"][0]["version"],
+        },
+    )
+    assert denied_patch.status_code == 403, denied_patch.text
+    client.cookies.clear()
+    admin_headers = login(client)
+    for attendance, expected_points in (("ABSENT", "0.0000"), ("PRESENT", "30.0000")):
+        latest = client.get(f"/admin/events/{event_id}/review").json()
+        patched = client.patch(
+            f"/admin/events/{event_id}/review/{registration_id}",
+            headers=admin_headers,
+            json={
+                **decision,
+                "attendanceDecision": attendance,
+                "expectedVersion": latest["items"][0]["version"],
+            },
+        )
+        assert patched.status_code == 200, patched.text
+        approved = client.post(
+            f"/admin/events/{event_id}/review/approve", headers=admin_headers
+        )
+        assert approved.status_code == 200, approved.text
+        with database.connect() as connection:
+            points = connection.execute(
+                text(
+                    "SELECT SUM(st.points) FROM score_transactions st JOIN participations p ON p.id=st.participation_id WHERE p.event_id=:event"
+                ),
+                {"event": event_id},
+            ).scalar_one()
+        assert str(points) == expected_points
+        repeated = client.post(
+            f"/admin/events/{event_id}/review/approve", headers=admin_headers
+        )
+        assert repeated.status_code == 409
+        if attendance == "ABSENT":
+            reopened = client.post(
+                f"/admin/events/{event_id}/review/reopen",
+                headers=admin_headers,
+                json={"reason": "Повторная проверка списка"},
+            )
+            assert reopened.status_code == 200, reopened.text
+    with database.connect() as connection:
+        history_count = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM audit_log WHERE action='EVENT_REVIEW_SNAPSHOT' AND entity_id=:id"
+            ),
+            {"id": registration_id},
+        ).scalar_one()
+        transaction_count = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM score_transactions st JOIN participations p ON p.id=st.participation_id WHERE p.event_id=:event"
+            ),
+            {"event": event_id},
+        ).scalar_one()
+    assert history_count == 2
+    assert transaction_count == 3  # original award, reversal, new award
+
+    # Missing rules during a correction must leave the published award intact.
+    reopened = client.post(
+        f"/admin/events/{event_id}/review/reopen",
+        headers=admin_headers,
+        json={"reason": "Проверка новой роли"},
+    )
+    assert reopened.status_code == 200, reopened.text
+    with database.connect() as connection:
+        different_role = connection.execute(
+            text(
+                "SELECT id FROM participation_roles WHERE active=true AND id<>:id LIMIT 1"
+            ),
+            {"id": participant["id"]},
+        ).scalar_one()
+    changed_role = client.patch(
+        f"/admin/events/{event_id}/review/{registration_id}",
+        headers=admin_headers,
+        json={
+            **decision,
+            "roleId": different_role,
+            "attendanceDecision": "PRESENT",
+            "expectedVersion": reopened.json()["items"][0]["version"],
+        },
+    )
+    assert changed_role.status_code == 200, changed_role.text
+    failed_approval = client.post(
+        f"/admin/events/{event_id}/review/approve", headers=admin_headers
+    )
+    assert failed_approval.status_code == 409, failed_approval.text
+    assert failed_approval.json()["error"]["code"] == "SCORING_SETUP_REQUIRED"
+    with database.connect() as connection:
+        unchanged = connection.execute(
+            text(
+                "SELECT COUNT(*),SUM(st.points) FROM score_transactions st JOIN participations p ON p.id=st.participation_id WHERE p.event_id=:event"
+            ),
+            {"event": event_id},
+        ).one()
+    assert unchanged[0] == 3
+    assert str(unchanged[1]) == "30.0000"
+    restored = client.patch(
+        f"/admin/events/{event_id}/review/{registration_id}",
+        headers=admin_headers,
+        json={
+            **decision,
+            "attendanceDecision": "PRESENT",
+            "expectedVersion": changed_role.json()["items"][0]["version"],
+        },
+    )
+    assert restored.status_code == 200, restored.text
+    assert (
+        client.post(
+            f"/admin/events/{event_id}/review/approve", headers=admin_headers
+        ).status_code
+        == 200
+    )
 
 
 def test_participation_scoring_privacy_and_idempotency(client: TestClient) -> None:

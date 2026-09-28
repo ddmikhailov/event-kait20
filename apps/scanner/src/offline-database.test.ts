@@ -205,6 +205,38 @@ describe('offline scanner database', () => {
     ).resolves.toMatchObject({ status: 'PENDING' });
   });
 
+  it('keeps a rejected mark until a matching server handoff is acknowledged', async () => {
+    await database.replaceBundle(await bundle(), 0, eventSummary);
+    const rejected = await database.queueAttendance(
+      eventId,
+      registrationId,
+      'MANUAL_CONFIRM',
+      'OFFLINE_SYNC',
+    );
+    await database.applySyncResults(eventId, {
+      offlineDataVersion: '2',
+      results: [
+        {
+          clientEventId: rejected.clientEventId,
+          status: 'INVALID_TIMESTAMP',
+          firstAttendedAt: null,
+        },
+      ],
+    });
+    const current = (await database.rejectedForEvent(eventId))[0]!;
+    await expect(
+      database.acknowledgeRejectedHandoff({
+        ...current,
+        deviceId: crypto.randomUUID(),
+      }),
+    ).resolves.toBe(false);
+    await expect(database.unresolvedCount()).resolves.toBe(1);
+    await expect(database.acknowledgeRejectedHandoff(current)).resolves.toBe(
+      true,
+    );
+    await expect(database.unresolvedCount()).resolves.toBe(0);
+  });
+
   it('expires cached PII without deleting pending attendance', async () => {
     await database.replaceBundle(
       await bundle({ expiresAt: '2026-08-30T09:00:00.000Z' }),

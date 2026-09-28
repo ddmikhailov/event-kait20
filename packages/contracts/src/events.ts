@@ -35,12 +35,23 @@ const eventValuesSchema = z.object({
   timezone: z.literal('Europe/Moscow').default('Europe/Moscow'),
   location: z.string().trim().min(1).max(500),
   registrationDeadline: z.iso.datetime({ offset: true }),
-  capacity: z.number().int().positive(),
+  capacity: z.number().int().positive().max(5000),
   status: eventStatusSchema.default('DRAFT'),
 });
 
 export const createEventRequestSchema = eventValuesSchema.strict();
 export type CreateEventRequest = z.infer<typeof createEventRequestSchema>;
+
+export const scoringSetupDetailsSchema = z.object({
+  reason: z.enum([
+    'SEASON_REQUIRED',
+    'LEVEL_REQUIRED',
+    'POLICY_REQUIRED',
+    'POLICY_VERSION_REQUIRED',
+    'PARTICIPANT_BASE_REQUIRED',
+    'LEVEL_MULTIPLIER_REQUIRED',
+  ]),
+});
 
 export const updateEventRequestSchema = eventValuesSchema
   .partial()
@@ -72,6 +83,8 @@ export const eventResponseSchema = z.object({
   activityReviewState: z
     .enum(['NOT_STARTED', 'PENDING', 'APPROVED'])
     .optional(),
+  reviewPreparationError: z.string().nullable().optional(),
+  reviewRetryAt: z.iso.datetime({ offset: true }).nullable().optional(),
   id: uuidSchema,
   title: z.string(),
   slug: z.string(),
@@ -214,7 +227,7 @@ export const streamValuesSchema = z
     title: z.string().trim().min(1).max(200),
     startAt: z.iso.datetime({ offset: true }),
     endAt: z.iso.datetime({ offset: true }),
-    capacity: z.number().int().min(1).max(1_000_000),
+    capacity: z.number().int().min(1).max(5000),
     sortOrder: z.number().int().min(0).max(100_000).default(0),
     active: z.boolean().default(true),
   })
