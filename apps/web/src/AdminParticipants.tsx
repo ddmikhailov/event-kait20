@@ -5,6 +5,7 @@ import type {
   PersonListResponse,
   RegistrationDetailResponse,
   RegistrationListResponse,
+  TicketDeliveryList,
 } from '@event-registration/contracts';
 import {
   Button,
@@ -34,6 +35,17 @@ import {
 type Notice = { kind: 'error' | 'success'; text: string };
 type RegistrationSummary = RegistrationListResponse['items'][number];
 type PersonSummary = PersonListResponse['items'][number];
+
+const deliveryStatusLabel = (
+  status: TicketDeliveryList['items'][number]['status'],
+) =>
+  ({
+    QUEUED: 'в очереди',
+    SENDING: 'отправляется',
+    SENT: 'отправлено',
+    FAILED: 'ошибка отправки',
+    CANCELLED: 'отменено',
+  })[status];
 
 export const EventParticipants = ({
   event,
@@ -387,7 +399,23 @@ const RegistrationDetail = ({
 }) => {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
+  const [deliveries, setDeliveries] = useState<TicketDeliveryList>();
+  const [deliveryError, setDeliveryError] = useState(false);
+  const resendRequestId = useRef<string | undefined>(undefined);
   const active = registration.status === 'ACTIVE';
+
+  const refreshDeliveries = useCallback(async () => {
+    try {
+      setDeliveries(await adminApi.ticketDeliveries(event.id, registration.id));
+      setDeliveryError(false);
+    } catch {
+      setDeliveryError(true);
+    }
+  }, [event.id, registration.id]);
+
+  useEffect(() => {
+    void refreshDeliveries();
+  }, [refreshDeliveries]);
 
   const save = async (form: FormData) => {
     setBusy(true);
@@ -429,13 +457,28 @@ const RegistrationDetail = ({
   };
 
   const resend = async () => {
+    if (
+      !registration.email ||
+      !window.confirm(`Отправить билет на ${registration.email}?`)
+    )
+      return;
     setBusy(true);
     try {
-      await adminApi.resendTicket(event.id, registration.id);
+      resendRequestId.current ??= crypto.randomUUID();
+      const result = await adminApi.resendTicket(
+        event.id,
+        registration.id,
+        resendRequestId.current,
+      );
+      resendRequestId.current = undefined;
       setNotice({
         kind: 'success',
-        text: 'Повторная отправка билета поставлена в очередь',
+        text:
+          result.status === 'QUEUED'
+            ? 'Билет поставлен в очередь отправки.'
+            : 'Билет уже находится в очереди или недавно отправлялся.',
       });
+      void refreshDeliveries();
     } catch (error) {
       setNotice(participantError(error));
     } finally {
@@ -477,6 +520,26 @@ const RegistrationDetail = ({
           />
           {active && (
             <div className="participant-actions">
+              <div aria-live="polite">
+                <strong>Доставка билета</strong>
+                <p>
+                  {deliveries?.items[0]
+                    ? `Последняя попытка: ${deliveryStatusLabel(deliveries.items[0].status)}. ${new Date(deliveries.items[0].queuedAt).toLocaleString('ru-RU')}`
+                    : deliveryError
+                      ? 'Не удалось загрузить состояние доставки.'
+                      : 'Отправок пока нет.'}
+                </p>
+                {deliveries?.items[0]?.lastErrorCode && (
+                  <p>Код ошибки: {deliveries.items[0].lastErrorCode}</p>
+                )}
+                <button
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => void refreshDeliveries()}
+                >
+                  Обновить состояние
+                </button>
+              </div>
               <Button
                 disabled={busy || !registration.email}
                 onClick={() => void resend()}
@@ -1299,7 +1362,11 @@ const displayAnswer = (value: unknown): string =>
 
 const participantError = (error: unknown): Notice => {
   const rosterMessage = rosterErrorMessage(error);
-  if (rosterMessage) return { kind: 'error', text: rosterMessage };
+  const reference =
+    error instanceof AdminApiError && error.requestId
+      ? ` Код обращения: ${error.requestId}.`
+      : '';
+  if (rosterMessage) return { kind: 'error', text: rosterMessage + reference };
   if (error instanceof ParticipantFormError) {
     return { kind: 'error', text: error.message };
   }
@@ -1324,7 +1391,8 @@ const participantError = (error: unknown): Notice => {
     };
     return {
       kind: 'error',
-      text: messages[error.code] ?? 'Не удалось выполнить операцию',
+      text:
+        (messages[error.code] ?? 'Не удалось выполнить операцию') + reference,
     };
   }
   return {

@@ -34,9 +34,11 @@ const reviewError = (error: unknown) => {
     REVIEW_IDENTITY_LOCKED:
       'Участие с начислениями нельзя перенести другому студенту. Сначала проверьте исходную связь; историю начислений нужно сохранить.',
   };
-  return (
-    messages[error.code] ?? 'Не удалось выполнить действие. Повторите попытку.'
-  );
+  const message =
+    messages[error.code] ?? 'Не удалось выполнить действие. Повторите попытку.';
+  return error.requestId
+    ? `${message} Код обращения: ${error.requestId}.`
+    : message;
 };
 
 const initialDecision = (item: ReviewItem): EventReviewDecision => ({

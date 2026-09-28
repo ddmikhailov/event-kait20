@@ -508,6 +508,76 @@ def test_public_registration_and_idempotent_attendance(client: TestClient) -> No
         ).scalars()
         assert set(ticket_recipients) == {"participant@example.com"}
     headers, _ = _login(client)
+    delivery_url = (
+        f"/admin/events/{event_id}/registrations/{registration_id}/ticket-deliveries"
+    )
+    resend_url = (
+        f"/admin/events/{event_id}/registrations/{registration_id}/resend-ticket"
+    )
+    delivery_list = client.get(delivery_url)
+    assert delivery_list.status_code == 200, delivery_list.text
+    assert delivery_list.json()["items"][0]["status"] == "QUEUED"
+    assert "recipientEmail" not in delivery_list.text
+    initial_request = str(uuid4())
+    pending = client.post(
+        resend_url, headers=headers, json={"requestId": initial_request}
+    )
+    assert pending.status_code == 201, pending.text
+    assert pending.json() == {"status": "ALREADY_QUEUED"}
+    with database.transaction() as connection:
+        connection.execute(
+            text(
+                """UPDATE email_deliveries SET status='SENT',
+                queued_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 2 MINUTE),
+                sent_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 2 MINUTE)
+                WHERE registration_id=:id"""
+            ),
+            {"id": registration_id},
+        )
+    resend_request = str(uuid4())
+    sent_again = client.post(
+        resend_url, headers=headers, json={"requestId": resend_request}
+    )
+    assert sent_again.status_code == 201, sent_again.text
+    assert sent_again.json() == {"status": "QUEUED"}
+    replay = client.post(
+        resend_url, headers=headers, json={"requestId": resend_request}
+    )
+    assert replay.status_code == 201, replay.text
+    assert replay.json() == {"status": "ALREADY_QUEUED"}
+    with database.connect() as connection:
+        count = connection.execute(
+            text("SELECT COUNT(*) FROM email_deliveries WHERE registration_id=:id"),
+            {"id": registration_id},
+        ).scalar_one()
+    assert count == 2
+    changed_email = client.patch(
+        f"/admin/events/{event_id}/registrations/{registration_id}",
+        headers=headers,
+        json={"email": "corrected@example.com"},
+    )
+    assert changed_email.status_code == 200, changed_email.text
+    with database.connect() as connection:
+        cancelled = (
+            connection.execute(
+                text(
+                    """SELECT status,last_error_code FROM email_deliveries
+                    WHERE registration_id=:id AND status='CANCELLED' LIMIT 1"""
+                ),
+                {"id": registration_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert cancelled == {
+        "status": "CANCELLED",
+        "last_error_code": "REGISTRATION_EMAIL_CHANGED",
+    }
+    corrected = client.post(
+        resend_url, headers=headers, json={"requestId": str(uuid4())}
+    )
+    assert corrected.status_code == 201, corrected.text
+    assert corrected.json() == {"status": "QUEUED"}
     client_event_id = str(uuid4())
     attendance = {
         "deviceId": str(uuid4()),
@@ -2631,8 +2701,11 @@ def test_h_annulling_a_registration_proactively_cancels_its_queued_ticket_email(
         registration = (
             connection.execute(
                 text(
-                    """SELECT id,event_id,email FROM registrations
-                       WHERE status='ACTIVE' AND email IS NOT NULL LIMIT 1"""
+                    """SELECT r.id,r.event_id,r.email FROM registrations r
+                       JOIN events e ON e.id=r.event_id
+                       JOIN staff_users u ON u.organization_id=e.organization_id
+                       WHERE u.email_normalized='admin@example.com'
+                         AND r.status='ACTIVE' AND r.email IS NOT NULL LIMIT 1"""
                 )
             )
             .mappings()

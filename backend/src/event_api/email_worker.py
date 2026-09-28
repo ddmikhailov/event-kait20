@@ -33,6 +33,7 @@ INVITATION_EXPIRED = "INVITATION_EXPIRED"
 INVITATION_MISSING = "INVITATION_MISSING"
 REGISTRATION_CANCELLED = "REGISTRATION_CANCELLED"
 REGISTRATION_MISSING = "REGISTRATION_MISSING"
+REGISTRATION_EMAIL_CHANGED = "REGISTRATION_EMAIL_CHANGED"
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ class Delivery:
     event_location: str | None
     public_id: str | None
     registration_status: str | None
+    registration_email: str | None
     participant_name: str | None
     invitation_id: str | None
     invitation_expires: datetime | None
@@ -68,6 +70,7 @@ def _load_delivery(database: Database, delivery_id: str, attempts: int) -> Deliv
                               CASE WHEN s.id IS NULL THEN e.title ELSE CONCAT(e.title,' — ',s.title) END AS event_title,
                               COALESCE(s.start_at,e.start_at) AS event_start,
                               e.location AS event_location,r.public_id,r.status AS registration_status,
+                              r.email AS registration_email,
                               CONCAT_WS(' ',r.last_name,r.first_name,r.middle_name) AS participant_name,
                               i.id AS invitation_id,i.expires_at AS invitation_expires,i.role AS invitation_role,
                               i.accepted_at AS invitation_accepted_at,
@@ -98,6 +101,7 @@ def _load_delivery(database: Database, delivery_id: str, attempts: int) -> Deliv
         event_location=item["event_location"],
         public_id=item["public_id"],
         registration_status=item["registration_status"],
+        registration_email=item["registration_email"],
         participant_name=item["participant_name"],
         invitation_id=item["invitation_id"],
         invitation_expires=item["invitation_expires"],
@@ -150,6 +154,10 @@ def intent_cancellation_reason(delivery: Delivery) -> str | None:
             return REGISTRATION_MISSING
         if delivery.registration_status == "ANNULLED":
             return REGISTRATION_CANCELLED
+        if not delivery.registration_email or (
+            delivery.recipient.casefold() != delivery.registration_email.casefold()
+        ):
+            return REGISTRATION_EMAIL_CHANGED
         return None
     return None
 

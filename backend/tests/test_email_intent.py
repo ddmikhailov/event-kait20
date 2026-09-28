@@ -13,6 +13,7 @@ from event_api.email_worker import (
     INVITATION_EXPIRED,
     INVITATION_MISSING,
     REGISTRATION_CANCELLED,
+    REGISTRATION_EMAIL_CHANGED,
     REGISTRATION_MISSING,
     RESET_TOKEN_EXPIRED,
     RESET_TOKEN_MISSING,
@@ -38,6 +39,7 @@ def _delivery(**overrides: object) -> Delivery:
         "event_location": None,
         "public_id": None,
         "registration_status": None,
+        "registration_email": None,
         "participant_name": None,
         "invitation_id": None,
         "invitation_expires": None,
@@ -137,6 +139,7 @@ def test_active_registration_ticket_is_sendable() -> None:
         type="REGISTRATION_TICKET",
         public_id="public-1",
         registration_status="ACTIVE",
+        registration_email="person@example.org",
     )
     assert intent_cancellation_reason(delivery) is None
 
@@ -146,6 +149,7 @@ def test_h_cancelled_registration_ticket_is_cancelled() -> None:
         type="REGISTRATION_TICKET",
         public_id="public-1",
         registration_status="ANNULLED",
+        registration_email="person@example.org",
     )
     assert intent_cancellation_reason(delivery) == REGISTRATION_CANCELLED
 
@@ -153,6 +157,16 @@ def test_h_cancelled_registration_ticket_is_cancelled() -> None:
 def test_registration_missing_source_row_is_cancelled_defensively() -> None:
     delivery = _delivery(type="REGISTRATION_TICKET", public_id=None)
     assert intent_cancellation_reason(delivery) == REGISTRATION_MISSING
+
+
+def test_registration_ticket_recipient_must_match_current_email() -> None:
+    delivery = _delivery(
+        type="REGISTRATION_TICKET",
+        public_id="public-1",
+        registration_status="ACTIVE",
+        registration_email="new@example.org",
+    )
+    assert intent_cancellation_reason(delivery) == REGISTRATION_EMAIL_CHANGED
 
 
 def test_registration_ticket_ignores_cosmetic_event_changes() -> None:
@@ -163,6 +177,7 @@ def test_registration_ticket_ignores_cosmetic_event_changes() -> None:
         type="REGISTRATION_TICKET",
         public_id="public-1",
         registration_status="ACTIVE",
+        registration_email="person@example.org",
         event_title="Renamed after ticket was queued",
         event_location="A different room now",
     )

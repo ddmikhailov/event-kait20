@@ -22,6 +22,8 @@
 ```
 
 - Never place full QR payloads, passwords, session tokens or sensitive PII in server logs.
+- При ошибке сервер возвращает тот же идентификатор в `X-Request-ID` и `error.requestId`;
+  экран импорта и сверки показывает его сотруднику для обращения в поддержку.
 - Collection endpoints use cursor or page/limit pagination consistently; initial implementation may use `page`, `pageSize` with hard maximum 100.
 
 ## 2. Public Event
@@ -232,7 +234,17 @@ deduplication review are visibly flagged, while manual merge remains deferred.
 - `PATCH /admin/events/:eventId/registrations/:registrationId`
 - `POST /admin/events/:eventId/registrations/:registrationId/annul`
 - `POST /admin/events/:eventId/registrations/:registrationId/resend-ticket`
+- `GET /admin/events/:eventId/registrations/:registrationId/ticket-deliveries`
 - `POST /admin/events/:eventId/registrations/onsite`
+
+Повторная отправка принимает `{ "requestId": "UUID" }`. Одинаковый идентификатор
+не создаёт второе письмо. Ответ `201` содержит `status: QUEUED | ALREADY_QUEUED`;
+новая отправка также не создаётся, пока предыдущая в очереди/отправляется либо
+после последней попытки прошло менее 60 секунд. Сотрудник подтверждает адрес
+перед запросом. `ticket-deliveries` возвращает до 10 последних попыток с
+состоянием, временем, числом попыток и кодом ошибки, без содержимого письма.
+Изменение email регистрации отменяет ожидающий билет на прежний адрес;
+почтовый worker повторно сверяет получателя с текущим адресом перед отправкой.
 
 `onsite` requires online API. Standard call respects capacity.
 

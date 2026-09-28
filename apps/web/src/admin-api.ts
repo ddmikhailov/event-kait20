@@ -28,6 +28,8 @@ import {
   activityDirectionSchema,
   registrationDetailResponseSchema,
   registrationListResponseSchema,
+  ticketDeliveryListSchema,
+  ticketResendResponseSchema,
   sendTicketsResponseSchema,
   scoringRuleListSchema,
   scoringRuleSchema,
@@ -103,6 +105,8 @@ import {
   type PurgeEventRequest,
   type RegistrationDetailResponse,
   type RegistrationListResponse,
+  type TicketDeliveryList,
+  type TicketResendResponse,
   type SendTicketsRequest,
   type SendTicketsResponse,
   type ScoringRule,
@@ -162,6 +166,7 @@ export class AdminApiError extends Error {
     public readonly status: number,
     message: string,
     public readonly details?: unknown,
+    public readonly requestId?: string,
   ) {
     super(message);
   }
@@ -951,11 +956,23 @@ export class AdminApiClient {
   public resendTicket(
     eventId: string,
     registrationId: string,
-  ): Promise<AcceptedResponse> {
+    requestId: string,
+  ): Promise<TicketResendResponse> {
     return this.request(
       `/admin/events/${encodeURIComponent(eventId)}/registrations/${encodeURIComponent(registrationId)}/resend-ticket`,
-      { method: 'POST' },
-      acceptedResponseSchema,
+      { method: 'POST', body: JSON.stringify({ requestId }) },
+      ticketResendResponseSchema,
+    );
+  }
+
+  public ticketDeliveries(
+    eventId: string,
+    registrationId: string,
+  ): Promise<TicketDeliveryList> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/registrations/${encodeURIComponent(registrationId)}/ticket-deliveries`,
+      { method: 'GET' },
+      ticketDeliveryListSchema,
     );
   }
 
@@ -1197,13 +1214,23 @@ export class AdminApiClient {
     const body = await response.json().catch(() => undefined);
     if (!response.ok) {
       const error = body as
-        | { error?: { code?: string; message?: string; details?: unknown } }
+        | {
+            error?: {
+              code?: string;
+              message?: string;
+              details?: unknown;
+              requestId?: string;
+            };
+          }
         | undefined;
       throw new AdminApiError(
         error?.error?.code ?? 'REQUEST_FAILED',
         response.status,
         error?.error?.message ?? 'Запрос не выполнен',
         error?.error?.details,
+        error?.error?.requestId ??
+          response.headers.get('x-request-id') ??
+          undefined,
       );
     }
     return schema ? schema.parse(body) : (body as T);

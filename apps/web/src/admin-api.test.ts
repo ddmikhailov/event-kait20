@@ -27,6 +27,7 @@ describe('admin API client', () => {
               code: 'INVALID_ROSTER_ROW',
               message: 'Roster validation failed',
               details,
+              requestId: 'import-request-1',
             },
           },
           400,
@@ -39,6 +40,7 @@ describe('admin API client', () => {
       code: 'INVALID_ROSTER_ROW',
       status: 400,
       details,
+      requestId: 'import-request-1',
     });
   });
 
@@ -285,6 +287,44 @@ describe('admin API client', () => {
     expect(new Headers(init.headers).get('x-csrf-token')).toBe(
       session.csrfToken,
     );
+  });
+
+  it('retries ticket delivery with a stable request ID and reads status without recipient data', async () => {
+    const requestId = '80000000-0000-4000-8000-000000000002';
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(session))
+      .mockResolvedValueOnce(jsonResponse({ status: 'QUEUED' }, 201))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            {
+              status: 'QUEUED',
+              queuedAt: '2026-09-28T12:00:00Z',
+              sentAt: null,
+              attempts: 0,
+              lastErrorCode: null,
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AdminApiClient();
+    await client.restoreSession();
+    const eventId = '10000000-0000-4000-8000-000000000001';
+    const registrationId = '20000000-0000-4000-8000-000000000001';
+    expect(
+      await client.resendTicket(eventId, registrationId, requestId),
+    ).toEqual({ status: 'QUEUED' });
+    expect(
+      (await client.ticketDeliveries(eventId, registrationId)).items[0]?.status,
+    ).toBe('QUEUED');
+    const resendInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(JSON.parse(String(resendInit.body))).toEqual({ requestId });
+    expect(new Headers(resendInit.headers).get('x-csrf-token')).toBe(
+      session.csrfToken,
+    );
+    expect(fetchMock.mock.calls[2]?.[0]).toContain('/ticket-deliveries');
   });
 });
 

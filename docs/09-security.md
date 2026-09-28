@@ -29,6 +29,11 @@ The deployed configuration must use the approved KAIT №20 consent and privacy-
 
 Knowledge of a participant's name, birth date, phone or email is not proof of ownership of an existing Registration. A public repeat must not change Person or Registration data and must not return the existing registration ID or signed ticket URL. Recovery email is addressed only to the contact already stored in the historical Registration. Without a stored email, correction and ticket recovery require an authorized organizer.
 
+When staff corrects a Registration email, queued ticket deliveries to the old
+address are cancelled. The email worker checks the current Registration address
+again before sending an already claimed delivery; cancellation reasons contain
+only fixed codes, not the old or new address.
+
 ## 4. QR security/privacy
 
 - No PII in QR payload.

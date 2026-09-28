@@ -8,6 +8,23 @@ import {
 } from './registrations.js';
 
 export const registrationStatusSchema = z.enum(['ACTIVE', 'ANNULLED']);
+export const ticketResendRequestSchema = z.object({ requestId: uuidSchema });
+export const ticketResendResponseSchema = z.object({
+  status: z.enum(['QUEUED', 'ALREADY_QUEUED']),
+});
+export type TicketResendResponse = z.infer<typeof ticketResendResponseSchema>;
+export const ticketDeliveryListSchema = z.object({
+  items: z.array(
+    z.object({
+      status: z.enum(['QUEUED', 'SENDING', 'SENT', 'FAILED', 'CANCELLED']),
+      queuedAt: z.iso.datetime({ offset: true }),
+      sentAt: z.iso.datetime({ offset: true }).nullable(),
+      attempts: z.number().int().nonnegative(),
+      lastErrorCode: z.string().nullable(),
+    }),
+  ),
+});
+export type TicketDeliveryList = z.infer<typeof ticketDeliveryListSchema>;
 export const registrationSourceSchema = z.enum([
   'PUBLIC_FORM',
   'EXCEL_IMPORT',

@@ -1,3 +1,4 @@
+import hashlib
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -14,16 +15,20 @@ from ..dependencies import (
     database,
     settings,
 )
-from ..email_worker import REGISTRATION_CANCELLED
+from ..email_worker import REGISTRATION_CANCELLED, REGISTRATION_EMAIL_CHANGED
 from ..errors import ApiError
 from ..person_roster import ROSTER_FIELDS, RosterMetadataUpdate, roster_version
 from ..registration_service import ticket_url, validate_participant_type
-from ..schemas import PersonUpdate
+from ..schemas import Contract, PersonUpdate
 from ..service_utils import audit, json_value, serial
 
 people = APIRouter(prefix="/admin/people", tags=["people"])
 registrations = APIRouter(prefix="/admin/events", tags=["participants"])
 scanner = APIRouter(prefix="/scanner/events", tags=["scanner-search"])
+
+
+class TicketResendRequest(Contract):
+    request_id: UUID
 
 
 def search_pattern(query: str) -> str:
@@ -438,6 +443,14 @@ def update_registration(
             organization=:organization,updated_at=UTC_TIMESTAMP(3) WHERE id=:id""",
             {**data, "id": rid},
         )
+        if data["email"] != existing["email"]:
+            execute(
+                connection,
+                """UPDATE email_deliveries SET status='CANCELLED',last_error_code=:code,
+                updated_at=UTC_TIMESTAMP(3) WHERE registration_id=:id
+                AND type='REGISTRATION_TICKET' AND status='QUEUED'""",
+                {"id": rid, "code": REGISTRATION_EMAIL_CHANGED},
+            )
         execute(
             connection,
             "UPDATE events SET offline_data_version=offline_data_version+1,updated_at=UTC_TIMESTAMP(3) WHERE id=:event",
@@ -508,6 +521,7 @@ def annul(
 def resend(
     event_id: UUID,
     registration_id: UUID,
+    values: TicketResendRequest,
     staff: Annotated[Staff, Depends(csrf_administrator)],
     db: Annotated[Database, Depends(database)],
 ) -> dict[str, str]:
@@ -524,6 +538,31 @@ def resend(
             raise ApiError(409, "REGISTRATION_ANNULLED", "Registration is annulled")
         if not item["email"]:
             raise ApiError(409, "CONFLICT", "Registration has no email recipient")
+        key = (
+            "registration-ticket:manual:"
+            + hashlib.sha256(
+                f"{event_id}:{registration_id}:{values.request_id}".encode()
+            ).hexdigest()
+        )
+        previous = row(
+            connection,
+            "SELECT id FROM email_deliveries WHERE idempotency_key=:key",
+            {"key": key},
+        )
+        if previous:
+            return {"status": "ALREADY_QUEUED"}
+        recent = row(
+            connection,
+            """SELECT id FROM email_deliveries
+            WHERE registration_id=:registration AND type='REGISTRATION_TICKET'
+              AND (status IN ('QUEUED','SENDING')
+                   OR (status IN ('SENT','FAILED')
+                       AND queued_at > UTC_TIMESTAMP(3) - INTERVAL 60 SECOND))
+            ORDER BY queued_at DESC,id DESC LIMIT 1""",
+            {"registration": str(registration_id)},
+        )
+        if recent:
+            return {"status": "ALREADY_QUEUED"}
         delivery = str(uuid4())
         execute(
             connection,
@@ -532,7 +571,7 @@ def resend(
             VALUES (:id,:key,'REGISTRATION_TICKET',:email,:event,:registration,'QUEUED',0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
             {
                 "id": delivery,
-                "key": f"registration-ticket:manual:{registration_id}:{delivery}",
+                "key": key,
                 "email": item["email"],
                 "event": str(event_id),
                 "registration": str(registration_id),
@@ -545,7 +584,45 @@ def resend(
             "Registration",
             str(registration_id),
         )
-    return {"status": "accepted"}
+    return {"status": "QUEUED"}
+
+
+@registrations.get("/{event_id}/registrations/{registration_id}/ticket-deliveries")
+def ticket_deliveries(
+    event_id: UUID,
+    registration_id: UUID,
+    staff: Annotated[Staff, Depends(administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.connect() as connection:
+        assert_event(connection, str(event_id), staff.tenant_id, staff.organization_id)
+        registration = row(
+            connection,
+            "SELECT id FROM registrations WHERE id=:id AND event_id=:event",
+            {"id": str(registration_id), "event": str(event_id)},
+        )
+        if not registration:
+            raise ApiError(404, "REGISTRATION_NOT_FOUND", "Registration not found")
+        deliveries = rows(
+            connection,
+            """SELECT status,queued_at,sent_at,attempts,last_error_code
+            FROM email_deliveries WHERE registration_id=:registration
+              AND event_id=:event AND type='REGISTRATION_TICKET'
+            ORDER BY queued_at DESC,id DESC LIMIT 10""",
+            {"registration": str(registration_id), "event": str(event_id)},
+        )
+    return {
+        "items": [
+            {
+                "status": item["status"],
+                "queuedAt": serial(item["queued_at"]),
+                "sentAt": serial(item["sent_at"]) if item["sent_at"] else None,
+                "attempts": item["attempts"],
+                "lastErrorCode": item["last_error_code"],
+            }
+            for item in deliveries
+        ]
+    }
 
 
 @scanner.get("/{event_id}/registrations/search")
