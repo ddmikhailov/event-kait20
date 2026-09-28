@@ -109,6 +109,12 @@ EventAccess and returns the documented minimum display snapshot; it does not
 return email or birth date. Audit metadata for participant edits stores changed
 field names and control flags, not before/after PII values.
 
+The compact audit timeline is available only to `SUPER_ADMIN`, scoped to their
+tenant and paginated. It returns action, entity identifier, staff email, time
+and server request ID, never free-form audit metadata. A request ID in the UI
+can be matched to the structured server log; failed transactions may leave no
+committed audit record. Do not log request bodies to fill that gap.
+
 Roster metadata edits use the same administrator/tenant boundary and CSRF guard.
 They require a reason and an optimistic version check under row locks. Only the
 campus address is exposed by public profiles; education status, course, program,

@@ -1,5 +1,6 @@
 import {
   achievementMutationResponseSchema,
+  auditListSchema,
   activityOperationResponseSchema,
   activityReferenceListSchema,
   activityReferenceSchema,
@@ -63,6 +64,7 @@ import {
   formFieldResponseSchema,
   sessionResponseSchema,
   type AcceptedResponse,
+  type AuditList,
   type RejectedAttendanceCaseList,
   type AchievementCreateRequest,
   type AchievementDecisionRequest,
@@ -178,6 +180,21 @@ export class AdminApiError extends Error {
 }
 
 export class AdminApiClient {
+  public auditLog(
+    page: number,
+    action: string,
+    requestId: string,
+  ): Promise<AuditList> {
+    const query = new URLSearchParams({ page: String(page) });
+    if (action) query.set('action', action);
+    if (requestId) query.set('requestId', requestId);
+    return this.request(
+      `/admin/audit?${query.toString()}`,
+      { method: 'GET' },
+      auditListSchema,
+    );
+  }
+
   public previewRoster(file: File): Promise<RosterPreview> {
     const form = new FormData();
     form.set('file', file);

@@ -24,6 +24,9 @@
 - Never place full QR payloads, passwords, session tokens or sensitive PII in server logs.
 - При ошибке сервер возвращает тот же идентификатор в `X-Request-ID` и `error.requestId`;
   экран импорта и сверки показывает его сотруднику для обращения в поддержку.
+- Успешные ответы также возвращают серверный `X-Request-ID`. Новые записи
+  административного аудита сохраняют этот идентификатор для поиска; старые
+  записи имеют `requestId: null`.
 - Collection endpoints use cursor or page/limit pagination consistently; initial implementation may use `page`, `pageSize` with hard maximum 100.
 
 ## 2. Public Event
@@ -480,6 +483,15 @@ HTTP status is meaningful but client behavior keys off stable code.
 - Email queue publication occurs after successful business commit using an outbox/idempotent delivery strategy or equivalent implementation preventing lost/duplicate user-visible sends.
 - Attendance item processing is idempotent by `client_event_id`.
 - Admin mutations that change Event, Registration, access or capacity write compact audit records.
+
+### Compact administrative audit
+
+`GET /admin/audit?page=1&action=EVENT_CREATED&requestId=...` доступен только
+`SUPER_ADMIN`. Фильтры `action` и `requestId` необязательны, страница содержит
+не более 25 записей и `hasNext`. Запись отдаёт `id`, `action`, `entityType`,
+`entityId`, `requestId`, `actorEmail`, `createdAt`. Поле `metadata` не выдаётся:
+оно может содержать служебные причины и не предназначено для общего просмотра.
+Выборка ограничена tenant сотрудника. Ответ не кэшируется.
 
 ## 16. Contract implementation rule
 

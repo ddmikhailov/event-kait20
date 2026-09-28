@@ -11,11 +11,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from .activity_service import prune_domain_outbox
+from .audit_context import current_request_id
 from .config import Settings, get_settings
 from .database import Database
 from .errors import (
     ApiError,
     api_error_handler,
+    request_id,
     unexpected_error_handler,
     validation_error_handler,
 )
@@ -24,6 +26,7 @@ from .routers import (
     activity,
     attendance,
     attendance_handoff,
+    audit_log,
     auth,
     events,
     excel,
@@ -106,6 +109,7 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-CSRF-Token"],
+        expose_headers=["X-Request-ID"],
     )
 
     def add_security_headers(response: Response, request: Request) -> Response:
@@ -181,6 +185,17 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
                     )
         return await call_next(request)
 
+    @app.middleware("http")
+    async def correlate_request(request: Request, call_next):  # type: ignore[no-untyped-def]
+        identity = request_id(request)
+        token = current_request_id.set(identity)
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = identity
+            return response
+        finally:
+            current_request_id.reset(token)
+
     @app.get("/health")
     @app.get("/health/live")
     def live() -> dict[str, str]:
@@ -199,6 +214,7 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
 
     for router in (
         auth.router,
+        audit_log.router,
         staff.router,
         structure.router,
         events.admin,

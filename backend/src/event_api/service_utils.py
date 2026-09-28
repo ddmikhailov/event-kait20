@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy.engine import Connection, RowMapping
 
+from .audit_context import current_request_id
 from .database import execute
 from .event_status import effective_status
 from .form_config import event_form_config
@@ -100,8 +101,8 @@ def audit(
     execute(
         connection,
         """INSERT INTO audit_log
-           (id,actor_user_id,action,entity_type,entity_id,metadata,created_at)
-           VALUES (:id,:actor,:action,:entity,:entity_id,:metadata,UTC_TIMESTAMP(3))""",
+           (id,actor_user_id,action,entity_type,entity_id,metadata,request_id,created_at)
+           VALUES (:id,:actor,:action,:entity,:entity_id,:metadata,:request_id,UTC_TIMESTAMP(3))""",
         {
             "id": str(uuid4()),
             "actor": actor_id,
@@ -109,6 +110,7 @@ def audit(
             "entity": entity_type,
             "entity_id": entity_id,
             "metadata": db_json(metadata),
+            "request_id": current_request_id.get(),
         },
     )
 

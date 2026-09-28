@@ -20,6 +20,7 @@ import { ActivitySettings } from './AdminActivity.js';
 import { ParticipationsAdmin } from './AdminActivityAdmin.js';
 import { EventReviewQueue } from './AdminEventReview.js';
 import { AchievementAdmin } from './AdminAchievement.js';
+import { AdminAudit } from './AdminAudit.js';
 import { DirectionAdmin } from './AdminDirection.js';
 import { ManualAdjustmentAdmin } from './AdminManualAdjustment.js';
 import { MembershipAdmin } from './AdminMembership.js';
@@ -141,6 +142,7 @@ const AdminWorkspace = ({
     | 'adjustments'
     | 'directions'
     | 'scoring'
+    | 'audit'
   >(() =>
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('section') === 'scoring'
@@ -303,6 +305,9 @@ const AdminWorkspace = ({
       />
     );
   }
+  if (view === 'audit') {
+    return <AdminAudit onBack={() => setView('events')} />;
+  }
 
   return (
     <main className="admin-shell">
@@ -335,6 +340,11 @@ const AdminWorkspace = ({
             <div className="admin-workspace-links">
               <button onClick={() => setView('people')}>База людей</button>
               <button onClick={() => setView('staff')}>Сотрудники</button>
+              {session.user.role === 'SUPER_ADMIN' && (
+                <button onClick={() => setView('audit')}>
+                  Журнал действий
+                </button>
+              )}
               <button onClick={() => setView('directions')}>Направления</button>
             </div>
           </section>

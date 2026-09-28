@@ -465,3 +465,9 @@ staff-authorized resolution changes `OPEN` to `RESOLVED` with a reason and audit
 entry; neither operation changes attendance or scoring. Event purge removes
 these Event-scoped cases via the event foreign key. Rollback keeps the additive
 table; do not discard unresolved cases.
+
+Migration 022 adds nullable `audit_log.request_id` and an index. New audit entries
+store the server request ID; historical entries remain readable with NULL. Apply
+this migration before starting code that writes the column. A rollback to the
+previous application can retain the additive column and index; deleting audit
+history or rebuilding the table is unnecessary.

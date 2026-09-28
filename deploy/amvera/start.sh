@@ -3,6 +3,10 @@ set -eu
 
 python -m event_api.amvera_beta
 
+# One release only: apply the reviewed additive audit migration before this
+# version starts writing audit_log.request_id. Remove after verifying Amvera.
+python -m event_api.migrate
+
 if [ "${RUN_BETA_MIGRATIONS:-0}" = "1" ]; then
     python -m event_api.migrate
 fi
