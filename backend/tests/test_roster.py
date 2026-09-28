@@ -162,6 +162,22 @@ def test_simple_roster_ignores_formatting_beyond_data() -> None:
     assert len(parse_roster(workbook_bytes(book))) == 1
 
 
+def test_combined_patronymic_is_limited_as_one_database_field() -> None:
+    book = Workbook()
+    sheet = book.active
+    assert sheet is not None
+    sheet.append(list(REGISTER_HEADERS))
+    sheet.append([f"Тестов Тест {'А' * 60} {'Б' * 41}", None, "ТЕСТ-1"])
+    with pytest.raises(ApiError) as failure:
+        parse_roster(workbook_bytes(book))
+    assert failure.value.details == {
+        "reason": "VALUE_TOO_LONG",
+        "row": 2,
+        "column": 1,
+        "maxLength": 100,
+    }
+
+
 @pytest.mark.parametrize("coordinate", ["D1048576", "XFD3", "Z50000"])
 def test_sparse_grid_is_rejected_before_workbook_materialization(
     coordinate, monkeypatch
@@ -307,7 +323,7 @@ def test_formatted_roster_preview_and_commit_with_generic_file_type(
     sheet.append([header.replace(" ", "\n") for header in REGISTER_HEADERS])
     sheet.append(
         [
-            "Проверочный Студент Тестович",
+            "Проверочный Студент Тестович Второй",
             "Обучается",
             f"ТЕСТ-{uuid4().hex[:8]}",
             "Тестовая площадка",
@@ -369,6 +385,13 @@ def test_formatted_roster_preview_and_commit_with_generic_file_type(
     from sqlalchemy import text
 
     parsed = parse_roster(file["file"][1])[0]
+    assert parsed["middle_name"] == "Тестович Второй"
+    with client.app.state.database.connect() as connection:
+        imported_middle_name = connection.execute(
+            text("SELECT middle_name FROM persons WHERE study_group=:group"),
+            {"group": parsed["study_group"]},
+        ).scalar_one()
+    assert imported_middle_name == "Тестович Второй"
     with client.app.state.database.transaction() as connection:
         connection.execute(
             text(

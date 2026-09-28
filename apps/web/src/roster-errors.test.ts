@@ -29,6 +29,18 @@ describe('roster import errors', () => {
     ).toContain('Строка 17. ФИО и группа повторяют строку 5');
   });
 
+  it('explains how four-part names are split', () => {
+    const message = rosterErrorMessage(
+      new AdminApiError('INVALID_ROSTER_ROW', 400, '', {
+        reason: 'FIO_PARTS',
+        row: 7,
+        column: 1,
+      }),
+    );
+    expect(message).toContain('2–4 слова');
+    expect(message).toContain('одно или два слова отчества');
+  });
+
   it('falls back safely for old servers or invalid error metadata', () => {
     for (const details of [
       undefined,

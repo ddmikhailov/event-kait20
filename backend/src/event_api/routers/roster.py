@@ -139,14 +139,17 @@ def parse_roster(source: bytes) -> list[dict[str, Any]]:
                     )
             if register_format:
                 parts = values[0].split()
-                if len(parts) not in (2, 3):
+                if len(parts) not in (2, 3, 4):
                     raise roster_error(
                         "FIO_PARTS",
                         row_number=row_number,
                         column=1,
                         code="INVALID_ROSTER_ROW",
                     )
-                if any(len(part) > 100 for part in parts):
+                middle_name = " ".join(parts[2:]) or None
+                if any(len(part) > 100 for part in parts[:2]) or (
+                    middle_name is not None and len(middle_name) > 100
+                ):
                     raise roster_error(
                         "VALUE_TOO_LONG",
                         row_number=row_number,
@@ -157,7 +160,7 @@ def parse_roster(source: bytes) -> list[dict[str, Any]]:
                 student: dict[str, Any] = {
                     "last_name": parts[0],
                     "first_name": parts[1],
-                    "middle_name": parts[2] if len(parts) == 3 else None,
+                    "middle_name": middle_name,
                     "study_group": values[2],
                     "education_status": values[1] or None,
                     "campus_address": values[3] or None,
