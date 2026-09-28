@@ -21,6 +21,10 @@ export default defineConfig({
         background_color: '#ffffff',
         theme_color: '#2b2c7c',
         lang: 'ru',
+        icons: [
+          { src: 'scanner-192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'scanner-512.png', sizes: '512x512', type: 'image/png' },
+        ],
       },
       workbox: {
         clientsClaim: true,

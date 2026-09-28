@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 
 const eventId = '90000000-0000-4000-8000-000000000001';
@@ -86,7 +87,52 @@ async function reviewScreen(page: Page, failSave = false, count = 1) {
   );
   await page.route(`**/admin/events/${eventId}/review**`, async (route) => {
     const request = route.request();
-    if (request.url().endsWith('/approve')) {
+    if (request.url().includes('/score-preview')) {
+      await route.fulfill({
+        headers,
+        json: {
+          version: item.version,
+          state: 'READY',
+          code: null,
+          points: '30.0000',
+          calculation: {
+            snapshotSchemaVersion: 1,
+            engineVersion: 'V2',
+            scoringPolicyId: eventId,
+            policyVersionId: eventId,
+            policyVersion: 1,
+            policyVersionStatus: 'PUBLISHED',
+            eventId,
+            eventStartAt: '2026-01-01T10:00:00Z',
+            eventMoscowDate: '2026-01-01',
+            seasonId: eventId,
+            participationId: registrationId,
+            personId: registrationId,
+            role: {
+              id: roleId,
+              code: 'PARTICIPANT',
+              name: 'Участник',
+              value: '10.0000',
+            },
+            level: {
+              id: eventId,
+              code: 'CITY',
+              name: 'Городской',
+              value: '2.0000',
+            },
+            statuses: [],
+            newcomer: { sequence: 1, value: '1.0000' },
+            result: null,
+            eventBoost: '1.5000',
+            multiplicativeSubtotal: '30.0000',
+            resultBonus: '0.0000',
+            finalPoints: '30.0000',
+            roundingMode: 'ROUND_HALF_UP',
+            calculatedAt: '2026-01-01T12:00:00Z',
+          },
+        },
+      });
+    } else if (request.url().endsWith('/approve')) {
       approvals += 1;
       approvedAttendance = item.attendanceDecision;
       await route.fulfill({
@@ -273,3 +319,36 @@ test('large review pages preserve hidden drafts and search all participants', as
   await expect(page.getByLabel('Итоговое посещение')).toHaveCount(1);
   await expect(page.getByLabel('Итоговое посещение')).toHaveValue('ABSENT');
 });
+
+for (const count of [500, 5000]) {
+  test(`review of ${count} participants fits a narrow screen and explains score`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await reviewScreen(page, false, count);
+    await page
+      .getByRole('button', { name: 'Рассчитать баллы' })
+      .first()
+      .click();
+    await expect(
+      page.getByText('Предварительный результат: 30.0000'),
+    ).toBeVisible();
+    await page.getByText('Предварительный результат: 30.0000').click();
+    await expect(
+      page.getByText(/коэффициент мероприятия: 1.5000/),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(false);
+    const accessibility = await new AxeBuilder({ page }).analyze();
+    expect(
+      accessibility.violations.filter(({ impact }) =>
+        ['critical', 'serious'].includes(impact ?? ''),
+      ),
+    ).toEqual([]);
+  });
+}

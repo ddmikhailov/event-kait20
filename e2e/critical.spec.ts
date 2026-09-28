@@ -201,7 +201,10 @@ test.describe.serial('critical MVP browser journey', () => {
 
     await context.setOffline(false);
     await expect(page.getByText('ONLINE · синхронизировано')).toBeVisible();
-    await expect(page.getByText('Данные синхронизированы')).toBeVisible();
+    // The camera may immediately resolve the same visible QR again and replace
+    // the short success notice. The durable invariant is that the local queue
+    // drained after reconnect, regardless of which feedback card is shown.
+    await expect(page.getByText('OFFLINE · 1 ожидают')).toBeHidden();
   });
 
   test('organizer confirms participation, sees scoring and cancels with reversal', async ({
