@@ -127,6 +127,8 @@ test.describe.serial('critical MVP browser journey', () => {
       page.getByRole('heading', { name: 'Куда отмечаем вход?' }),
     ).toBeVisible();
     await page
+      .getByRole('article')
+      .filter({ hasText: 'Демонстрационное мероприятие' })
       .getByRole('button', { name: /Подготовить и открыть|Открыть/ })
       .click();
     await expect(
@@ -196,7 +198,11 @@ test.describe.serial('critical MVP browser journey', () => {
     await expect(
       page.getByRole('heading', { name: 'Куда отмечаем вход?' }),
     ).toBeVisible();
-    await page.getByRole('button', { name: 'Открыть' }).click();
+    await page
+      .getByRole('article')
+      .filter({ hasText: 'Демонстрационное мероприятие' })
+      .getByRole('button', { name: 'Открыть' })
+      .click();
     await expect(page.getByText('OFFLINE · 1 ожидают')).toBeVisible();
 
     await context.setOffline(false);

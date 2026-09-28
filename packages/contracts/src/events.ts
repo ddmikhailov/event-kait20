@@ -64,7 +64,7 @@ export type UpdateEventRequest = z.infer<typeof updateEventRequestSchema>;
 export const eventResponseSchema = z.object({
   completionSummary: z
     .object({
-      registered: z.number().int().nonnegative(),
+      registrations: z.number().int().nonnegative(),
       present: z.number().int().nonnegative(),
       absent: z.number().int().nonnegative(),
     })

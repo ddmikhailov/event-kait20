@@ -18,7 +18,7 @@ export default defineConfig({
     {
       name: 'desktop-chromium',
       testMatch:
-        /(?:critical|review-ui|roster-ui|scanner-update|mosactive-navigation|attendance-handoff)\.spec\.ts/,
+        /(?:critical|review-ui|roster-ui|scanner-update|mosactive-navigation|mosactive-journey|attendance-handoff)\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },
     {

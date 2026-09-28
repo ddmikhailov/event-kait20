@@ -6,6 +6,7 @@ import {
   activityOperationResponseSchema,
   calculationSnapshotSchema,
   createEventRequestSchema,
+  eventResponseSchema,
   attendanceSyncRequestSchema,
   excelImportCommitRequestSchema,
   healthResponseSchema,
@@ -49,6 +50,16 @@ describe('healthResponseSchema', () => {
         capacity: 100,
       }).timezone,
     ).toBe('Europe/Moscow');
+  });
+
+  it('accepts the completion count returned by the review API', () => {
+    expect(
+      eventResponseSchema.shape.completionSummary.parse({
+        registrations: 1,
+        present: 1,
+        absent: 0,
+      }),
+    ).toEqual({ registrations: 1, present: 1, absent: 0 });
   });
 
   it('normalizes registration; event configuration controls conditional requirements', () => {

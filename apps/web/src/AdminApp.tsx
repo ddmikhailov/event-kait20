@@ -41,7 +41,7 @@ type Notice = { kind: 'error' | 'success'; text: string };
 
 const completionMessage = (summary: EventResponse['completionSummary']) =>
   summary
-    ? `Мероприятие передано на проверку: зарегистрировано ${summary.registered}, отмечено ${summary.present}, без отметки ${summary.absent}. Баллы будут начислены после утверждения списка.`
+    ? `Мероприятие передано на проверку: зарегистрировано ${summary.registrations}, отмечено ${summary.present}, без отметки ${summary.absent}. Баллы будут начислены после утверждения списка.`
     : 'Мероприятие передано на проверку.';
 
 export const AdminApp = () => {

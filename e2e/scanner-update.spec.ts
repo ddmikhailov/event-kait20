@@ -61,7 +61,11 @@ test('production PWA update preserves offline attendance and does not reload ano
   await expect(
     page.getByText('Приложение готово к работе без интернета'),
   ).toBeVisible();
-  await page.getByRole('button', { name: 'Подготовить и открыть' }).click();
+  await page
+    .getByRole('article')
+    .filter({ hasText: 'Демонстрационное мероприятие' })
+    .getByRole('button', { name: 'Подготовить и открыть' })
+    .click();
   await expect(page.getByText('Данные синхронизированы')).toBeVisible();
   await page
     .getByRole('navigation', { name: 'Режим работы' })
@@ -128,7 +132,11 @@ test('production PWA update preserves offline attendance and does not reload ano
     });
     await context.setOffline(true);
     // The other tab is actively viewing an event when the first applies an update.
-    await other.getByRole('button', { name: 'Открыть', exact: true }).click();
+    await other
+      .getByRole('article')
+      .filter({ hasText: 'Демонстрационное мероприятие' })
+      .getByRole('button', { name: 'Открыть', exact: true })
+      .click();
     await expect(
       other.getByRole('heading', { name: 'Демонстрационное мероприятие' }),
     ).toBeVisible();
@@ -151,7 +159,11 @@ test('production PWA update preserves offline attendance and does not reload ano
     ).toBeVisible();
     await other.close();
 
-    await page.getByRole('button', { name: 'Открыть', exact: true }).click();
+    await page
+      .getByRole('article')
+      .filter({ hasText: 'Демонстрационное мероприятие' })
+      .getByRole('button', { name: 'Открыть', exact: true })
+      .click();
     await expect(page.getByText('OFFLINE · 1 ожидают')).toBeVisible();
     const synced = page.waitForResponse(
       (response) =>
