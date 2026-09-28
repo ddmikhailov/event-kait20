@@ -6,14 +6,14 @@ import hashlib
 import io
 import secrets
 from typing import Annotated, Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from openpyxl import load_workbook
 
-from ..database import Database, execute, row, rows
+from ..database import Database, execute_many, row, rows
 from ..dependencies import Staff, csrf_super_admin, database
 from ..errors import ApiError
-from ..registration_service import create_person
 from ..service_utils import audit
 from ..xlsx_limits import validate_sheet_grid
 from .excel import MAX_FILE, MAX_ROWS, XLSX_MIME, _validate_xlsx_archive
@@ -201,41 +201,72 @@ def parse_roster(source: bytes) -> list[dict[str, str | None]]:
 def new_students(
     connection: Any, tenant_id: str, students: list[dict[str, str | None]], mode: str
 ) -> list[dict[str, str | None]]:
-    new = []
-    for student in students:
-        found = rows(
-            connection,
-            """SELECT p.last_name,p.first_name,p.middle_name,p.study_group,
-            member.education_status,member.campus_address,member.course_label,
-            member.program_name,member.program_code
-            FROM student_roster_members member JOIN persons p ON p.id=member.person_id
-            WHERE p.tenant_id=:tenant AND p.merged_into_id IS NULL
-              AND p.last_name=:last AND p.first_name=:first
-              AND (p.middle_name <=> :middle) AND p.study_group=:group LIMIT 2""",
-            {
-                "tenant": tenant_id,
-                "last": student["last_name"],
-                "first": student["first_name"],
-                "middle": student["middle_name"],
-                "group": student["study_group"],
-            },
-        )
-        if found:
-            if mode == "SKIP_EXACT":
-                if len(found) == 1 and all(
-                    cell_text(found[0][key]).casefold() == cell_text(value).casefold()
-                    for key, value in student.items()
-                ):
-                    continue
-                raise ApiError(
-                    409,
-                    "ROSTER_STUDENT_CONFLICT",
-                    "Existing student data differs or is ambiguous; review manually",
-                )
-            raise ApiError(
-                409, "ROSTER_STUDENT_EXISTS", "A student is already in the roster"
+    new: list[dict[str, str | None]] = []
+    # Match under the database collation, as the original single-row lookup did.
+    # Batching avoids one read query per spreadsheet row without changing which
+    # names MySQL considers equal. Two matches are sufficient to flag ambiguity.
+    for offset in range(0, len(students), 100):
+        batch = students[offset : offset + 100]
+        parameters: dict[str, Any] = {"tenant": tenant_id}
+        inputs = []
+        for index, student in enumerate(batch):
+            inputs.append(
+                f"SELECT {index} AS source_index, :last_{index} AS last_name, "
+                f":first_{index} AS first_name, :middle_{index} AS middle_name, "
+                f":group_{index} AS study_group"
             )
-        new.append(student)
+            parameters.update(
+                {
+                    f"last_{index}": student["last_name"],
+                    f"first_{index}": student["first_name"],
+                    f"middle_{index}": student["middle_name"],
+                    f"group_{index}": student["study_group"],
+                }
+            )
+        matches = rows(
+            connection,
+            """SELECT matched.source_index,matched.last_name,matched.first_name,
+            matched.middle_name,matched.study_group,matched.education_status,
+            matched.campus_address,matched.course_label,matched.program_name,
+            matched.program_code FROM (
+                SELECT input.source_index,p.last_name,p.first_name,p.middle_name,
+                p.study_group,member.education_status,member.campus_address,
+                member.course_label,member.program_name,member.program_code,
+                ROW_NUMBER() OVER (PARTITION BY input.source_index ORDER BY p.id) AS match_number
+                FROM ("""
+            + " UNION ALL ".join(inputs)
+            + """
+                ) input JOIN persons p ON p.tenant_id=:tenant
+                  AND p.merged_into_id IS NULL AND p.last_name=input.last_name
+                  AND p.first_name=input.first_name
+                  AND (p.middle_name <=> input.middle_name)
+                  AND p.study_group=input.study_group
+                JOIN student_roster_members member ON member.person_id=p.id
+            ) matched WHERE matched.match_number<=2""",
+            parameters,
+        )
+        by_index: dict[int, list[Any]] = {}
+        for match in matches:
+            by_index.setdefault(int(match["source_index"]), []).append(match)
+        for index, student in enumerate(batch):
+            found = by_index.get(index, [])
+            if found:
+                if mode == "SKIP_EXACT":
+                    if len(found) == 1 and all(
+                        cell_text(found[0][key]).casefold()
+                        == cell_text(value).casefold()
+                        for key, value in student.items()
+                    ):
+                        continue
+                    raise ApiError(
+                        409,
+                        "ROSTER_STUDENT_CONFLICT",
+                        "Existing student data differs or is ambiguous; review manually",
+                    )
+                raise ApiError(
+                    409, "ROSTER_STUDENT_EXISTS", "A student is already in the roster"
+                )
+            new.append(student)
     return new
 
 
@@ -248,6 +279,57 @@ def upload(file: UploadFile) -> bytes:
     ):
         raise roster_error("FILE_TYPE")
     return file.file.read(MAX_FILE + 1)
+
+
+def insert_students(
+    connection: Any,
+    tenant_id: str,
+    organization_name: str,
+    actor_id: str,
+    students: list[dict[str, str | None]],
+) -> None:
+    """Insert complete profiles in bounded batches inside the caller's transaction."""
+    for offset in range(0, len(students), 100):
+        batch = students[offset : offset + 100]
+        prepared = [
+            {
+                **student,
+                "id": str(uuid4()),
+                "profile_id": str(uuid4()),
+                "tenant": tenant_id,
+                "organization": organization_name,
+                "actor": actor_id,
+                "slug": "active-" + secrets.token_urlsafe(18).rstrip("="),
+            }
+            for student in batch
+        ]
+        execute_many(
+            connection,
+            """INSERT INTO persons
+                (id,tenant_id,last_name,first_name,middle_name,birth_date,email,
+                 email_normalized,phone,phone_normalized,person_type,organization,
+                 study_group,dedup_review_required,created_at,updated_at)
+                VALUES (:id,:tenant,:last_name,:first_name,:middle_name,NULL,NULL,
+                        NULL,NULL,NULL,'KAIT_STUDENT',:organization,:study_group,
+                        false,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
+            prepared,
+        )
+        execute_many(
+            connection,
+            """INSERT INTO student_roster_members
+                (person_id,education_status,campus_address,course_label,
+                 program_name,program_code,created_at,created_by)
+                VALUES (:id,:education_status,:campus_address,:course_label,
+                        :program_name,:program_code,UTC_TIMESTAMP(3),:actor)""",
+            prepared,
+        )
+        execute_many(
+            connection,
+            """INSERT INTO student_profiles
+                (id,person_id,public_slug,visibility,created_at,updated_at)
+                VALUES (:profile_id,:id,:slug,'PUBLIC',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
+            prepared,
+        )
 
 
 @router.post("/preview")
@@ -296,36 +378,13 @@ def import_roster(
             raise ApiError(404, "ORGANIZATION_NOT_FOUND", "Organization not found")
         pending = new_students(connection, staff.tenant_id, students, mode)
         skipped = len(students) - len(pending)
-        for student in pending:
-            person_id = create_person(
-                connection,
-                {
-                    **student,
-                    "birth_date": None,
-                    "email": None,
-                    "phone": None,
-                    "person_type": "KAIT_STUDENT",
-                    "organization": organization["name"],
-                },
-                staff.tenant_id,
-            )
-            execute(
-                connection,
-                """INSERT INTO student_roster_members
-                (person_id,education_status,campus_address,course_label,program_name,program_code,created_at,created_by)
-                VALUES (:id,:education_status,:campus_address,:course_label,:program_name,:program_code,UTC_TIMESTAMP(3),:actor)""",
-                {"id": person_id, "actor": staff.id, **student},
-            )
-            execute(
-                connection,
-                """INSERT INTO student_profiles
-                (id,person_id,public_slug,visibility,created_at,updated_at)
-                VALUES (UUID(),:person,:slug,'PUBLIC',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))""",
-                {
-                    "person": person_id,
-                    "slug": "active-" + secrets.token_urlsafe(18).rstrip("="),
-                },
-            )
+        insert_students(
+            connection,
+            staff.tenant_id,
+            organization["name"],
+            staff.id,
+            pending,
+        )
         audit(
             connection,
             staff.id,

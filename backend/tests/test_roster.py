@@ -10,7 +10,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from event_api.errors import ApiError
-from event_api.routers.roster import HEADERS, REGISTER_HEADERS, parse_roster
+from event_api.routers.roster import (
+    HEADERS,
+    REGISTER_HEADERS,
+    new_students,
+    parse_roster,
+)
 
 
 def workbook_bytes(workbook: Workbook) -> bytes:
@@ -18,6 +23,106 @@ def workbook_bytes(workbook: Workbook) -> bytes:
     workbook.save(target)
     workbook.close()
     return target.getvalue()
+
+
+def test_roster_match_reads_are_bounded_for_large_preview(monkeypatch) -> None:
+    students = [
+        {
+            "last_name": f"Тестов{i}",
+            "first_name": "Тест",
+            "middle_name": None,
+            "study_group": "ТЕСТ-1",
+            "education_status": None,
+            "campus_address": None,
+            "course_label": None,
+            "program_name": None,
+            "program_code": None,
+        }
+        for i in range(205)
+    ]
+    calls = []
+
+    def fake_rows(connection, query, parameters):
+        calls.append(parameters)
+        assert connection is None
+        assert "ROW_NUMBER()" in query
+        if len(calls) == 2:
+            return [{"source_index": 0, **students[100]}]
+        return []
+
+    monkeypatch.setattr("event_api.routers.roster.rows", fake_rows)
+    pending = new_students(None, "test-tenant", students, "SKIP_EXACT")
+    assert len(calls) == 3
+    assert len(pending) == 204
+    assert students[100] not in pending
+
+
+def test_roster_import_writes_complete_profiles_across_batches(
+    client: TestClient,
+) -> None:
+    from sqlalchemy import text
+
+    client.cookies.clear()
+    origin = {"Origin": "http://localhost:5173"}
+    login = client.post(
+        "/auth/login",
+        headers=origin,
+        json={"email": "admin@example.com", "password": "correct horse battery"},
+    )
+    assert login.status_code == 200
+    headers = {**origin, "X-CSRF-Token": login.json()["csrfToken"]}
+    group = f"ТЕСТ-{uuid4().hex[:8]}"
+    book = Workbook()
+    sheet = book.active
+    assert sheet is not None
+    sheet.append(list(HEADERS))
+    for number in range(105):
+        sheet.append([f"Тестов{number}", "Тест", None, group])
+    file = {"file": ("roster.xlsx", workbook_bytes(book), "application/octet-stream")}
+    preview = client.post("/admin/activity/roster/preview", headers=headers, files=file)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["students"] == 105
+    imported = client.post(
+        "/admin/activity/roster/import",
+        headers=headers,
+        files=file,
+        data={"fileHash": preview.json()["fileHash"]},
+    )
+    assert imported.status_code == 201, imported.text
+    assert imported.json() == {"created": 105, "skipped": 0}
+    with client.app.state.database.connect() as connection:
+        count = connection.execute(
+            text(
+                """SELECT COUNT(*) FROM persons p
+                JOIN student_roster_members m ON m.person_id=p.id
+                JOIN student_profiles profile ON profile.person_id=p.id
+                WHERE p.study_group=:study_group AND p.person_type='KAIT_STUDENT'
+                  AND profile.visibility='PUBLIC'"""
+            ),
+            {"study_group": group},
+        ).scalar_one()
+    assert count == 105
+    repeat = Workbook()
+    repeat_sheet = repeat.active
+    assert repeat_sheet is not None
+    repeat_sheet.append(list(HEADERS))
+    for number in range(105):
+        repeat_sheet.append([f"тестов{number}", "ТЕСТ", None, group.lower()])
+    repeated = client.post(
+        "/admin/activity/roster/preview",
+        headers=headers,
+        files={
+            "file": (
+                "roster.xlsx",
+                workbook_bytes(repeat),
+                "application/octet-stream",
+            )
+        },
+        data={"mode": "SKIP_EXACT"},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["students"] == 0
+    assert repeated.json()["skipped"] == 105
 
 
 @pytest.mark.parametrize("title", [True, False])
