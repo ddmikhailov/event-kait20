@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request, Response
@@ -9,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
+from .activity_service import prune_domain_outbox
 from .config import Settings, get_settings
 from .database import Database
 from .errors import (
@@ -43,11 +45,22 @@ async def lifespan(app: FastAPI):
         connection.exec_driver_sql("SELECT 1")
 
     async def review_scheduler() -> None:
+        next_outbox_prune = 0.0
         while True:
             try:
                 await asyncio.to_thread(enqueue_due_reviews, app.state.database)
             except Exception:
                 logging.getLogger(__name__).exception("Event review scheduler failed")
+            if time.monotonic() >= next_outbox_prune:
+                try:
+                    removed = await asyncio.to_thread(
+                        prune_domain_outbox, app.state.database
+                    )
+                    # Drain a large backlog in bounded transactions without waiting a day.
+                    next_outbox_prune = time.monotonic() + (60 if removed else 3600)
+                except Exception:
+                    logging.getLogger(__name__).exception("Outbox retention failed")
+                    next_outbox_prune = time.monotonic() + 3600
             await asyncio.sleep(60)
 
     scheduler = (

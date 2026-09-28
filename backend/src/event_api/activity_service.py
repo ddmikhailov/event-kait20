@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.engine import Connection, RowMapping
 from sqlalchemy.exc import IntegrityError
 
-from .database import execute, row, rows
+from .database import Database, execute, row, rows
 from .errors import ApiError
 from .scoring_v2 import calculate_participation, decimal_string
 from .service_utils import audit, serial
@@ -36,6 +36,23 @@ def outbox(
             "payload": json.dumps(payload, ensure_ascii=False),
         },
     )
+
+
+def prune_domain_outbox(
+    database: Database, now: datetime | None = None, batch_size: int = 1000
+) -> int:
+    """Delete one bounded batch of diagnostic events older than 90 days."""
+    clock = now or datetime.now(UTC)
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=UTC)
+    cutoff = (clock.astimezone(UTC) - timedelta(days=90)).replace(tzinfo=None)
+    with database.transaction() as connection:
+        return execute(
+            connection,
+            """DELETE FROM domain_outbox WHERE occurred_at<:cutoff
+            ORDER BY occurred_at,id LIMIT :batch_size""",
+            {"cutoff": cutoff, "batch_size": batch_size},
+        )
 
 
 def reference(connection: Connection, table: str, identity: str, active=True) -> Any:

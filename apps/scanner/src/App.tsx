@@ -18,6 +18,8 @@ import type {
   ScannerOnsiteRegistrationRequest,
 } from '@event-registration/contracts';
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -34,7 +36,6 @@ import {
   type PendingAttendanceRecord,
   type PreparedEventRecord,
 } from './offline-database.js';
-import { QrCamera } from './QrCamera.js';
 import { ScannerUpdateNotice } from './ScannerUpdateNotice.js';
 import { scannerUpdates } from './pwa-updates.js';
 import {
@@ -48,6 +49,9 @@ import {
 type DisplayEvent = ScannerEvent & {
   prepared?: PreparedEventRecord | undefined;
 };
+const QrCamera = lazy(() =>
+  import('./QrCamera.js').then(({ QrCamera }) => ({ default: QrCamera })),
+);
 type View = 'loading' | 'login' | 'events' | 'scanner';
 type Feedback = {
   kind: 'success' | 'already' | 'error' | 'offline';
@@ -812,14 +816,16 @@ const ScannerScreen = ({
         </div>
       )}
       {workMode === 'scan' && (
-        <QrCamera
-          active={
-            !parentBusy &&
-            feedback?.kind !== 'error' &&
-            (fastMode || !participant)
-          }
-          onDecode={(value) => void resolve(value)}
-        />
+        <Suspense fallback={<p role="status">Открываем камеру…</p>}>
+          <QrCamera
+            active={
+              !parentBusy &&
+              feedback?.kind !== 'error' &&
+              (fastMode || !participant)
+            }
+            onDecode={(value) => void resolve(value)}
+          />
+        </Suspense>
       )}
 
       {participant && (
