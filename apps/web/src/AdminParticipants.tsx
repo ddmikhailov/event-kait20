@@ -889,11 +889,14 @@ export const PeopleDirectory = ({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
   const [rosterFile, setRosterFile] = useState<File>();
+  const [rosterRowsShown, setRosterRowsShown] = useState(50);
   const rosterInput = useRef<HTMLInputElement>(null);
   const [rosterPreview, setRosterPreview] = useState<{
     fileHash: string;
     students: number;
     skipped: number;
+    conflicts: number;
+    rows: { row: number; status: 'NEW' | 'SKIPPED' | 'CONFLICT' }[];
   }>();
   const previewRoster = async () => {
     if (!rosterFile) return;
@@ -1012,6 +1015,7 @@ export const PeopleDirectory = ({
               onChange={(event) => {
                 setRosterFile(event.target.files?.[0]);
                 setRosterPreview(undefined);
+                setRosterRowsShown(50);
                 setNotice(undefined);
               }}
             />
@@ -1023,16 +1027,54 @@ export const PeopleDirectory = ({
               Проверить файл
             </button>
             {rosterPreview && (
-              <p>
-                Новых студентов: {rosterPreview.students}. Точных совпадений:{' '}
-                {rosterPreview.skipped}. Новые профили будут опубликованы с
-                нулём баллов.
-              </p>
+              <div className="admin-panel" aria-live="polite">
+                <p>
+                  Новых студентов: {rosterPreview.students}. Точных совпадений:{' '}
+                  {rosterPreview.skipped}. Требуют исправления:{' '}
+                  {rosterPreview.conflicts}.
+                </p>
+                <p>Новые профили будут опубликованы с нулём баллов.</p>
+                {rosterPreview.conflicts > 0 && (
+                  <p role="alert">
+                    Исправьте указанные строки в файле или данные в карточке
+                    студента и проверьте файл снова. Совпадения не меняются
+                    автоматически.
+                  </p>
+                )}
+                <details>
+                  <summary>Результат по строкам файла</summary>
+                  <ol>
+                    {rosterPreview.rows
+                      .slice(0, rosterRowsShown)
+                      .map((item) => (
+                        <li key={item.row}>
+                          Строка {item.row}:{' '}
+                          {item.status === 'NEW'
+                            ? 'новый студент'
+                            : item.status === 'SKIPPED'
+                              ? 'точное совпадение, пропустить'
+                              : 'требует ручной проверки'}
+                        </li>
+                      ))}
+                  </ol>
+                  {rosterRowsShown < rosterPreview.rows.length && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() =>
+                        setRosterRowsShown((current) => current + 50)
+                      }
+                    >
+                      Показать ещё 50 строк
+                    </button>
+                  )}
+                </details>
+              </div>
             )}
             {rosterPreview && (
               <button
                 className="secondary-button"
-                disabled={busy}
+                disabled={busy || rosterPreview.conflicts > 0}
                 onClick={() => void importRoster()}
               >
                 Загрузить студентов

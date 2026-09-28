@@ -356,6 +356,8 @@ def test_formatted_roster_preview_and_commit_with_generic_file_type(
     assert safe_preview.status_code == 200, safe_preview.text
     assert safe_preview.json()["students"] == 0
     assert safe_preview.json()["skipped"] == 1
+    assert safe_preview.json()["conflicts"] == 0
+    assert safe_preview.json()["rows"] == [{"row": 3, "status": "SKIPPED"}]
     safe_import = client.post(
         "/admin/activity/roster/import",
         headers=headers,
@@ -380,8 +382,17 @@ def test_formatted_roster_preview_and_commit_with_generic_file_type(
         files=file,
         data={"mode": "SKIP_EXACT"},
     )
-    assert conflict.status_code == 409, conflict.text
-    assert conflict.json()["error"]["code"] == "ROSTER_STUDENT_CONFLICT"
+    assert conflict.status_code == 200, conflict.text
+    assert conflict.json()["conflicts"] == 1
+    assert conflict.json()["rows"] == [{"row": 3, "status": "CONFLICT"}]
+    blocked = client.post(
+        "/admin/activity/roster/import",
+        headers=headers,
+        files=file,
+        data={"mode": "SKIP_EXACT", "fileHash": conflict.json()["fileHash"]},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "ROSTER_STUDENT_CONFLICT"
 
 
 def test_preview_exposes_safe_row_diagnostics(client: TestClient) -> None:

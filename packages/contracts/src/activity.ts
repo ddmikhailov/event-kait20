@@ -228,6 +228,15 @@ export const rosterPreviewSchema = z
     fileHash: z.string().regex(/^[a-f0-9]{64}$/),
     students: z.number().int().nonnegative().max(5000),
     skipped: z.number().int().nonnegative().max(5000).default(0),
+    conflicts: z.number().int().nonnegative().max(5000),
+    rows: z
+      .array(
+        z.object({
+          row: z.number().int().positive(),
+          status: z.enum(['NEW', 'SKIPPED', 'CONFLICT']),
+        }),
+      )
+      .max(5000),
   })
   .strict();
 export type RosterPreview = z.infer<typeof rosterPreviewSchema>;

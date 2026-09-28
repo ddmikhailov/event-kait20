@@ -64,7 +64,7 @@ def header_values(cells: Any) -> list[str]:
     return values
 
 
-def parse_roster(source: bytes) -> list[dict[str, str | None]]:
+def parse_roster(source: bytes) -> list[dict[str, Any]]:
     if len(source) > MAX_FILE:
         raise roster_error("FILE_TOO_LARGE")
     if not source or not source.startswith(b"PK"):
@@ -96,7 +96,7 @@ def parse_roster(source: bytes) -> list[dict[str, str | None]]:
         if {str(merged) for merged in sheet.merged_cells.ranges} - allowed_merges:
             raise roster_error("MERGED_CELLS")
         width = 7 if register_format else 4
-        result: list[dict[str, str | None]] = []
+        result: list[dict[str, Any]] = []
         seen: dict[tuple[str, ...], int] = {}
         for row_number, cells in enumerate(
             sheet.iter_rows(min_row=header_row + 1), start=header_row + 1
@@ -154,7 +154,7 @@ def parse_roster(source: bytes) -> list[dict[str, str | None]]:
                         max_length=100,
                         code="INVALID_ROSTER_ROW",
                     )
-                student = {
+                student: dict[str, Any] = {
                     "last_name": parts[0],
                     "first_name": parts[1],
                     "middle_name": parts[2] if len(parts) == 3 else None,
@@ -190,6 +190,7 @@ def parse_roster(source: bytes) -> list[dict[str, str | None]]:
                     status=409,
                 )
             seen[key] = row_number
+            student["_source_row"] = row_number
             result.append(student)
         if not result:
             raise roster_error("EMPTY_ROSTER")
@@ -199,9 +200,13 @@ def parse_roster(source: bytes) -> list[dict[str, str | None]]:
 
 
 def new_students(
-    connection: Any, tenant_id: str, students: list[dict[str, str | None]], mode: str
-) -> list[dict[str, str | None]]:
-    new: list[dict[str, str | None]] = []
+    connection: Any,
+    tenant_id: str,
+    students: list[dict[str, Any]],
+    mode: str,
+    report: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    new: list[dict[str, Any]] = []
     # Match under the database collation, as the original single-row lookup did.
     # Batching avoids one read query per spreadsheet row without changing which
     # names MySQL considers equal. Two matches are sufficient to flag ambiguity.
@@ -250,13 +255,20 @@ def new_students(
             by_index.setdefault(int(match["source_index"]), []).append(match)
         for index, student in enumerate(batch):
             found = by_index.get(index, [])
+            source_row = student.get("_source_row", offset + index + 2)
             if found:
                 if mode == "SKIP_EXACT":
                     if len(found) == 1 and all(
                         cell_text(found[0][key]).casefold()
                         == cell_text(value).casefold()
                         for key, value in student.items()
+                        if not key.startswith("_")
                     ):
+                        if report is not None:
+                            report.append({"row": source_row, "status": "SKIPPED"})
+                        continue
+                    if report is not None:
+                        report.append({"row": source_row, "status": "CONFLICT"})
                         continue
                     raise ApiError(
                         409,
@@ -266,6 +278,8 @@ def new_students(
                 raise ApiError(
                     409, "ROSTER_STUDENT_EXISTS", "A student is already in the roster"
                 )
+            if report is not None:
+                report.append({"row": source_row, "status": "NEW"})
             new.append(student)
     return new
 
@@ -286,7 +300,7 @@ def insert_students(
     tenant_id: str,
     organization_name: str,
     actor_id: str,
-    students: list[dict[str, str | None]],
+    students: list[dict[str, Any]],
 ) -> None:
     """Insert complete profiles in bounded batches inside the caller's transaction."""
     for offset in range(0, len(students), 100):
@@ -341,12 +355,15 @@ def preview(
 ) -> dict[str, Any]:
     source = upload(file)
     students = parse_roster(source)
+    report: list[dict[str, Any]] = []
     with db.connect() as connection:
-        pending = new_students(connection, staff.tenant_id, students, mode)
+        pending = new_students(connection, staff.tenant_id, students, mode, report)
     return {
         "fileHash": hashlib.sha256(source).hexdigest(),
         "students": len(pending),
-        "skipped": len(students) - len(pending),
+        "skipped": sum(item["status"] == "SKIPPED" for item in report),
+        "conflicts": sum(item["status"] == "CONFLICT" for item in report),
+        "rows": report,
     }
 
 

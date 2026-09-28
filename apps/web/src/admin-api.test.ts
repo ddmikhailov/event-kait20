@@ -49,7 +49,15 @@ describe('admin API client', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(session))
-      .mockResolvedValueOnce(jsonResponse({ fileHash, students: 1 }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          fileHash,
+          students: 1,
+          skipped: 0,
+          conflicts: 0,
+          rows: [{ row: 2, status: 'NEW' }],
+        }),
+      )
       .mockResolvedValueOnce(jsonResponse({ created: 1 }, 201));
     vi.stubGlobal('fetch', fetchMock);
     const client = new AdminApiClient();
