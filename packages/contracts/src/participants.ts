@@ -103,6 +103,32 @@ export const personDetailResponseSchema = personSummarySchema.extend({
 });
 export type PersonDetailResponse = z.infer<typeof personDetailResponseSchema>;
 
+export const personMergeConflictSchema = z.object({
+  code: z.enum([
+    'ACTIVE_REGISTRATION',
+    'CONFIRMED_PARTICIPATION',
+    'SCORING_SEQUENCE',
+    'MEMBERSHIP_OVERLAP',
+    'STATUS_OVERLAP',
+  ]),
+  eventId: uuidSchema.nullable(),
+  sequence: z.number().int().positive().nullable(),
+});
+export const personMergePreviewSchema = z.object({
+  target: personSummarySchema,
+  source: personSummarySchema,
+  targetCounts: z.record(z.string(), z.number().int().nonnegative()),
+  sourceCounts: z.record(z.string(), z.number().int().nonnegative()),
+  conflicts: z.array(personMergeConflictSchema),
+  canMerge: z.boolean(),
+});
+export const personMergeRequestSchema = z.object({
+  sourcePersonId: uuidSchema,
+  reason: z.string().trim().min(3).max(500),
+});
+export type PersonMergePreview = z.infer<typeof personMergePreviewSchema>;
+export type PersonMergeRequest = z.infer<typeof personMergeRequestSchema>;
+
 export const personListResponseSchema = z.object({
   items: z.array(personSummarySchema),
   page: z.number().int().positive(),

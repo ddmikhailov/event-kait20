@@ -2277,6 +2277,26 @@ def public_profile_row(connection: Connection, slug: str) -> RowMapping:
         {"slug": slug, "tenant": scope.tenant_id},
     )
     if not item:
+        # Preserve existing public bookmarks only while both the old profile
+        # and the chosen primary are still public. The old Person itself never
+        # becomes a second public card after reconciliation.
+        item = row(
+            connection,
+            f"""SELECT sp.*,p.last_name,p.first_name,p.middle_name,
+            {PUBLIC_STUDY_GROUP} AS study_group,rm.campus_address
+            FROM student_profiles old_sp
+            JOIN persons old_p ON old_p.id=old_sp.person_id
+            JOIN student_profiles sp ON sp.person_id=old_p.merged_into_id
+            JOIN persons p ON p.id=sp.person_id
+            JOIN student_roster_members rm ON rm.person_id=p.id
+            WHERE old_sp.public_slug=:slug AND old_sp.visibility='PUBLIC'
+              AND old_p.tenant_id=:tenant
+              AND sp.visibility='PUBLIC' AND p.tenant_id=:tenant
+              AND p.person_type='KAIT_STUDENT' AND p.merged_into_id IS NULL
+            LIMIT 1""",
+            {"slug": slug, "tenant": scope.tenant_id},
+        )
+    if not item:
         raise ApiError(404, "PROFILE_NOT_FOUND", "Profile not found")
     return item
 

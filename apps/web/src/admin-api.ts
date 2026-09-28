@@ -16,6 +16,7 @@ import {
   eventStatisticsResponseSchema,
   onsiteRegistrationResponseSchema,
   personDetailResponseSchema,
+  personMergePreviewSchema,
   personListResponseSchema,
   participationListSchema,
   eventReviewSchema,
@@ -94,6 +95,8 @@ import {
   type LoginRequest,
   type OnsiteRegistrationResponse,
   type PersonDetailResponse,
+  type PersonMergePreview,
+  type PersonMergeRequest,
   type UpdateRosterMetadataRequest,
   type PersonListResponse,
   type ParticipationAssignRequest,
@@ -1024,6 +1027,39 @@ export class AdminApiClient {
     return this.request(
       `/admin/people/${encodeURIComponent(personId)}`,
       { method: 'GET' },
+      personDetailResponseSchema,
+    );
+  }
+
+  public previewPersonMerge(
+    personId: string,
+    sourcePersonId: string,
+  ): Promise<PersonMergePreview> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/merge-preview?sourcePersonId=${encodeURIComponent(sourcePersonId)}`,
+      { method: 'GET' },
+      personMergePreviewSchema,
+    );
+  }
+
+  public mergePerson(
+    personId: string,
+    values: PersonMergeRequest,
+  ): Promise<PersonDetailResponse> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/merge`,
+      { method: 'POST', body: JSON.stringify(values) },
+      personDetailResponseSchema,
+    );
+  }
+
+  public dismissPersonDuplicate(
+    personId: string,
+    reason: string,
+  ): Promise<PersonDetailResponse> {
+    return this.request(
+      `/admin/people/${encodeURIComponent(personId)}/dismiss-duplicate`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
       personDetailResponseSchema,
     );
   }

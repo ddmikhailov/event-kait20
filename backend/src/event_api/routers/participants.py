@@ -3,6 +3,7 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import StringConstraints
 from sqlalchemy.engine import RowMapping
 
 from ..config import Settings
@@ -11,12 +12,20 @@ from ..dependencies import (
     Staff,
     administrator,
     csrf_administrator,
+    csrf_super_admin,
     current_staff,
     database,
     settings,
+    super_admin,
 )
 from ..email_worker import REGISTRATION_CANCELLED, REGISTRATION_EMAIL_CHANGED
 from ..errors import ApiError
+from ..person_merge import (
+    apply_person_merge,
+    merge_conflicts,
+    merge_counts,
+    merge_people,
+)
 from ..person_roster import ROSTER_FIELDS, RosterMetadataUpdate, roster_version
 from ..registration_service import ticket_url, validate_participant_type
 from ..schemas import Contract, PersonUpdate
@@ -29,6 +38,19 @@ scanner = APIRouter(prefix="/scanner/events", tags=["scanner-search"])
 
 class TicketResendRequest(Contract):
     request_id: UUID
+
+
+class PersonMergeRequest(Contract):
+    source_person_id: UUID
+    reason: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)
+    ]
+
+
+class DuplicateDismissRequest(Contract):
+    reason: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)
+    ]
 
 
 def search_pattern(query: str) -> str:
@@ -180,6 +202,96 @@ def get_person(
             for entry in history
         ],
     }
+
+
+@people.get("/{person_id}/merge-preview")
+def preview_person_merge(
+    person_id: UUID,
+    staff: Annotated[Staff, Depends(super_admin)],
+    db: Annotated[Database, Depends(database)],
+    source_person_id: Annotated[UUID, Query(alias="sourcePersonId")],
+) -> dict[str, Any]:
+    with db.connect() as connection:
+        target, source = merge_people(
+            connection,
+            str(person_id),
+            str(source_person_id),
+            staff.tenant_id,
+            lock=False,
+        )
+        conflicts = merge_conflicts(connection, target["id"], source["id"])
+        return {
+            "target": person_response(target),
+            "source": person_response(source),
+            "targetCounts": merge_counts(connection, target["id"]),
+            "sourceCounts": merge_counts(connection, source["id"]),
+            "conflicts": conflicts,
+            "canMerge": not conflicts,
+        }
+
+
+@people.post("/{person_id}/merge")
+def merge_person(
+    person_id: UUID,
+    values: PersonMergeRequest,
+    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.transaction() as connection:
+        merge_people(
+            connection,
+            str(person_id),
+            str(values.source_person_id),
+            staff.tenant_id,
+            lock=True,
+        )
+        if merge_conflicts(connection, str(person_id), str(values.source_person_id)):
+            raise ApiError(
+                409,
+                "PERSON_MERGE_CONFLICT",
+                "Resolve conflicting history before merging",
+            )
+        apply_person_merge(
+            connection,
+            str(person_id),
+            str(values.source_person_id),
+            staff.id,
+            values.reason,
+        )
+    return get_person(person_id, staff, db)
+
+
+@people.post("/{person_id}/dismiss-duplicate")
+def dismiss_duplicate(
+    person_id: UUID,
+    values: DuplicateDismissRequest,
+    staff: Annotated[Staff, Depends(csrf_super_admin)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.transaction() as connection:
+        existing = row(
+            connection,
+            """SELECT id FROM persons WHERE id=:id AND tenant_id=:tenant
+            AND merged_into_id IS NULL FOR UPDATE""",
+            {"id": str(person_id), "tenant": staff.tenant_id},
+        )
+        if not existing:
+            raise ApiError(404, "PERSON_NOT_FOUND", "Person not found")
+        execute(
+            connection,
+            """UPDATE persons SET dedup_review_required=false,
+            updated_at=UTC_TIMESTAMP(3) WHERE id=:id""",
+            {"id": str(person_id)},
+        )
+        audit(
+            connection,
+            staff.id,
+            "PERSON_DUPLICATE_DISMISSED",
+            "Person",
+            str(person_id),
+            {"reason": values.reason},
+        )
+    return get_person(person_id, staff, db)
 
 
 @people.patch("/{person_id}")

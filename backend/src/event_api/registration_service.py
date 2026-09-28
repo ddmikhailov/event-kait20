@@ -197,12 +197,14 @@ def find_or_create_person(
 ) -> str:
     candidates = rows(
         connection,
-        """SELECT id FROM persons WHERE tenant_id=:tenant AND merged_into_id IS NULL
+        """SELECT COALESCE(merged_into_id,id) AS id,merged_into_id
+        FROM persons WHERE tenant_id=:tenant
         AND lower(last_name)=lower(:last) AND lower(first_name)=lower(:first)
         AND ((:middle IS NULL AND middle_name IS NULL) OR lower(middle_name)=lower(:middle))
         AND (email_normalized=:email OR phone_normalized=:phone OR birth_date=:birth)
         AND (:exclude_roster=false OR NOT EXISTS (
-          SELECT 1 FROM student_roster_members member WHERE member.person_id=persons.id))
+          SELECT 1 FROM student_roster_members member
+          WHERE member.person_id=COALESCE(persons.merged_into_id,persons.id)))
         FOR UPDATE""",
         {
             "last": data["last_name"],
@@ -218,7 +220,11 @@ def find_or_create_person(
     ids = list(dict.fromkeys(item["id"] for item in candidates))
     if len(ids) == 1:
         person_id = ids[0]
-        if update_existing:
+        # A merged source is an identity alias, not a source of current contact
+        # details. Historical input must never overwrite the chosen primary.
+        if update_existing and not any(
+            item["merged_into_id"] is not None for item in candidates
+        ):
             update_person(connection, person_id, data)
         return person_id
     return create_person(

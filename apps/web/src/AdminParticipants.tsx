@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
 import { AdminMosActivePublication } from './AdminMosActivePublication.js';
+import { AdminPersonMerge } from './AdminPersonMerge.js';
 import { AdminRosterMetadata } from './AdminRosterMetadata.js';
 import { AdminRejectedAttendance } from './AdminRejectedAttendance.js';
 import { EventParticipationWorkspace } from './AdminActivity.js';
@@ -1285,7 +1286,10 @@ const PersonDetail = ({
         />
       )}
       {role === 'SUPER_ADMIN' && person.personType === 'KAIT_STUDENT' && (
-        <AdminMosActivePublication personId={person.id} />
+        <>
+          <AdminPersonMerge person={person} onChanged={onChanged} />
+          <AdminMosActivePublication personId={person.id} />
+        </>
       )}
     </main>
   );

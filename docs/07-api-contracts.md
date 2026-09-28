@@ -194,6 +194,9 @@ ordered list and are validated by the shared API contracts and the server.
 - `GET /admin/people/:personId`
 - `PATCH /admin/people/:personId`
 - `PATCH /admin/people/:personId/roster-metadata`
+- `GET /admin/people/:personId/merge-preview?sourcePersonId=` (SUPER_ADMIN)
+- `POST /admin/people/:personId/merge` (SUPER_ADMIN, CSRF)
+- `POST /admin/people/:personId/dismiss-duplicate` (SUPER_ADMIN, CSRF)
 
 Person detail returns current canonical data and Registration history. Updating Person does not rewrite existing Registration snapshots.
 
@@ -202,7 +205,21 @@ and searches current name, email, phone and study group. Person updates are
 audited with changed field names only; PII values are not copied to audit
 metadata.
 
-Manual merge endpoint is intentionally deferred until merge UX/rules are designed.
+Merge preview returns both student summaries, counts of their registrations,
+participations, achievements, ledger entries, memberships and statuses, and
+typed conflicts. POST accepts `sourcePersonId` and a 3…500-character reason,
+rechecks under locks and returns the primary Person detail. `409
+PERSON_MERGE_CONFLICT` leaves both records unchanged if they share an active
+Event registration, confirmed Event participation or scoring sequence, or if
+membership/status periods overlap. The administrator resolves those records
+separately and repeats preview; the merge never picks a winner or renumbers an
+award automatically. A merged source is hidden from the normal directory but
+retained as an identity alias. Registration snapshots and immutable calculation
+snapshots keep their original values. The dismiss route clears one suspected
+duplicate flag with an audited reason.
+If both the old and primary profiles remain public, an old public slug resolves
+to the primary profile and its current slug. Hiding either profile makes the
+old slug unavailable; public lists contain only the primary.
 
 `dedupReviewRequired` is an optional boolean filter; when omitted, both flagged
 and unflagged people are returned. Filtering and counts remain tenant-scoped,
@@ -225,7 +242,8 @@ field remains the campus address; the version token and reason are private.
 The administrator Web workspace exposes this as a separate global People
 directory. Editing the current Person card never rewrites Registration
 snapshots; participation history is read-only in this view. Records marked for
-deduplication review are visibly flagged, while manual merge remains deferred.
+deduplication review are visibly flagged and can be compared and resolved by a
+SUPER_ADMIN.
 
 ## 8. Admin — Registrations
 

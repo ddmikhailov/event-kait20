@@ -115,6 +115,15 @@ campus address is exposed by public profiles; education status, course, program,
 code, edit reason and version token remain in the staff API. Changes do not
 automatically expand profile visibility or modify historical registrations.
 
+Manual student merge and duplicate dismissal require SUPER_ADMIN, CSRF and an
+audited reason. Preview is also restricted to SUPER_ADMIN and one tenant. A
+merge rechecks conflicts inside the transaction; it never silently selects one
+of two active registrations or rewrites historical PII snapshots. The source
+profile is excluded from public lists after it is marked merged. Its former
+public link resolves to the chosen primary only while both publication settings
+remain PUBLIC; hiding either one returns 404. No private profile becomes public
+through merging.
+
 ## 8. Offline PII
 
 Scanner caches minimum fields only. Cache lifecycle:

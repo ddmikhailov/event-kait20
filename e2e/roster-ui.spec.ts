@@ -180,3 +180,91 @@ test('roster conflict preserves draft and requires explicit reload', async ({
     'Правка другого сотрудника',
   );
 });
+
+test('super admin compares and merges a resolved duplicate without losing registration history', async ({
+  page,
+}) => {
+  const fixture = await rosterScreen(page);
+  const events = await (
+    await page.request.get(`${fixture.api}/admin/events`)
+  ).json();
+  const event = events.items.find(
+    (item: { slug: string }) => item.slug === 'demo-event',
+  );
+  const suffix = String(Date.now()).slice(-7);
+  const lastName = `Дубликат-${suffix}`;
+  const registration = await page.request.post(
+    `${fixture.api}/admin/events/${event.id}/registrations/onsite`,
+    {
+      headers: fixture.headers,
+      data: {
+        lastName,
+        firstName: 'Тест',
+        middleName: 'Тестович',
+        birthDate: '2004-02-02',
+        email: `merge-${randomUUID()}@example.com`,
+        phone: `+7998${suffix}`,
+        studyGroup: 'ТЕСТ-2',
+        personType: 'KAIT_STUDENT',
+        consentAccepted: true,
+        requestId: randomUUID(),
+        customAnswers: [],
+      },
+    },
+  );
+  expect(registration.ok(), await registration.text()).toBe(true);
+  const registrationId = (await registration.json()).registrationId as string;
+  const source = await (
+    await page.request.get(
+      `${fixture.api}/admin/events/${event.id}/registrations/${registrationId}`,
+    )
+  ).json();
+  const annulled = await page.request.post(
+    `${fixture.api}/admin/events/${event.id}/registrations/${registrationId}/annul`,
+    { headers: fixture.headers },
+  );
+  expect(annulled.ok(), await annulled.text()).toBe(true);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByLabel('Найти вторую карточку по ФИО, группе или контакту')
+    .fill(lastName);
+  await page.getByRole('button', { name: 'Найти для сравнения' }).click();
+  await page.getByRole('button', { name: 'Сравнить' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Сравнение историй' }),
+  ).toBeVisible();
+  await expect(page.getByText('Регистрации: 1 + 1')).toBeVisible();
+  await page.getByLabel('Причина решения').fill('Проверены два профиля');
+  page.once('dialog', (dialog) => dialog.accept());
+  const merged = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith(`/admin/people/${fixture.personId}/merge`),
+  );
+  await page
+    .getByRole('button', { name: 'Объединить в основную карточку' })
+    .click();
+  expect((await merged).status()).toBe(200);
+  await expect(
+    page.getByText(
+      'Карточки объединены. История сохранена в основной карточке.',
+    ),
+  ).toBeVisible();
+  const target = await (
+    await page.request.get(`${fixture.api}/admin/people/${fixture.personId}`)
+  ).json();
+  expect(target.registrations).toHaveLength(2);
+  expect(
+    (
+      await page.request.get(`${fixture.api}/admin/people/${source.personId}`)
+    ).status(),
+  ).toBe(404);
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(false);
+});

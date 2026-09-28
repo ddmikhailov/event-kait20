@@ -301,7 +301,12 @@ action/flag and must be audit logged. An assigned SCANNER can also explicitly co
 - Backup copies are not modified retroactively by purge and disappear only under
   the organisation's configured backup-retention policy.
 - Registration: annul, not hard delete.
-- Person referenced by Registration: `RESTRICT`; future merge uses `merged_into_id`.
+- Person referenced by Registration: `RESTRICT`; manual student merge uses
+  `merged_into_id` and retains the source row as an identity alias. The merge
+  moves foreign keys and ledger ownership in one transaction after checking
+  active Registration, confirmed Participation, scoring sequence and temporal
+  conflicts. Registration and calculation snapshots stay immutable. Existing
+  migration 001 already provides `merged_into_id`; no new schema is required.
 - EventFormField referenced by answers: soft deactivate, never destructive delete.
 - StaffUser: deactivate, retain audit references.
 
