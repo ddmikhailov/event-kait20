@@ -125,6 +125,10 @@ Manual student merge and duplicate dismissal require SUPER_ADMIN, CSRF and an
 audited reason. Preview is also restricted to SUPER_ADMIN and one tenant. A
 merge rechecks conflicts inside the transaction; it never silently selects one
 of two active registrations or rewrites historical PII snapshots. The source
+and target scoring histories require an explicit SUPER_ADMIN order and matching
+preview version when their sequence numbers collide; stale submissions
+roll back. Reversals, new awards and old/new sequence audit entries remain
+available after the merge. The source
 profile is excluded from public lists after it is marked merged. Its former
 public link resolves to the chosen primary only while both publication settings
 remain PUBLIC; hiding either one returns 404. No private profile becomes public

@@ -1,9 +1,12 @@
 """Explicit, transactional reconciliation of two student identities."""
 
+import hashlib
+import json
 from typing import Any
 
 from sqlalchemy.engine import Connection, RowMapping
 
+from .activity_service import award_score, reverse_current_award
 from .database import execute, row, rows
 from .errors import ApiError
 from .service_utils import audit
@@ -16,6 +19,8 @@ _HISTORY_TABLES = (
     "student_memberships",
     "person_status_assignments",
 )
+
+MAX_MERGE_ORDER = 5000
 
 
 def merge_people(
@@ -128,6 +133,129 @@ def merge_counts(connection: Connection, person_id: str) -> dict[str, int]:
         )
         counts[table] = int(result["n"]) if result else 0
     return counts
+
+
+def numbered_participations(
+    connection: Connection, target_id: str, source_id: str, *, lock: bool
+) -> list[RowMapping]:
+    return list(
+        rows(
+            connection,
+            f"""SELECT p.*,e.title AS event_title,e.start_at AS event_start_at,
+          (s.scoring_policy_id IS NOT NULL AND s.scoring_policy_effective_from IS NOT NULL
+           AND e.start_at>=s.scoring_policy_effective_from) AS uses_v2,
+          (SELECT COALESCE(SUM(st.points),0) FROM score_transactions st
+           WHERE st.participation_id=p.id) AS net_points
+        FROM participations p JOIN events e ON e.id=p.event_id
+        LEFT JOIN seasons s ON s.id=e.season_id
+        WHERE p.person_id IN (:target,:source)
+          AND (p.status='CONFIRMED' OR p.scoring_sequence IS NOT NULL)
+        ORDER BY p.id LIMIT {MAX_MERGE_ORDER + 1}{" FOR UPDATE" if lock else ""}""",
+            {"target": target_id, "source": source_id},
+        )
+    )
+
+
+def merge_order_version(participations: list[RowMapping]) -> str:
+    fields = (
+        "id",
+        "person_id",
+        "status",
+        "scoring_sequence",
+        "scoring_cycle",
+        "role_id",
+        "result_id",
+        "updated_at",
+        "net_points",
+    )
+    values = [
+        [str(item[field]) if item[field] is not None else None for field in fields]
+        for item in participations
+    ]
+    return hashlib.sha256(
+        json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def apply_ordered_person_merge(
+    connection: Connection,
+    target_id: str,
+    source_id: str,
+    actor_id: str,
+    reason: str,
+    participation_order: list[str],
+    order_version: str,
+) -> None:
+    numbered = numbered_participations(connection, target_id, source_id, lock=True)
+    if len(numbered) > MAX_MERGE_ORDER:
+        raise ApiError(
+            409, "PERSON_MERGE_ORDER_TOO_LARGE", "Too many numbered participations"
+        )
+    if merge_order_version(numbered) != order_version:
+        raise ApiError(
+            409, "PERSON_MERGE_ORDER_CHANGED", "Refresh the participation order"
+        )
+    numbered_by_id = {item["id"]: item for item in numbered}
+    if (
+        len(participation_order) != len(numbered)
+        or len(set(participation_order)) != len(participation_order)
+        or set(participation_order) != set(numbered_by_id)
+    ):
+        raise ApiError(
+            409, "PERSON_MERGE_ORDER_CHANGED", "Refresh the participation order"
+        )
+    for item in numbered:
+        if item["status"] == "CONFIRMED" and item["uses_v2"]:
+            reverse_current_award(
+                connection,
+                item,
+                actor_id,
+                "Отмена начисления перед ручным упорядочением истории при объединении профилей.",
+            )
+    execute(
+        connection,
+        """UPDATE participations SET scoring_sequence=NULL,updated_at=UTC_TIMESTAMP(3)
+        WHERE person_id IN (:target,:source) AND scoring_sequence IS NOT NULL""",
+        {"target": target_id, "source": source_id},
+    )
+    apply_person_merge(connection, target_id, source_id, actor_id, reason)
+    for new_sequence, participation_id in enumerate(participation_order, start=1):
+        original = numbered_by_id[participation_id]
+        execute(
+            connection,
+            """UPDATE participations SET scoring_sequence=:sequence,
+            updated_at=UTC_TIMESTAMP(3) WHERE id=:id AND person_id=:target""",
+            {"sequence": new_sequence, "id": participation_id, "target": target_id},
+        )
+        audit(
+            connection,
+            actor_id,
+            "SCORING_SEQUENCE_REASSIGNED",
+            "Participation",
+            participation_id,
+            {
+                "previousPersonId": original["person_id"],
+                "previousSequence": int(original["scoring_sequence"])
+                if original["scoring_sequence"] is not None
+                else None,
+                "newSequence": new_sequence,
+                "mergeTargetId": target_id,
+                "reason": reason,
+            },
+        )
+    for participation_id in participation_order:
+        if (
+            numbered_by_id[participation_id]["status"] != "CONFIRMED"
+            or not numbered_by_id[participation_id]["uses_v2"]
+        ):
+            continue
+        execute(
+            connection,
+            """UPDATE participations SET scoring_cycle=scoring_cycle+1,
+            scoring_state='NOT_SCORED',updated_at=UTC_TIMESTAMP(3) WHERE id=:id""",
+            {"id": participation_id},
+        )
+        award_score(connection, participation_id, actor_id)
 
 
 def apply_person_merge(

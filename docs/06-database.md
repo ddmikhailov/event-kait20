@@ -307,8 +307,11 @@ action/flag and must be audit logged. An assigned SCANNER can also explicitly co
 - Person referenced by Registration: `RESTRICT`; manual student merge uses
   `merged_into_id` and retains the source row as an identity alias. The merge
   moves foreign keys and ledger ownership in one transaction after checking
-  active Registration, confirmed Participation, scoring sequence and temporal
-  conflicts. Registration and calculation snapshots stay immutable. Existing
+  active Registration, confirmed Participation and temporal conflicts. A
+  scoring-sequence collision requires a SUPER_ADMIN-approved order of all
+  confirmed/numbered participations; the transaction reverses and recalculates
+  V2 awards with new cycles, preserving V1 awards and every ledger entry.
+  Registration and calculation snapshots stay immutable. Existing
   migration 001 already provides `merged_into_id`; no new schema is required.
 - EventFormField referenced by answers: soft deactivate, never destructive delete.
 - StaffUser: deactivate, retain audit references.

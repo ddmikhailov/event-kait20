@@ -213,18 +213,23 @@ participations, achievements, ledger entries, memberships and statuses, and
 typed conflicts. POST accepts `sourcePersonId` and a 3…500-character reason,
 rechecks under locks and returns the primary Person detail. `409
 PERSON_MERGE_CONFLICT` leaves both records unchanged if they share an active
-Event registration, confirmed Event participation or scoring sequence, or if
-membership/status periods overlap. The administrator resolves those records
-separately and repeats preview; the merge never picks a winner or renumbers an
-award automatically. A merged source is hidden from the normal directory but
-retained as an identity alias. Registration snapshots and immutable calculation
-snapshots keep their original values. The dismiss route clears one suspected
-duplicate flag with an audited reason.
-For a scoring-sequence collision, the approved future reconciliation flow is
-SUPER_ADMIN-only: resolve any registration conflict manually before merging,
-then recalculate affected awards using compensating ledger entries while
-retaining the complete original and corrected history. Until that flow is
-implemented, `PERSON_MERGE_CONFLICT` continues to block the merge.
+Event registration, confirmed Event participation, or overlapping membership/status
+periods. The administrator resolves those records separately and repeats preview.
+When only scoring-sequence numbers collide, preview returns
+`canResolveWithOrder=true`, a bounded `participationOrder` list (at most 5000
+confirmed or previously numbered participations) and an opaque `orderVersion`.
+The list includes Event title/date, source profile, previous number, status and
+current net points. SUPER_ADMIN arranges the complete list manually and sends
+its IDs, `orderVersion`, `sourcePersonId` and reason to POST. A missing, repeated,
+foreign or stale participation ID, or a changed version, returns
+`409 PERSON_MERGE_ORDER_CHANGED` with no changes. Other conflicts remain blocked.
+The transaction reverses current V2 awards, assigns the approved unique order,
+merges histories, and recalculates confirmed V2 participations into new cycles.
+V1 awards are preserved because their points do not depend on this sequence.
+Each old/new number and the reason is audited. Existing calculation snapshots,
+reversals and registration snapshots remain immutable. A merged source is hidden
+from the normal directory but retained as an identity alias. The dismiss route
+clears one suspected duplicate flag with an audited reason.
 If both the old and primary profiles remain public, an old public slug resolves
 to the primary profile and its current slug. Hiding either profile makes the
 old slug unavailable; public lists contain only the primary.

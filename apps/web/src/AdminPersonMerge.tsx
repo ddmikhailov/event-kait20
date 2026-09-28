@@ -62,6 +62,11 @@ const errorMessage = (error: unknown) => {
         error,
         'История изменилась или обнаружен конфликт. Повторите сравнение и разрешите конфликт вручную.',
       );
+    if (error.code === 'PERSON_MERGE_ORDER_CHANGED')
+      return withSupportCode(
+        error,
+        'Список участий изменился. Повторите сравнение и проверьте порядок заново.',
+      );
     if (error.code === 'PERSON_NOT_FOUND')
       return withSupportCode(
         error,
@@ -84,6 +89,9 @@ export const AdminPersonMerge = ({
   const [query, setQuery] = useState('');
   const [candidates, setCandidates] = useState<PersonSummary[]>([]);
   const [preview, setPreview] = useState<PersonMergePreview>();
+  const [participationOrder, setParticipationOrder] = useState<string[]>([]);
+  const [fromPosition, setFromPosition] = useState('');
+  const [toPosition, setToPosition] = useState('');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -93,6 +101,9 @@ export const AdminPersonMerge = ({
     setBusy(true);
     setNotice('');
     setPreview(undefined);
+    setParticipationOrder([]);
+    setFromPosition('');
+    setToPosition('');
     try {
       const result = await adminApi.people(query.trim());
       setCandidates(result.items.filter((item) => item.id !== person.id));
@@ -107,7 +118,22 @@ export const AdminPersonMerge = ({
     setBusy(true);
     setNotice('');
     try {
-      setPreview(await adminApi.previewPersonMerge(person.id, sourcePersonId));
+      const result = await adminApi.previewPersonMerge(
+        person.id,
+        sourcePersonId,
+      );
+      setPreview(result);
+      setFromPosition('');
+      setToPosition('');
+      setParticipationOrder(
+        [...result.participationOrder]
+          .sort(
+            (left, right) =>
+              left.eventStartAt.localeCompare(right.eventStartAt) ||
+              left.id.localeCompare(right.id),
+          )
+          .map((item) => item.id),
+      );
     } catch (error) {
       setNotice(errorMessage(error));
     } finally {
@@ -116,10 +142,17 @@ export const AdminPersonMerge = ({
   };
 
   const merge = async () => {
-    if (!preview?.canMerge || reason.trim().length < 3) return;
+    if (
+      !preview ||
+      (!preview.canMerge && !preview.canResolveWithOrder) ||
+      reason.trim().length < 3
+    )
+      return;
     if (
       !window.confirm(
-        `Объединить «${name(preview.source)}» с «${name(preview.target)}»? Обе истории будут в основной карточке.`,
+        preview.canResolveWithOrder
+          ? `Объединить «${name(preview.source)}» с «${name(preview.target)}» в указанном порядке ${participationOrder.length} участий? Баллы, зависящие от порядка, будут отменены и рассчитаны заново; вся история останется доступной.`
+          : `Объединить «${name(preview.source)}» с «${name(preview.target)}»? Обе истории будут в основной карточке.`,
       )
     )
       return;
@@ -129,10 +162,19 @@ export const AdminPersonMerge = ({
       onChanged(
         await adminApi.mergePerson(person.id, {
           sourcePersonId: preview.source.id,
+          ...(preview.canResolveWithOrder
+            ? {
+                participationOrder,
+                orderVersion: preview.orderVersion ?? undefined,
+              }
+            : {}),
           reason: reason.trim(),
         }),
       );
       setPreview(undefined);
+      setParticipationOrder([]);
+      setFromPosition('');
+      setToPosition('');
       setCandidates([]);
       setReason('');
       setNotice('Карточки объединены. История сохранена в основной карточке.');
@@ -141,6 +183,16 @@ export const AdminPersonMerge = ({
     } finally {
       setBusy(false);
     }
+  };
+
+  const moveParticipation = (index: number, destination: number) => {
+    setParticipationOrder((current) => {
+      const next = [...current];
+      const [item] = next.splice(index, 1);
+      if (!item) return current;
+      next.splice(destination, 0, item);
+      return next;
+    });
   };
 
   const dismiss = async () => {
@@ -159,6 +211,10 @@ export const AdminPersonMerge = ({
       setBusy(false);
     }
   };
+
+  const participationById = new Map(
+    preview?.participationOrder.map((item) => [item.id, item]) ?? [],
+  );
 
   return (
     <section className="admin-panel">
@@ -218,7 +274,11 @@ export const AdminPersonMerge = ({
           </ul>
           {preview.conflicts.length > 0 && (
             <div role="alert">
-              <p>Объединение остановлено. Разрешите конфликты вручную:</p>
+              <p>
+                {preview.canResolveWithOrder
+                  ? 'Совпадают номера участия. Укажите порядок всей истории ниже:'
+                  : 'Объединение остановлено. Разрешите конфликты вручную:'}
+              </p>
               <ul>
                 {preview.conflicts.map((conflict) => (
                   <li
@@ -234,6 +294,110 @@ export const AdminPersonMerge = ({
               </ul>
             </div>
           )}
+          {preview.canResolveWithOrder && (
+            <div>
+              <h4>Порядок общей истории участия</h4>
+              <p>
+                Проверьте каждое участие и расположите их в правильном порядке.
+                Этот порядок влияет на баллы по правилам новичка. При
+                подтверждении баллы, зависящие от порядка, будут пересчитаны с
+                сохранением всей истории изменений.
+              </p>
+              <div className="row-actions">
+                <label>
+                  Переместить участие №
+                  <input
+                    type="number"
+                    min={1}
+                    max={participationOrder.length}
+                    value={fromPosition}
+                    onChange={(event) => setFromPosition(event.target.value)}
+                  />
+                </label>
+                <label>
+                  На позицию №
+                  <input
+                    type="number"
+                    min={1}
+                    max={participationOrder.length}
+                    value={toPosition}
+                    onChange={(event) => setToPosition(event.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={
+                    busy ||
+                    !Number.isInteger(Number(fromPosition)) ||
+                    !Number.isInteger(Number(toPosition)) ||
+                    Number(fromPosition) < 1 ||
+                    Number(toPosition) < 1 ||
+                    Number(fromPosition) > participationOrder.length ||
+                    Number(toPosition) > participationOrder.length
+                  }
+                  onClick={() => {
+                    moveParticipation(
+                      Number(fromPosition) - 1,
+                      Number(toPosition) - 1,
+                    );
+                    setFromPosition('');
+                    setToPosition('');
+                  }}
+                >
+                  Переместить
+                </button>
+              </div>
+              <ol>
+                {participationOrder.map((participationId, index) => {
+                  const item = participationById.get(participationId);
+                  if (!item) return null;
+                  return (
+                    <li key={item.id}>
+                      <strong>{item.eventTitle}</strong> ·{' '}
+                      {new Date(item.eventStartAt).toLocaleDateString('ru-RU', {
+                        timeZone: 'Europe/Moscow',
+                      })}
+                      {' · '}
+                      {item.personId === preview.target.id
+                        ? 'основная карточка'
+                        : 'вторая карточка'}
+                      {' · '}
+                      прежний номер {item.previousSequence ?? 'не назначен'}
+                      {' · '}
+                      {item.status === 'CONFIRMED'
+                        ? `${item.netPoints} баллов сейчас`
+                        : item.status === 'CANCELLED'
+                          ? 'участие отменено'
+                          : 'черновик участия'}
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          aria-label={`Поднять участие ${index + 1} «${item.eventTitle}» выше`}
+                          disabled={busy || index === 0}
+                          onClick={() => moveParticipation(index, index - 1)}
+                        >
+                          Выше
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          aria-label={`Опустить участие ${index + 1} «${item.eventTitle}» ниже`}
+                          disabled={
+                            busy || index === participationOrder.length - 1
+                          }
+                          onClick={() => moveParticipation(index, index + 1)}
+                        >
+                          Ниже
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+          )}
         </div>
       )}
       <label>
@@ -247,7 +411,11 @@ export const AdminPersonMerge = ({
       <div className="row-actions">
         <button
           type="button"
-          disabled={busy || !preview?.canMerge || reason.trim().length < 3}
+          disabled={
+            busy ||
+            (!preview?.canMerge && !preview?.canResolveWithOrder) ||
+            reason.trim().length < 3
+          }
           onClick={() => void merge()}
         >
           Объединить в основную карточку

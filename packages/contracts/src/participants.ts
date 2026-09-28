@@ -121,9 +121,30 @@ export const personMergePreviewSchema = z.object({
   sourceCounts: z.record(z.string(), z.number().int().nonnegative()),
   conflicts: z.array(personMergeConflictSchema),
   canMerge: z.boolean(),
+  canResolveWithOrder: z.boolean(),
+  orderVersion: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .nullable(),
+  participationOrder: z.array(
+    z.object({
+      id: uuidSchema,
+      personId: uuidSchema,
+      eventTitle: z.string(),
+      eventStartAt: z.iso.datetime({ offset: true }),
+      status: z.enum(['DRAFT', 'CONFIRMED', 'CANCELLED']),
+      previousSequence: z.number().int().positive().nullable(),
+      netPoints: z.string(),
+    }),
+  ),
 });
 export const personMergeRequestSchema = z.object({
   sourcePersonId: uuidSchema,
+  participationOrder: z.array(uuidSchema).max(5000).optional(),
+  orderVersion: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
   reason: z.string().trim().min(3).max(500),
 });
 export type PersonMergePreview = z.infer<typeof personMergePreviewSchema>;

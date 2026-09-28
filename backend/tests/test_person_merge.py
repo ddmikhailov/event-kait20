@@ -1,11 +1,14 @@
 """A manual merge preserves scored history and refuses unresolved conflicts."""
 
+from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import text
 from test_activity import create_cross_scope, login_as_scope
 from test_scoring_v2 import (
+    activate_policy,
     create_event,
+    create_policy,
     create_registration,
     create_season,
     create_v1_rule,
@@ -243,6 +246,18 @@ def test_person_merge_blocks_active_registration_conflict(client):
     )
     assert merged.status_code == 409
     assert merged.json()["error"]["code"] == "PERSON_MERGE_CONFLICT"
+    bypass = client.post(
+        f"/admin/people/{target}/merge",
+        headers=headers,
+        json={
+            "sourcePersonId": source,
+            "reason": "Проверка конфликта",
+            "participationOrder": [],
+            "orderVersion": "0" * 64,
+        },
+    )
+    assert bypass.status_code == 409
+    assert bypass.json()["error"]["code"] == "PERSON_MERGE_CONFLICT"
     with client.app.state.database.connect() as connection:
         assert (
             connection.execute(
@@ -295,6 +310,237 @@ def test_person_merge_blocks_duplicate_scoring_sequence(client):
         json={"sourcePersonId": source, "reason": "История требует решения"},
     )
     assert response.status_code == 409, response.text
+
+
+def test_ordered_merge_recalculates_awards_with_full_ledger_history(client):
+    headers = login(client)
+    season = create_season(client, headers)
+    policy, _ = create_policy(client, headers)
+    activate_policy(client, headers, season, policy, "2026-01-01T00:00:00Z")
+    first_event = create_event(client, headers, season, "2026-08-01T10:00:00Z")
+    second_event = create_event(client, headers, season, "2026-08-02T10:00:00Z")
+    first_registration, target = create_registration(
+        client.app.state.database, first_event
+    )
+    second_registration, source = create_registration(
+        client.app.state.database, second_event
+    )
+    participation_ids = []
+    for event, registration in (
+        (first_event, first_registration),
+        (second_event, second_registration),
+    ):
+        confirmed = client.post(
+            f"/admin/events/{event}/participations/confirm",
+            headers=headers,
+            json={
+                "registrationIds": [registration],
+                "roleId": "30000000-0000-4000-8000-000000000004",
+            },
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        with client.app.state.database.connect() as connection:
+            participation_ids.append(
+                connection.execute(
+                    text("SELECT id FROM participations WHERE registration_id=:id"),
+                    {"id": registration},
+                ).scalar_one()
+            )
+    preview = client.get(
+        f"/admin/people/{target}/merge-preview",
+        headers=headers,
+        params={"sourcePersonId": source},
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["canMerge"] is False
+    assert preview.json()["canResolveWithOrder"] is True
+    assert {item["id"] for item in preview.json()["participationOrder"]} == set(
+        participation_ids
+    )
+    incorrect = client.post(
+        f"/admin/people/{target}/merge",
+        headers=headers,
+        json={
+            "sourcePersonId": source,
+            "reason": "Проверен порядок всей истории",
+            "participationOrder": [participation_ids[0], participation_ids[0]],
+            "orderVersion": preview.json()["orderVersion"],
+        },
+    )
+    assert incorrect.status_code == 409, incorrect.text
+    assert incorrect.json()["error"]["code"] == "PERSON_MERGE_ORDER_CHANGED"
+    with client.app.state.database.transaction() as connection:
+        connection.execute(
+            text("""UPDATE participations SET updated_at=DATE_ADD(updated_at, INTERVAL 1 SECOND)
+            WHERE id=:id"""),
+            {"id": participation_ids[0]},
+        )
+    stale = client.post(
+        f"/admin/people/{target}/merge",
+        headers=headers,
+        json={
+            "sourcePersonId": source,
+            "reason": "Проверен порядок всей истории",
+            "participationOrder": participation_ids,
+            "orderVersion": preview.json()["orderVersion"],
+        },
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["error"]["code"] == "PERSON_MERGE_ORDER_CHANGED"
+    preview = client.get(
+        f"/admin/people/{target}/merge-preview",
+        headers=headers,
+        params={"sourcePersonId": source},
+    )
+    assert preview.status_code == 200, preview.text
+    merged = client.post(
+        f"/admin/people/{target}/merge",
+        headers=headers,
+        json={
+            "sourcePersonId": source,
+            "reason": "Проверен порядок всей истории",
+            "participationOrder": participation_ids,
+            "orderVersion": preview.json()["orderVersion"],
+        },
+    )
+    assert merged.status_code == 200, merged.text
+    with client.app.state.database.connect() as connection:
+        participations = (
+            connection.execute(
+                text("""SELECT id,person_id,scoring_sequence,scoring_cycle FROM participations
+            WHERE id IN (:first,:second) ORDER BY scoring_sequence"""),
+                {"first": participation_ids[0], "second": participation_ids[1]},
+            )
+            .mappings()
+            .all()
+        )
+        assert [item["id"] for item in participations] == participation_ids
+        assert [item["person_id"] for item in participations] == [target, target]
+        assert [item["scoring_sequence"] for item in participations] == [1, 2]
+        assert [item["scoring_cycle"] for item in participations] == [2, 2]
+        ledger = (
+            connection.execute(
+                text("""SELECT participation_id,transaction_type,points,person_id,
+                   calculation_snapshot FROM score_transactions
+                   WHERE participation_id IN (:first,:second)
+                   ORDER BY created_at,id"""),
+                {"first": participation_ids[0], "second": participation_ids[1]},
+            )
+            .mappings()
+            .all()
+        )
+        assert len(ledger) == 6
+        assert {item["person_id"] for item in ledger} == {target}
+        by_participation = {
+            identity: [item for item in ledger if item["participation_id"] == identity]
+            for identity in participation_ids
+        }
+        assert {
+            item["transaction_type"] for item in by_participation[participation_ids[1]]
+        } == {"AWARD", "REVERSAL"}
+        assert sum(item["points"] for item in ledger) == Decimal("16.8")
+        assert (
+            connection.execute(
+                text("""SELECT count(*) FROM audit_log
+                WHERE action='SCORING_SEQUENCE_REASSIGNED'
+                  AND entity_id IN (:first,:second)"""),
+                {"first": participation_ids[0], "second": participation_ids[1]},
+            ).scalar_one()
+            == 2
+        )
+
+
+def test_ordered_merge_includes_legacy_participations_without_reawarding_them(client):
+    headers = login(client)
+    season = create_season(client, headers)
+    create_v1_rule(client, headers, season)
+    legacy_event = create_event(client, headers, season, "2026-06-01T10:00:00Z")
+    legacy_registration, target = create_registration(
+        client.app.state.database, legacy_event
+    )
+    policy, _ = create_policy(client, headers, effective_from="2026-07-01T00:00:00Z")
+    activate_policy(client, headers, season, policy, "2026-07-01T00:00:00Z")
+    first_event = create_event(client, headers, season, "2026-08-01T10:00:00Z")
+    second_event = create_event(client, headers, season, "2026-08-02T10:00:00Z")
+    first_registration, _ = create_registration(
+        client.app.state.database, first_event, target
+    )
+    second_registration, source = create_registration(
+        client.app.state.database, second_event
+    )
+    participation_ids = []
+    for event, registration in (
+        (first_event, first_registration),
+        (second_event, second_registration),
+        (legacy_event, legacy_registration),
+    ):
+        response = client.post(
+            f"/admin/events/{event}/participations/confirm",
+            headers=headers,
+            json={
+                "registrationIds": [registration],
+                "roleId": "30000000-0000-4000-8000-000000000004",
+            },
+        )
+        assert response.status_code == 200, response.text
+        with client.app.state.database.connect() as connection:
+            participation_ids.append(
+                connection.execute(
+                    text("SELECT id FROM participations WHERE registration_id=:id"),
+                    {"id": registration},
+                ).scalar_one()
+            )
+    preview = client.get(
+        f"/admin/people/{target}/merge-preview",
+        headers=headers,
+        params={"sourcePersonId": source},
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["canResolveWithOrder"] is True
+    assert len(preview.json()["participationOrder"]) == 3
+    legacy = next(
+        item
+        for item in preview.json()["participationOrder"]
+        if item["id"] == participation_ids[2]
+    )
+    assert legacy["previousSequence"] is None
+    merged = client.post(
+        f"/admin/people/{target}/merge",
+        headers=headers,
+        json={
+            "sourcePersonId": source,
+            "reason": "Вся история упорядочена вручную",
+            "participationOrder": [participation_ids[2], *participation_ids[:2]],
+            "orderVersion": preview.json()["orderVersion"],
+        },
+    )
+    assert merged.status_code == 200, merged.text
+    with client.app.state.database.connect() as connection:
+        ledger = (
+            connection.execute(
+                text("""SELECT participation_id,transaction_type,points
+            FROM score_transactions WHERE person_id=:person"""),
+                {"person": target},
+            )
+            .mappings()
+            .all()
+        )
+        assert [
+            item["transaction_type"]
+            for item in ledger
+            if item["participation_id"] == participation_ids[2]
+        ] == ["AWARD"]
+        assert sum(item["points"] for item in ledger) == Decimal("22.0")
+        assert [
+            item["scoring_sequence"]
+            for item in connection.execute(
+                text("""SELECT scoring_sequence FROM participations
+                WHERE person_id=:person ORDER BY scoring_sequence"""),
+                {"person": target},
+            )
+            .mappings()
+            .all()
+        ] == [1, 2, 3]
 
 
 def test_merged_public_slug_follows_primary_visibility(client):

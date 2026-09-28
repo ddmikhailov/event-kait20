@@ -3,7 +3,7 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import StringConstraints
+from pydantic import Field, StringConstraints
 from sqlalchemy.engine import RowMapping
 
 from ..config import Settings
@@ -21,10 +21,14 @@ from ..dependencies import (
 from ..email_worker import REGISTRATION_CANCELLED, REGISTRATION_EMAIL_CHANGED
 from ..errors import ApiError
 from ..person_merge import (
+    MAX_MERGE_ORDER,
+    apply_ordered_person_merge,
     apply_person_merge,
     merge_conflicts,
     merge_counts,
+    merge_order_version,
     merge_people,
+    numbered_participations,
 )
 from ..person_roster import ROSTER_FIELDS, RosterMetadataUpdate, roster_version
 from ..registration_service import ticket_url, validate_participant_type
@@ -42,6 +46,12 @@ class TicketResendRequest(Contract):
 
 class PersonMergeRequest(Contract):
     source_person_id: UUID
+    participation_order: list[UUID] | None = Field(
+        default=None, max_length=MAX_MERGE_ORDER
+    )
+    order_version: (
+        Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None
+    ) = None
     reason: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)
     ]
@@ -220,6 +230,14 @@ def preview_person_merge(
             lock=False,
         )
         conflicts = merge_conflicts(connection, target["id"], source["id"])
+        orderable = bool(conflicts) and all(
+            conflict["code"] == "SCORING_SEQUENCE" for conflict in conflicts
+        )
+        numbered = (
+            numbered_participations(connection, target["id"], source["id"], lock=False)
+            if orderable
+            else []
+        )
         return {
             "target": person_response(target),
             "source": person_response(source),
@@ -227,6 +245,24 @@ def preview_person_merge(
             "sourceCounts": merge_counts(connection, source["id"]),
             "conflicts": conflicts,
             "canMerge": not conflicts,
+            "canResolveWithOrder": orderable and len(numbered) <= MAX_MERGE_ORDER,
+            "orderVersion": merge_order_version(numbered)
+            if orderable and len(numbered) <= MAX_MERGE_ORDER
+            else None,
+            "participationOrder": [
+                {
+                    "id": item["id"],
+                    "personId": item["person_id"],
+                    "eventTitle": item["event_title"],
+                    "eventStartAt": serial(item["event_start_at"]),
+                    "status": item["status"],
+                    "previousSequence": int(item["scoring_sequence"])
+                    if item["scoring_sequence"] is not None
+                    else None,
+                    "netPoints": str(item["net_points"]),
+                }
+                for item in numbered[:MAX_MERGE_ORDER]
+            ],
         }
 
 
@@ -245,19 +281,41 @@ def merge_person(
             staff.tenant_id,
             lock=True,
         )
-        if merge_conflicts(connection, str(person_id), str(values.source_person_id)):
+        conflicts = merge_conflicts(
+            connection, str(person_id), str(values.source_person_id)
+        )
+        if conflicts and (
+            any(conflict["code"] != "SCORING_SEQUENCE" for conflict in conflicts)
+            or values.participation_order is None
+            or values.order_version is None
+        ):
             raise ApiError(
                 409,
                 "PERSON_MERGE_CONFLICT",
                 "Resolve conflicting history before merging",
             )
-        apply_person_merge(
-            connection,
-            str(person_id),
-            str(values.source_person_id),
-            staff.id,
-            values.reason,
-        )
+        if conflicts:
+            apply_ordered_person_merge(
+                connection,
+                str(person_id),
+                str(values.source_person_id),
+                staff.id,
+                values.reason,
+                [str(identity) for identity in values.participation_order or []],
+                values.order_version or "",
+            )
+        elif values.participation_order is not None or values.order_version is not None:
+            raise ApiError(
+                409, "PERSON_MERGE_ORDER_NOT_REQUIRED", "Refresh the merge preview"
+            )
+        else:
+            apply_person_merge(
+                connection,
+                str(person_id),
+                str(values.source_person_id),
+                staff.id,
+                values.reason,
+            )
     return get_person(person_id, staff, db)
 
 
