@@ -7,7 +7,7 @@ import type {
 import { Button } from '@event-registration/ui';
 import { useCallback, useState } from 'react';
 
-import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminApiError, adminApi, withSupportCode } from './admin-api.js';
 import { activityError } from './AdminActivity.js';
 
 // Membership-specific, deliberately NOT relying on the shared
@@ -19,7 +19,10 @@ export const membershipError = (error: unknown) => {
   if (error instanceof AdminApiError && error.code === 'CONFLICT') {
     return {
       kind: 'error' as const,
-      text: 'Выбранная группа уже является текущей принадлежностью.',
+      text: withSupportCode(
+        error,
+        'Выбранная группа уже является текущей принадлежностью.',
+      ),
     };
   }
   return activityError(error);

@@ -5,7 +5,7 @@ import type {
 } from '@event-registration/contracts';
 import { useState } from 'react';
 
-import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminApiError, adminApi, withSupportCode } from './admin-api.js';
 
 const name = (person: PersonSummary) =>
   [person.lastName, person.firstName, person.middleName]
@@ -58,11 +58,20 @@ const conflictLabels: Record<string, string> = {
 const errorMessage = (error: unknown) => {
   if (error instanceof AdminApiError) {
     if (error.code === 'PERSON_MERGE_CONFLICT')
-      return 'История изменилась или обнаружен конфликт. Повторите сравнение и разрешите конфликт вручную.';
+      return withSupportCode(
+        error,
+        'История изменилась или обнаружен конфликт. Повторите сравнение и разрешите конфликт вручную.',
+      );
     if (error.code === 'PERSON_NOT_FOUND')
-      return 'Одна из карточек уже недоступна. Обновите список людей.';
+      return withSupportCode(
+        error,
+        'Одна из карточек уже недоступна. Обновите список людей.',
+      );
   }
-  return 'Не удалось выполнить действие. Повторите попытку.';
+  return withSupportCode(
+    error,
+    'Не удалось выполнить действие. Повторите попытку.',
+  );
 };
 
 export const AdminPersonMerge = ({

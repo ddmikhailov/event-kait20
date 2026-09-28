@@ -179,6 +179,11 @@ export class AdminApiError extends Error {
   }
 }
 
+export const withSupportCode = (error: unknown, message: string): string =>
+  error instanceof AdminApiError && error.requestId
+    ? `${message} Код обращения: ${error.requestId}.`
+    : message;
+
 export class AdminApiClient {
   public auditLog(
     page: number,
@@ -1217,11 +1222,16 @@ export class AdminApiClient {
     }
     if (!response.ok) {
       const body = (await response.json().catch(() => undefined)) as
-        { error?: { code?: string; message?: string } } | undefined;
+        | { error?: { code?: string; message?: string; requestId?: string } }
+        | undefined;
       throw new AdminApiError(
         body?.error?.code ?? 'REQUEST_FAILED',
         response.status,
         body?.error?.message ?? 'Экспорт не выполнен',
+        undefined,
+        body?.error?.requestId ??
+          response.headers.get('x-request-id') ??
+          undefined,
       );
     }
     const disposition = response.headers.get('content-disposition') ?? '';

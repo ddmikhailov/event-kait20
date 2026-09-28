@@ -6,7 +6,7 @@ import { Button } from '@event-registration/ui';
 import { personTypeLabels } from '@event-registration/contracts';
 import { useCallback, useEffect, useState } from 'react';
 
-import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminApiError, adminApi, withSupportCode } from './admin-api.js';
 
 export const EventStatistics = ({
   event,
@@ -25,9 +25,12 @@ export const EventStatistics = ({
       setStatistics(await adminApi.eventStatistics(event.id));
     } catch (caught) {
       setError(
-        caught instanceof AdminApiError
-          ? caught.message
-          : 'Статистика не загрузилась.',
+        withSupportCode(
+          caught,
+          caught instanceof AdminApiError
+            ? caught.message
+            : 'Статистика не загрузилась.',
+        ),
       );
     } finally {
       setBusy(false);

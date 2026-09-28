@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AdminApiClient } from './admin-api.js';
+import { AdminApiClient, AdminApiError, withSupportCode } from './admin-api.js';
 
 const session = {
   authenticated: true as const,
@@ -15,6 +15,41 @@ const session = {
 
 describe('admin API client', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it('shows the server request ID for support without changing the domain message', () => {
+    expect(
+      withSupportCode(
+        new AdminApiError('IMPORT_FAILED', 400, 'raw', undefined, 'trace-123'),
+        'Не удалось проверить файл.',
+      ),
+    ).toBe('Не удалось проверить файл. Код обращения: trace-123.');
+    expect(
+      withSupportCode(
+        new AdminApiError('NETWORK_ERROR', 0, 'raw'),
+        'Нет соединения.',
+      ),
+    ).toBe('Нет соединения.');
+  });
+
+  it('keeps the request ID on an export failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { code: 'EXPORT_FAILED', message: 'raw' },
+          }),
+          { status: 500, headers: { 'x-request-id': 'export-trace-123' } },
+        ),
+      ),
+    );
+    await expect(
+      new AdminApiClient().exportExcel('event-1'),
+    ).rejects.toMatchObject({
+      code: 'EXPORT_FAILED',
+      requestId: 'export-trace-123',
+    });
+  });
 
   it('preserves structured roster validation errors', async () => {
     const details = { reason: 'REQUIRED_VALUE', row: 8, column: 4 };

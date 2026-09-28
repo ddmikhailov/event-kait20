@@ -19,7 +19,7 @@ import type {
 import { Button } from '@event-registration/ui';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 
-import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminApiError, adminApi, withSupportCode } from './admin-api.js';
 import { zonedLocalToIso } from './admin-values.js';
 
 const MOSCOW_TIMEZONE = 'Europe/Moscow';
@@ -91,7 +91,10 @@ const scoringAdminError = (error: unknown): Notice => {
         'Период пересекается с уже существующим статусом такого же типа у этого человека.',
       PERSON_STATUS_NOT_FOUND: 'Запись о статусе не найдена.',
     };
-    return { kind: 'error', text: messages[error.code] ?? error.message };
+    return {
+      kind: 'error',
+      text: withSupportCode(error, messages[error.code] ?? error.message),
+    };
   }
   return { kind: 'error', text: 'Не удалось выполнить действие.' };
 };

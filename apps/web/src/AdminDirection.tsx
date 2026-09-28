@@ -11,7 +11,7 @@ import {
 import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useState } from 'react';
 
-import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminApiError, adminApi, withSupportCode } from './admin-api.js';
 
 type Notice = { kind: 'error' | 'success'; text: string };
 
@@ -41,8 +41,11 @@ export const directionError = (error: unknown): Notice => {
       VALIDATION_ERROR: 'Проверьте введённые данные.',
     };
     if (error.code in messages)
-      return { kind: 'error', text: messages[error.code]! };
-    return { kind: 'error', text: error.message };
+      return {
+        kind: 'error',
+        text: withSupportCode(error, messages[error.code]!),
+      };
+    return { kind: 'error', text: withSupportCode(error, error.message) };
   }
   return { kind: 'error', text: 'Не удалось выполнить действие.' };
 };

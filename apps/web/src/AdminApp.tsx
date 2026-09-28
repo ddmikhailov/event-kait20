@@ -15,7 +15,7 @@ import {
 import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
-import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminApiError, adminApi, withSupportCode } from './admin-api.js';
 import { ActivitySettings } from './AdminActivity.js';
 import { ParticipationsAdmin } from './AdminActivityAdmin.js';
 import { EventReviewQueue } from './AdminEventReview.js';
@@ -1537,7 +1537,10 @@ const errorNotice = (error: unknown): Notice => {
       };
       return {
         kind: 'error',
-        text: `${details.success ? reasons[details.data.reason] : 'Проверьте правила начисления для сезона и уровня мероприятия.'} Пока настройка не завершена, сохраните мероприятие как черновик. Правила изменяет главный администратор.`,
+        text: withSupportCode(
+          error,
+          `${details.success ? reasons[details.data.reason] : 'Проверьте правила начисления для сезона и уровня мероприятия.'} Пока настройка не завершена, сохраните мероприятие как черновик. Правила изменяет главный администратор.`,
+        ),
       };
     }
     const messages: Record<string, string> = {
@@ -1566,7 +1569,10 @@ const errorNotice = (error: unknown): Notice => {
     };
     return {
       kind: 'error',
-      text: messages[error.code] ?? 'Не удалось выполнить операцию',
+      text: withSupportCode(
+        error,
+        messages[error.code] ?? 'Не удалось выполнить операцию',
+      ),
     };
   }
   return {

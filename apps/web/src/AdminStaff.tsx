@@ -9,7 +9,7 @@ import {
 import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useState } from 'react';
 
-import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminApiError, adminApi, withSupportCode } from './admin-api.js';
 
 type Notice = { kind: 'error' | 'success'; text: string };
 type StaffSummary = StaffListResponse['items'][number];
@@ -572,7 +572,10 @@ const staffError = (error: unknown): Notice => {
     };
     return {
       kind: 'error',
-      text: messages[error.code] ?? 'Не удалось выполнить операцию.',
+      text: withSupportCode(
+        error,
+        messages[error.code] ?? 'Не удалось выполнить операцию.',
+      ),
     };
   }
   return { kind: 'error', text: 'Проверьте данные и попробуйте снова.' };

@@ -10,7 +10,7 @@ import { manualAdjustmentRequestSchema } from '@event-registration/contracts';
 import { Button } from '@event-registration/ui';
 import { useState } from 'react';
 
-import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminApiError, adminApi, withSupportCode } from './admin-api.js';
 import { activityError } from './AdminActivity.js';
 
 type Notice = { kind: 'error' | 'success'; text: string };
@@ -82,7 +82,10 @@ export const manualAdjustmentError = (error: unknown): Notice => {
     if (error.code === 'NETWORK_ERROR') {
       return {
         kind: 'error',
-        text: 'Не удалось подтвердить результат операции. Повторная отправка будет выполнена с тем же идентификатором операции.',
+        text: withSupportCode(
+          error,
+          'Не удалось подтвердить результат операции. Повторная отправка будет выполнена с тем же идентификатором операции.',
+        ),
       };
     }
     const messages: Record<string, string> = {
@@ -91,7 +94,10 @@ export const manualAdjustmentError = (error: unknown): Notice => {
       INVALID_REFERENCE: 'Выбранный сезон недоступен для этой организации.',
     };
     if (error.code in messages) {
-      return { kind: 'error', text: messages[error.code]! };
+      return {
+        kind: 'error',
+        text: withSupportCode(error, messages[error.code]!),
+      };
     }
   }
   return activityError(error);

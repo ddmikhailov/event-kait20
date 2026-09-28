@@ -4,7 +4,7 @@ import {
 } from '@event-registration/contracts';
 import { useEffect, useState, type FormEvent } from 'react';
 
-import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminApiError, adminApi, withSupportCode } from './admin-api.js';
 
 const fields = [
   ['educationStatus', 'Статус обучения'],
@@ -96,9 +96,12 @@ export const AdminRosterMetadata = ({
         error.code === 'ROSTER_METADATA_CHANGED';
       setConflict(stale);
       setNotice(
-        stale
-          ? 'Другой сотрудник уже изменил эти данные. Ваш ввод сохранён в форме. Скопируйте нужные правки и загрузите актуальную карточку.'
-          : 'Не удалось сохранить данные. Ваш ввод сохранён в форме. Повторите попытку.',
+        withSupportCode(
+          error,
+          stale
+            ? 'Другой сотрудник уже изменил эти данные. Ваш ввод сохранён в форме. Скопируйте нужные правки и загрузите актуальную карточку.'
+            : 'Не удалось сохранить данные. Ваш ввод сохранён в форме. Повторите попытку.',
+        ),
       );
     } finally {
       setWorking(false);

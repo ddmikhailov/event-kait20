@@ -9,7 +9,7 @@ import type {
 import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { AdminApiError, adminApi } from './admin-api.js';
+import { AdminApiError, adminApi, withSupportCode } from './admin-api.js';
 import { seasonValues } from './admin-values.js';
 
 type Notice = { kind: 'error' | 'success'; text: string };
@@ -662,7 +662,10 @@ export const activityError = (error: unknown): Notice => {
         'Мероприятие и участие не описывают одно и то же событие, или ссылка недоступна.',
       PERSON_MISMATCH: 'Человек не совпадает с выбранным.',
     };
-    return { kind: 'error', text: messages[error.code] ?? error.message };
+    return {
+      kind: 'error',
+      text: withSupportCode(error, messages[error.code] ?? error.message),
+    };
   }
   return { kind: 'error', text: 'Не удалось выполнить действие.' };
 };
