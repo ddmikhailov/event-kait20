@@ -220,6 +220,11 @@ award automatically. A merged source is hidden from the normal directory but
 retained as an identity alias. Registration snapshots and immutable calculation
 snapshots keep their original values. The dismiss route clears one suspected
 duplicate flag with an audited reason.
+For a scoring-sequence collision, the approved future reconciliation flow is
+SUPER_ADMIN-only: resolve any registration conflict manually before merging,
+then recalculate affected awards using compensating ledger entries while
+retaining the complete original and corrected history. Until that flow is
+implemented, `PERSON_MERGE_CONFLICT` continues to block the merge.
 If both the old and primary profiles remain public, an old public slug resolves
 to the primary profile and its current slug. Hiding either profile makes the
 old slug unavailable; public lists contain only the primary.
@@ -590,6 +595,10 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
   и нормализации пробелов. При неоднозначности или отличии метаданных preview
   показывает `CONFLICT` и блокирует импорт; import возвращает
   `409 ROSTER_STUDENT_CONFLICT`, изменений нет. Пропуск не обновляет и не объединяет Person.
+  Поскольку в исходном реестре нет стабильного номера студента, смена ФИО,
+  группы и других атрибутов существующей записи исправляется вручную через
+  карточку Person и метаданные реестра с аудитом. Повторный XLSX-импорт не
+  выполняет массовое обновление по совпадению имени.
   Отсутствующий mode сохраняет прежний режим REJECT (`ROSTER_STUDENT_EXISTS`).
   Preview возвращает `students` (новые, включая 0), `skipped`, `conflicts`
   и список `{row,status}` с исходными номерами строк (`NEW`, `SKIPPED`, `CONFLICT`)
