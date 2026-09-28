@@ -53,6 +53,9 @@
   exact version for the organisation server. Production therefore requires
   documented risk acceptance, network isolation, least-privilege accounts and
   proven backup/restore; changing the major/minor target is outside Release 1.0.
+- Предложение о переходе на поддерживаемую LTS с проверкой совместимости и
+  восстановлением изложено в `docs/adr/ADR-013-mysql-lts-migration-plan.md`;
+  оно не меняет действующее требование 8.1.0.
 
 ## 3. `persons`
 
