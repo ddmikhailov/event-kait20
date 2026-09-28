@@ -407,6 +407,10 @@ const start = async () => {
     ...process.env,
     ...values,
     NODE_ENV: 'development',
+    // Browser suites create many isolated staff sessions from 127.0.0.1.
+    // Keep the production/default auth throttle; only the disposable E2E DB
+    // needs a larger ceiling so unrelated tests do not exhaust one IP bucket.
+    ...(e2e ? { AUTH_RATE_LIMIT_MAX: '100' } : {}),
     DATABASE_URL: `mysql://event_app:${values.MYSQL_APP_PASSWORD}@127.0.0.1:${mysqlPort}/event_registration_demo`,
     CORS_ORIGINS: 'http://localhost:5173,http://localhost:5174',
     AUTH_LINK_BASE_URL: 'http://localhost:5173/auth/',

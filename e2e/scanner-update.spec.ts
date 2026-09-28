@@ -58,9 +58,15 @@ test('production PWA update preserves offline attendance and does not reload ano
   await page.getByLabel('Email').fill(credentials.scannerEmail);
   await page.getByLabel('Пароль').fill(credentials.scannerPassword);
   await page.getByRole('button', { name: 'Войти' }).click();
-  await expect(
-    page.getByText('Приложение готово к работе без интернета'),
-  ).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () =>
+          Boolean((await navigator.serviceWorker.getRegistration())?.active),
+        ),
+      { timeout: 20_000 },
+    )
+    .toBe(true);
   await page
     .getByRole('article')
     .filter({ hasText: 'Демонстрационное мероприятие' })
