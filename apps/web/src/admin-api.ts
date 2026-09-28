@@ -19,6 +19,7 @@ import {
   personListResponseSchema,
   participationListSchema,
   eventReviewSchema,
+  eventReviewScorePreviewSchema,
   eventReviewApprovalSchema,
   pendingEventReviewsSchema,
   rosterSearchSchema,
@@ -75,6 +76,7 @@ import {
   type EventListResponse,
   type EventResponse,
   type EventReview,
+  type EventReviewScorePreview,
   type EventReviewApproval,
   type EventReviewDecision,
   type PendingEventReviews,
@@ -535,6 +537,18 @@ export class AdminApiClient {
       `/admin/events/${encodeURIComponent(eventId)}/review`,
       { method: 'GET' },
       eventReviewSchema,
+    );
+  }
+
+  public previewEventReviewScore(
+    eventId: string,
+    registrationId: string,
+    expectedVersion: string,
+  ): Promise<EventReviewScorePreview> {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/review/${encodeURIComponent(registrationId)}/score-preview?expected_version=${encodeURIComponent(expectedVersion)}`,
+      { method: 'GET' },
+      eventReviewScorePreviewSchema,
     );
   }
 

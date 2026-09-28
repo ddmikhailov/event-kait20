@@ -18,6 +18,7 @@ from .activity_service import (
 )
 from .database import Database, execute, row, rows
 from .errors import ApiError
+from .scoring_v2 import calculate_participation, decimal_string
 from .service_utils import audit, serial
 
 
@@ -211,6 +212,106 @@ def review_items(connection: Connection, event_id: str) -> list[dict[str, Any]]:
         }
         for item in items
     ]
+
+
+def preview_review_score(
+    connection: Connection, event_id: str, registration_id: str, expected_version: str
+) -> dict[str, Any]:
+    """Calculate a saved review decision without changing participation or ledger."""
+    item = row(
+        connection,
+        """SELECT review.*,r.person_id AS registration_person_id,r.person_type,
+        r.first_attended_at,p.id AS participation_id,p.person_id AS participation_person_id,
+        p.scoring_sequence,e.start_at AS event_start_at,e.season_id,e.level_id,
+        e.boost_multiplier,s.scoring_policy_id,s.scoring_policy_effective_from,
+        role.code AS role_code,role.name AS role_name,
+        level.code AS level_code,level.name AS level_name,
+        result.code AS result_code,result.name AS result_name
+        FROM event_participation_reviews review
+        JOIN registrations r ON r.id=review.registration_id AND r.status='ACTIVE'
+        JOIN events e ON e.id=review.event_id
+        LEFT JOIN seasons s ON s.id=e.season_id
+        LEFT JOIN participations p ON p.registration_id=r.id
+        JOIN participation_roles role ON role.id=review.role_id
+        LEFT JOIN event_levels level ON level.id=e.level_id
+        LEFT JOIN participation_results result ON result.id=review.result_id
+        WHERE review.event_id=:event AND review.registration_id=:registration""",
+        {"event": event_id, "registration": registration_id},
+    )
+    if not item:
+        raise ApiError(404, "REVIEW_ITEM_NOT_FOUND", "Review item not found")
+    version = review_version(item)
+    if version != expected_version:
+        raise ApiError(
+            409, "REVIEW_ITEM_CHANGED", "Review changed; reload before preview"
+        )
+    if item["first_attended_at"] != item["scanner_first_attended_at"]:
+        raise ApiError(409, "REVIEW_STALE", "Scanner marks changed after review")
+
+    def unavailable(state: str, code: str) -> dict[str, Any]:
+        return {
+            "version": version,
+            "state": state,
+            "code": code,
+            "points": None,
+            "calculation": None,
+        }
+
+    if item["attendance_decision"] != "PRESENT":
+        return unavailable("NO_SCORE", "ABSENT")
+    if item["person_type"] != "KAIT_STUDENT":
+        return unavailable("NO_SCORE", "NOT_STUDENT")
+    if item["match_state"] == "REJECTED":
+        return unavailable("NO_SCORE", "REJECTED")
+    if item["match_state"] != "MATCHED" or not item["roster_person_id"]:
+        return unavailable("BLOCKED", "ROSTER_MATCH_REQUIRED")
+    if (
+        item["participation_id"]
+        and item["scoring_sequence"] is not None
+        and item["participation_person_id"] != item["roster_person_id"]
+    ):
+        return unavailable("BLOCKED", "REVIEW_IDENTITY_LOCKED")
+    if item["registration_person_id"] != item["roster_person_id"]:
+        collision = row(
+            connection,
+            """SELECT id FROM registrations WHERE event_id=:event AND person_id=:person
+            AND status='ACTIVE' AND id<>:registration LIMIT 1""",
+            {
+                "event": event_id,
+                "person": item["roster_person_id"],
+                "registration": registration_id,
+            },
+        )
+        if collision:
+            return unavailable("BLOCKED", "ROSTER_LINK_CONFLICT")
+    if not (
+        item["season_id"]
+        and item["level_id"]
+        and item["scoring_policy_id"]
+        and item["scoring_policy_effective_from"]
+        and item["event_start_at"] >= item["scoring_policy_effective_from"]
+    ):
+        return unavailable("BLOCKED", "SCORING_SETUP_REQUIRED")
+    participation = {
+        **item,
+        "id": item["participation_id"] or registration_id,
+        "person_id": item["roster_person_id"],
+        "event_id": event_id,
+        "scoring_sequence": item["scoring_sequence"],
+        "role_id": item["role_id"],
+        "result_id": item["result_id"],
+    }
+    try:
+        points, calculation, _ = calculate_participation(connection, participation)
+    except ApiError as error:
+        return unavailable("BLOCKED", error.code)
+    return {
+        "version": version,
+        "state": "READY",
+        "code": None,
+        "points": decimal_string(points),
+        "calculation": calculation,
+    }
 
 
 def update_review_item(

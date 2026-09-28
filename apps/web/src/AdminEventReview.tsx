@@ -2,6 +2,7 @@ import type {
   ActivityReference,
   EventReview,
   EventReviewDecision,
+  EventReviewScorePreview,
   RosterSearch,
 } from '@event-registration/contracts';
 import { Button } from '@event-registration/ui';
@@ -10,6 +11,53 @@ import { useCallback, useEffect, useState } from 'react';
 import { AdminApiError, adminApi } from './admin-api.js';
 
 type ReviewItem = EventReview['items'][number];
+
+const scorePreviewMessage = (code: string | null) =>
+  ({
+    ABSENT: 'Не пришёл — баллы не начисляются.',
+    NOT_STUDENT: 'Для этой категории участника баллы не начисляются.',
+    REJECTED: 'Запись отклонена — баллы не начисляются.',
+    ROSTER_MATCH_REQUIRED: 'Сначала сопоставьте студента с контингентом.',
+    ROSTER_LINK_CONFLICT:
+      'У студента уже есть другая активная регистрация на это мероприятие.',
+    REVIEW_IDENTITY_LOCKED:
+      'Проверьте связь с профилем: у участия уже есть история начислений.',
+    SCORING_SETUP_REQUIRED:
+      'Укажите сезон, уровень и действующие правила баллов.',
+    SCORING_COMPONENT_MISSING:
+      'В правилах не хватает значения роли, уровня, результата или очередности участия.',
+    SCORING_POLICY_VERSION_NOT_FOUND:
+      'Для даты мероприятия нет опубликованных правил баллов.',
+  })[code ?? ''] ?? 'Расчёт сейчас недоступен. Проверьте настройки баллов.';
+
+const ScorePreview = ({ preview }: { preview: EventReviewScorePreview }) => {
+  if (preview.state !== 'READY' || !preview.calculation)
+    return <p role="status">{scorePreviewMessage(preview.code)}</p>;
+  const calculation = preview.calculation;
+  return (
+    <details>
+      <summary>Предварительный результат: {preview.points}</summary>
+      <p>
+        Роль «{calculation.role.name}»: {calculation.role.value} × уровень «
+        {calculation.level.name}»: {calculation.level.value} × коэффициент
+        мероприятия: {String(calculation.eventBoost)} × коэффициент очередности:{' '}
+        {calculation.newcomer.value}.
+      </p>
+      {calculation.statuses.map((status) => (
+        <p key={status.id}>
+          Статус «{status.name}»: ×{status.value}.
+        </p>
+      ))}
+      <p>
+        Бонус за результат: {calculation.resultBonus}. Итого:{' '}
+        {calculation.finalPoints}.
+      </p>
+      <p>
+        Расчёт станет окончательным только после утверждения всей ведомости.
+      </p>
+    </details>
+  );
+};
 
 const reviewError = (error: unknown) => {
   if (!(error instanceof AdminApiError))
@@ -153,6 +201,9 @@ export const EventReviewWorkspace = ({
   const [roles, setRoles] = useState<ActivityReference[]>([]);
   const [results, setResults] = useState<ActivityReference[]>([]);
   const [drafts, setDrafts] = useState<Record<string, EventReviewDecision>>({});
+  const [scorePreviews, setScorePreviews] = useState<
+    Record<string, EventReviewScorePreview>
+  >({});
   const [searchFor, setSearchFor] = useState<string>();
   const [searchText, setSearchText] = useState('');
   const [candidates, setCandidates] = useState<RosterSearch['items']>([]);
@@ -214,12 +265,37 @@ export const EventReviewWorkspace = ({
         decision(item),
       );
       setReview(updated);
+      setScorePreviews((current) => {
+        const next = { ...current };
+        delete next[item.registrationId];
+        return next;
+      });
       setDrafts((current) => {
         const next = { ...current };
         delete next[item.registrationId];
         return next;
       });
       setNotice({ kind: 'success', text: 'Решение сохранено.' });
+    } catch (error) {
+      setNotice({ kind: 'error', text: reviewError(error) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const previewScore = async (item: ReviewItem) => {
+    if (busy || drafts[item.registrationId]) return;
+    setBusy(true);
+    try {
+      const result = await adminApi.previewEventReviewScore(
+        eventId,
+        item.registrationId,
+        item.version,
+      );
+      setScorePreviews((current) => ({
+        ...current,
+        [item.registrationId]: result,
+      }));
+      setNotice(undefined);
     } catch (error) {
       setNotice({ kind: 'error', text: reviewError(error) });
     } finally {
@@ -243,6 +319,7 @@ export const EventReviewWorkspace = ({
     setBusy(true);
     try {
       setReview(await adminApi.refreshEventReview(eventId));
+      setScorePreviews({});
       setNotice({
         kind: 'success',
         text: 'Новые отметки обновлены. Проверьте выделенные строки.',
@@ -474,6 +551,7 @@ export const EventReviewWorkspace = ({
                 .slice(currentPage * 25, (currentPage + 1) * 25)
                 .map((item) => {
                   const selected = decision(item);
+                  const scorePreview = scorePreviews[item.registrationId];
                   return (
                     <article className="review-card" key={item.registrationId}>
                       <fieldset
@@ -615,6 +693,26 @@ export const EventReviewWorkspace = ({
                             'Баллы студенту КАИТ не начисляются'
                           )}
                         </div>
+                        {canEdit && (
+                          <div className="review-card-score">
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              disabled={
+                                busy || Boolean(drafts[item.registrationId])
+                              }
+                              onClick={() => void previewScore(item)}
+                            >
+                              Рассчитать баллы
+                            </button>
+                            {drafts[item.registrationId] && (
+                              <p>Сначала сохраните изменения карточки.</p>
+                            )}
+                            {scorePreview?.version === item.version && (
+                              <ScorePreview preview={scorePreview} />
+                            )}
+                          </div>
+                        )}
                         <div className="review-card-save">
                           <label>
                             Причина изменения

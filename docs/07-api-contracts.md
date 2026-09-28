@@ -514,6 +514,12 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
 
 - `GET /admin/activity/reviews/pending?state=PENDING|APPROVED` — очередь завершённых Events (по умолчанию PENDING; до 100 записей).
 - `GET /admin/events/:eventId/review` — все активные регистрации и решения.
+- `GET /admin/events/:eventId/review/:registrationId/score-preview?expected_version=` —
+  расчёт для одного сохранённого решения без записи Participation или начисления.
+  Ответ `READY` содержит баллы и снимок формулы; `NO_SCORE` объясняет, почему
+  баллы не положены; `BLOCKED` содержит код недостающего сопоставления/правила.
+  При изменении решения или отметки возвращается `409 REVIEW_ITEM_CHANGED`.
+  Предпросмотр рассчитан на текущие правила и не заменяет атомарное утверждение.
 - `POST /admin/events/:eventId/review/refresh` — новые отметки Scanner.
 - `PATCH /admin/events/:eventId/review/:registrationId` — посещение, роль,
   результат, связь с контингентом или отклонение с обязательной причиной.

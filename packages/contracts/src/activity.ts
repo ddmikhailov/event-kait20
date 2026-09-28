@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { uuidSchema } from './common.js';
-import { decimalScoreSchema } from './scoring-v2.js';
+import { calculationSnapshotSchema, decimalScoreSchema } from './scoring-v2.js';
 
 export const activityCodeSchema = z
   .string()
@@ -185,6 +185,13 @@ export const eventReviewSchema = z.object({
   isCorrection: z.boolean().default(false),
   items: z.array(eventReviewItemSchema),
 });
+export const eventReviewScorePreviewSchema = z.object({
+  version: z.string().regex(/^[a-f0-9]{64}$/),
+  state: z.enum(['READY', 'NO_SCORE', 'BLOCKED']),
+  code: z.string().nullable(),
+  points: decimalScoreSchema.nullable(),
+  calculation: calculationSnapshotSchema.nullable(),
+});
 export const eventReviewDecisionSchema = z.object({
   expectedVersion: z.string().regex(/^[a-f0-9]{64}$/),
   attendanceDecision: z.enum(['PRESENT', 'ABSENT']),
@@ -218,6 +225,9 @@ export const rosterSearchSchema = z.object({
   ),
 });
 export type EventReview = z.infer<typeof eventReviewSchema>;
+export type EventReviewScorePreview = z.infer<
+  typeof eventReviewScorePreviewSchema
+>;
 export type EventReviewDecision = z.infer<typeof eventReviewDecisionSchema>;
 export type EventReviewApproval = z.infer<typeof eventReviewApprovalSchema>;
 export type PendingEventReviews = z.infer<typeof pendingEventReviewsSchema>;

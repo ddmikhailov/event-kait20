@@ -101,7 +101,7 @@ def _component(
 
 
 def assign_scoring_sequence(
-    connection: Connection, participation: RowMapping, persist: bool
+    connection: Connection, participation: RowMapping | dict[str, Any], persist: bool
 ) -> int:
     if participation["scoring_sequence"]:
         return int(participation["scoring_sequence"])
@@ -141,7 +141,7 @@ def assign_scoring_sequence(
 
 def calculate_participation(
     connection: Connection,
-    participation: RowMapping,
+    participation: RowMapping | dict[str, Any],
     *,
     policy_version_id: str | None = None,
     persist_sequence: bool = False,

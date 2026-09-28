@@ -667,6 +667,15 @@ def test_completed_event_waits_for_published_policy_before_approval(
     approval = client.post(f"/admin/events/{event_id}/review/approve", headers=headers)
     assert approval.status_code == 409
     assert approval.json()["error"]["code"] == "SCORING_SETUP_REQUIRED"
+    before_setup = client.get(f"/admin/events/{event_id}/review", headers=headers)
+    blocked_preview = client.get(
+        f"/admin/events/{event_id}/review/{registration_id}/score-preview",
+        headers=headers,
+        params={"expected_version": before_setup.json()["items"][0]["version"]},
+    )
+    assert blocked_preview.status_code == 200
+    assert blocked_preview.json()["state"] == "BLOCKED"
+    assert blocked_preview.json()["code"] == "SCORING_SETUP_REQUIRED"
     policy = client.post(
         "/admin/activity/scoring-v2/policies",
         headers=headers,
@@ -760,6 +769,29 @@ def test_completed_event_waits_for_published_policy_before_approval(
         )
         assert corrected.status_code == 200, corrected.text
         assert corrected.json()["items"][0]["attendanceDecision"] == attendance
+        preview = client.get(
+            f"/admin/events/{event_id}/review/{registration_id}/score-preview",
+            headers=organizer_headers,
+            params={"expected_version": corrected.json()["items"][0]["version"]},
+        )
+        assert preview.status_code == 200, preview.text
+        if attendance == "ABSENT":
+            assert preview.json()["state"] == "NO_SCORE"
+            assert preview.json()["code"] == "ABSENT"
+        else:
+            assert preview.json()["state"] == "READY"
+            assert preview.json()["points"] == "30.0000"
+            assert preview.json()["calculation"]["role"]["code"] == "PARTICIPANT"
+        with database.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT COUNT(*) FROM participations WHERE registration_id=:id"
+                    ),
+                    {"id": registration_id},
+                ).scalar_one()
+                == 0
+            )
         stale = client.patch(
             f"/admin/events/{event_id}/review/{registration_id}",
             headers=organizer_headers,
@@ -771,6 +803,13 @@ def test_completed_event_waits_for_published_policy_before_approval(
         )
         assert stale.status_code == 409, stale.text
         assert stale.json()["error"]["code"] == "REVIEW_ITEM_CHANGED"
+        stale_preview = client.get(
+            f"/admin/events/{event_id}/review/{registration_id}/score-preview",
+            headers=organizer_headers,
+            params={"expected_version": latest["items"][0]["version"]},
+        )
+        assert stale_preview.status_code == 409
+        assert stale_preview.json()["error"]["code"] == "REVIEW_ITEM_CHANGED"
     approval = client.post(
         f"/admin/events/{event_id}/review/approve", headers=organizer_headers
     )

@@ -48,7 +48,12 @@ from ..dependencies import (
     database,
 )
 from ..errors import ApiError
-from ..event_review import approve_review, review_items, update_review_item
+from ..event_review import (
+    approve_review,
+    preview_review_score,
+    review_items,
+    update_review_item,
+)
 from ..scoring_v2 import decimal_string
 from ..service_utils import audit, naive_utc, serial
 from ..tenant_scope import (
@@ -1002,6 +1007,28 @@ def get_event_review(
             "isCorrection": event["activity_reviewed_at"] is not None,
             "items": review_items(connection, str(event_id)),
         }
+
+
+@event_admin.get("/{event_id}/review/{registration_id}/score-preview")
+def get_review_score_preview(
+    event_id: UUID,
+    registration_id: UUID,
+    staff: Annotated[Staff, Depends(administrator)],
+    db: Annotated[Database, Depends(database)],
+    expected_version: str = Query(
+        ..., min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$"
+    ),
+) -> dict[str, Any]:
+    with db.transaction() as connection:
+        event = require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id
+        )
+        if event["activity_review_state"] != "PENDING":
+            raise ApiError(409, "REVIEW_NOT_PENDING", "Event review is not pending")
+        check_review_editor(event, staff)
+        return preview_review_score(
+            connection, str(event_id), str(registration_id), expected_version
+        )
 
 
 def check_review_editor(event: Any, staff: Staff) -> None:
