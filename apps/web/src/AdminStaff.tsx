@@ -243,53 +243,63 @@ export const InvitationList = ({
   items: InvitationSummary[];
   busy: boolean;
   onResend: (item: InvitationSummary) => Promise<void>;
-}) => (
-  <div className="staff-list">
-    {items.map((item) => {
-      const expired = new Date(item.expiresAt).getTime() <= Date.now();
-      return (
-        <article key={item.id}>
-          <div>
-            <strong>{item.email}</strong>
-            <span>
-              {roleLabel(item.role)} ·{' '}
-              {item.acceptedAt
-                ? 'Активировано'
-                : expired
-                  ? 'Ссылка истекла — создайте новое приглашение'
-                  : deliveryLabels[item.deliveryStatus]}
-            </span>
-            {!item.acceptedAt && (
+}) => {
+  const [currentTime, setCurrentTime] = useState(0);
+
+  useEffect(() => {
+    setCurrentTime(Date.now());
+    const timer = window.setInterval(() => setCurrentTime(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="staff-list">
+      {items.map((item) => {
+        const expired = new Date(item.expiresAt).getTime() <= currentTime;
+        return (
+          <article key={item.id}>
+            <div>
+              <strong>{item.email}</strong>
               <span>
-                Попыток: {item.attempts}
-                {item.lastErrorCode ? ` · ${item.lastErrorCode}` : ''}
+                {roleLabel(item.role)} ·{' '}
+                {item.acceptedAt
+                  ? 'Активировано'
+                  : expired
+                    ? 'Ссылка истекла — создайте новое приглашение'
+                    : deliveryLabels[item.deliveryStatus]}
               </span>
+              {!item.acceptedAt && (
+                <span>
+                  Попыток: {item.attempts}
+                  {item.lastErrorCode ? ` · ${item.lastErrorCode}` : ''}
+                </span>
+              )}
+              {item.nextAttemptAt && (
+                <span>
+                  Следующая попытка: {formatDateTime(item.nextAttemptAt)}
+                </span>
+              )}
+            </div>
+            {!item.acceptedAt && !expired && currentTime > 0 && (
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={
+                  busy ||
+                  item.deliveryStatus === 'QUEUED' ||
+                  item.deliveryStatus === 'SENDING'
+                }
+                onClick={() => void onResend(item)}
+              >
+                Отправить снова
+              </button>
             )}
-            {item.nextAttemptAt && (
-              <span>
-                Следующая попытка: {formatDateTime(item.nextAttemptAt)}
-              </span>
-            )}
-          </div>
-          {!item.acceptedAt && !expired && (
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={
-                busy ||
-                item.deliveryStatus === 'QUEUED' ||
-                item.deliveryStatus === 'SENDING'
-              }
-              onClick={() => void onResend(item)}
-            >
-              Отправить снова
-            </button>
-          )}
-        </article>
-      );
-    })}
-  </div>
-);
+          </article>
+        );
+      })}
+    </div>
+  );
+};
 
 export const StaffList = ({
   staff,

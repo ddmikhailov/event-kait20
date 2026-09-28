@@ -1,5 +1,5 @@
 import { BrowserQRCodeReader, type IScannerControls } from '@zxing/browser';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { acceptQrRead } from './qr-repeat-guard.js';
 
 type QrCameraProps = {
@@ -9,14 +9,13 @@ type QrCameraProps = {
 
 export const QrCamera = ({ active, onDecode }: QrCameraProps) => {
   const video = useRef<HTMLVideoElement>(null);
-  const callback = useRef(onDecode);
+  const notifyDecode = useEffectEvent(onDecode);
   const lastRead = useRef({ value: '', lastSeenAt: 0 });
   const [error, setError] = useState<string>();
 
-  callback.current = onDecode;
-
   useEffect(() => {
-    if (!active || !video.current) return undefined;
+    const videoElement = video.current;
+    if (!active || !videoElement) return undefined;
     let controls: IScannerControls | undefined;
     let cancelled = false;
     lastRead.current.lastSeenAt = Date.now();
@@ -30,12 +29,12 @@ export const QrCamera = ({ active, onDecode }: QrCameraProps) => {
           audio: false,
           video: { facingMode: { ideal: 'environment' } },
         },
-        video.current,
+        videoElement,
         (result) => {
           if (cancelled) return;
           const value = result?.getText();
           if (acceptQrRead(lastRead.current, value, Date.now()) && value)
-            callback.current(value);
+            notifyDecode(value);
         },
       )
       .then((scannerControls) => {
@@ -51,7 +50,7 @@ export const QrCamera = ({ active, onDecode }: QrCameraProps) => {
     return () => {
       cancelled = true;
       controls?.stop();
-      if (video.current) BrowserQRCodeReader.cleanVideoSource(video.current);
+      BrowserQRCodeReader.cleanVideoSource(videoElement);
     };
   }, [active]);
 

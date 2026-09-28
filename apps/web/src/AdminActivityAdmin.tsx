@@ -487,7 +487,7 @@ export const ParticipationsAdmin = ({
     [filters],
   );
 
-  useEffect(() => void search(1), [filters]);
+  useEffect(() => void search(1), [search]);
 
   const submitQuery = (form: FormData) => {
     const query = String(form.get('query') ?? '').trim();

@@ -500,7 +500,16 @@ const EventEditor = ({
   const [categories, setCategories] = useState<ActivityReference[]>([]);
   const [levels, setLevels] = useState<ActivityReference[]>([]);
   const [directions, setDirections] = useState<ActivityDirection[]>([]);
+  const [currentTime, setCurrentTime] = useState(0);
   const archived = savedEvent?.status === 'ARCHIVED';
+  const savedEventId = savedEvent?.id;
+  const eventLevelId = event?.levelId;
+
+  useEffect(() => {
+    setCurrentTime(Date.now());
+    const timer = window.setInterval(() => setCurrentTime(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const loadFields = useCallback(async (eventId: string) => {
     try {
@@ -511,8 +520,8 @@ const EventEditor = ({
   }, []);
 
   useEffect(() => {
-    if (savedEvent) void loadFields(savedEvent.id);
-  }, [loadFields, savedEvent?.id]);
+    if (savedEventId) void loadFields(savedEventId);
+  }, [loadFields, savedEventId]);
 
   useEffect(() => {
     void Promise.all([
@@ -537,13 +546,13 @@ const EventEditor = ({
                 'FEDERAL',
                 'INTERNATIONAL',
               ].includes(item.code) ||
-                item.id === event?.levelId),
+                item.id === eventLevelId),
           ),
         );
         setDirections(directionList.items);
       })
       .catch((error: unknown) => setNotice(errorNotice(error)));
-  }, []);
+  }, [eventLevelId]);
 
   const saveEvent = async (form: FormData) => {
     setBusy(true);
@@ -728,7 +737,7 @@ const EventEditor = ({
           {savedEvent &&
             !archived &&
             savedEvent.status !== 'DRAFT' &&
-            new Date(savedEvent.endAt).getTime() <= Date.now() && (
+            new Date(savedEvent.endAt).getTime() <= currentTime && (
               <button
                 className="secondary-button"
                 type="button"
