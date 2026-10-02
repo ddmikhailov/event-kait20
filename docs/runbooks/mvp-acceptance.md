@@ -48,6 +48,18 @@ SMOKE_SCANNER_BASE_URL=https://<scanner> \
 pnpm smoke:mvp
 ```
 
+Для временной Amvera-беты, где Scanner расположен по `/scanner/` на том же
+домене, используется отдельная проверка:
+
+```text
+SMOKE_BETA_BASE_URL=https://<beta-domain> pnpm smoke:beta
+```
+
+Она проверяет тот же API, закрытые production docs, CORS/Origin, Web, Scanner и
+PWA manifest с учётом единого домена. Успешная beta-проверка не заменяет
+`smoke:mvp`: перед production Web и Scanner по-прежнему должны получить разные
+origins и пройти строгий smoke выше.
+
 Smoke проверяет оба same-origin `/api` proxy, liveness/readiness MySQL, закрытые
 production API docs, точный CORS для Web, отклонение mutation с постороннего
 Origin, security headers/CSP после внешнего HTTPS proxy и Apache, обе application
