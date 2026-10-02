@@ -64,7 +64,7 @@ async function rosterScreen(page: Page) {
   );
   expect(profile.ok()).toBe(true);
   await page.goto('/admin');
-  await page.getByRole('button', { name: 'База людей', exact: true }).click();
+  await page.getByRole('button', { name: 'Контингент', exact: true }).click();
   await page
     .getByRole('textbox', { name: 'Поиск', exact: true })
     .fill(lastName);

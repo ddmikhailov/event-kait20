@@ -17,7 +17,7 @@ test('chief administrator finds a change by server request ID', async ({
   await page.getByRole('button', { name: 'Войти' }).click();
   const login = await (await loginResponse).json();
   await expect(
-    page.getByRole('heading', { name: 'Мероприятия' }),
+    page.getByRole('heading', { name: 'Мероприятия', exact: true }),
   ).toBeVisible();
 
   const suffix = randomUUID().slice(0, 8);

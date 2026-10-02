@@ -17,7 +17,7 @@ test('administrator reviews and closes a rejected Scanner handoff', async ({
     (await (await loginResponse).json()) as { csrfToken: string }
   ).csrfToken;
   await expect(
-    page.getByRole('heading', { name: 'Мероприятия' }),
+    page.getByRole('heading', { name: 'Мероприятия', exact: true }),
   ).toBeVisible();
 
   const eventId = await page.evaluate(async () => {

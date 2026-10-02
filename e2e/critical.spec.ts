@@ -75,7 +75,7 @@ test.describe.serial('critical MVP browser journey', () => {
     await page.getByLabel('Пароль').fill(credentials.adminPassword);
     await page.getByRole('button', { name: 'Войти' }).click();
     await expect(
-      page.getByRole('heading', { name: 'Мероприятия' }),
+      page.getByRole('heading', { name: 'Мероприятия', exact: true }),
     ).toBeVisible();
 
     const card = page.getByRole('article').filter({
@@ -321,6 +321,7 @@ test.describe.serial('critical MVP browser journey', () => {
       .getByRole('article')
       .filter({ hasText: 'Демонстрационное мероприятие' });
     await card.getByRole('button', { name: 'Настроить' }).click();
+    await page.getByRole('button', { name: /Форма регистрации/ }).click();
     const constructor = page.locator('.registration-constructor');
     await expect(
       constructor.getByRole('heading', { name: 'Конструктор регистрации' }),

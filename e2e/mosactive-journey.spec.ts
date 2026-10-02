@@ -44,9 +44,9 @@ test('fictional roster, registration, Scanner, review and public award form one 
   await page.getByLabel('Пароль').fill(credentials.adminPassword);
   await page.getByRole('button', { name: 'Войти' }).click();
   await expect(
-    page.getByRole('heading', { name: 'Мероприятия' }),
+    page.getByRole('heading', { name: 'Мероприятия', exact: true }),
   ).toBeVisible();
-  await page.getByRole('button', { name: 'База людей' }).click();
+  await page.getByRole('button', { name: 'Контингент' }).click();
   await page.getByLabel('Файл контингента XLSX').setInputFiles(rosterPath);
   await page.getByRole('button', { name: 'Проверить файл' }).click();
   await expect(page.getByText('Новых студентов: 1.')).toBeVisible();
