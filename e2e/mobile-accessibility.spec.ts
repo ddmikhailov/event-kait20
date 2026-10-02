@@ -48,10 +48,10 @@ test('administrator navigation and event editor fit a narrow viewport', async ({
   await page.getByRole('button', { name: 'Войти' }).click();
 
   const workspaces = page.getByRole('navigation', {
-    name: 'Разделы управления',
+    name: 'Зоны управления EventKAIT20',
   });
   await expect(
-    workspaces.getByRole('heading', { name: 'МосАктив' }),
+    workspaces.getByRole('heading', { name: 'Участие и баллы' }),
   ).toBeVisible();
   await expect(
     workspaces.getByRole('button', { name: 'Проверить участие' }),
@@ -71,7 +71,14 @@ test('administrator navigation and event editor fit a narrow viewport', async ({
     .filter({ hasText: 'Демонстрационное мероприятие' })
     .getByRole('button', { name: 'Настроить' })
     .click();
+  await expect(
+    page.getByRole('navigation', { name: 'Настройки мероприятия' }),
+  ).toBeVisible();
   await expect(page.getByText('Уровень мероприятия')).toBeVisible();
+  await page.getByRole('button', { name: /Форма регистрации/ }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Форма регистрации' }),
+  ).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(

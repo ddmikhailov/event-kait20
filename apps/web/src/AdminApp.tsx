@@ -315,76 +315,37 @@ const AdminWorkspace = ({
       <section className="admin-content">
         <header className="admin-page-heading">
           <div>
-            <p className="eyebrow">Управление</p>
-            <h1>Мероприятия</h1>
-            <p>Создавайте события и настраивайте форму регистрации.</p>
+            <p className="eyebrow">EventKAIT20</p>
+            <h1>Панель управления</h1>
+            <p>
+              Выберите, чем хотите заняться. Все настройки собраны по задачам.
+            </p>
           </div>
-          <div className="admin-heading-actions">
-            <label className="archive-toggle">
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(event) => setShowArchived(event.target.checked)}
-              />
-              <span>Показать архив</span>
-            </label>
-            <Button onClick={() => void openEditor()}>Новое мероприятие</Button>
-          </div>
+          <Button onClick={() => void openEditor()}>Создать мероприятие</Button>
         </header>
-        <nav className="admin-workspaces" aria-label="Разделы управления">
-          <section
-            className="admin-workspace-group"
-            aria-labelledby="admin-workspace-events"
-          >
-            <h2 id="admin-workspace-events">Участники и доступ</h2>
-            <div className="admin-workspace-links">
-              <button onClick={() => setView('people')}>База людей</button>
-              <button onClick={() => setView('staff')}>Сотрудники</button>
-              {session.user.role === 'SUPER_ADMIN' && (
-                <button onClick={() => setView('audit')}>
-                  Журнал действий
-                </button>
-              )}
-              <button onClick={() => setView('directions')}>Направления</button>
-            </div>
-          </section>
-          <section
-            className="admin-workspace-group"
-            aria-labelledby="admin-workspace-mosactive"
-          >
-            <h2 id="admin-workspace-mosactive">МосАктив</h2>
-            <div className="admin-workspace-links">
-              <button onClick={() => setView('reviewQueue')}>
-                Проверить участие
-              </button>
-              <button onClick={() => setView('participations')}>Участия</button>
-              <button onClick={() => setView('activity')}>
-                Правила активности
-              </button>
-              <button onClick={() => setView('scoring')}>
-                Политики баллов
-              </button>
-            </div>
-          </section>
-          <section
-            className="admin-workspace-group"
-            aria-labelledby="admin-workspace-records"
-          >
-            <h2 id="admin-workspace-records">Карточки студентов</h2>
-            <div className="admin-workspace-links">
-              <button onClick={() => setView('membership')}>
-                Учебная принадлежность
-              </button>
-              <button onClick={() => setView('achievements')}>
-                Достижения
-              </button>
-              <button onClick={() => setView('adjustments')}>
-                Корректировки баллов
-              </button>
-            </div>
-          </section>
-        </nav>
+        <AdminTaskNavigation
+          role={session.user.role}
+          onOpen={(nextView) => setView(nextView)}
+        />
         {notice && <AdminNotice notice={notice} />}
+        <div className="admin-list-heading">
+          <div>
+            <p className="eyebrow">Web · регистрация</p>
+            <h2>Мероприятия</h2>
+            <p>
+              Откройте карточку мероприятия, чтобы изменить настройки,
+              участников, статистику или доступ Scanner.
+            </p>
+          </div>
+          <label className="archive-toggle">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(event) => setShowArchived(event.target.checked)}
+            />
+            <span>Показать архив</span>
+          </label>
+        </div>
         {busy && events.length === 0 ? (
           <p className="admin-empty">Загружаем мероприятия…</p>
         ) : (
@@ -410,6 +371,73 @@ const AdminWorkspace = ({
   );
 };
 
+type WorkspaceView =
+  | 'people'
+  | 'staff'
+  | 'activity'
+  | 'participations'
+  | 'reviewQueue'
+  | 'membership'
+  | 'achievements'
+  | 'adjustments'
+  | 'directions'
+  | 'scoring'
+  | 'audit';
+
+export const AdminTaskNavigation = ({
+  role,
+  onOpen,
+}: {
+  role: SessionResponse['user']['role'];
+  onOpen: (view: WorkspaceView) => void;
+}) => (
+  <nav className="admin-workspaces" aria-label="Зоны управления EventKAIT20">
+    <section className="admin-workspace-group admin-workspace-web">
+      <p className="admin-workspace-kicker">WEB</p>
+      <h2>Мероприятия и регистрация</h2>
+      <p>Создание событий, формы участников и направления.</p>
+      <div className="admin-workspace-links">
+        <a href="#admin-events">Открыть мероприятия</a>
+        <button onClick={() => onOpen('directions')}>Направления</button>
+      </div>
+    </section>
+    <section className="admin-workspace-group admin-workspace-scanner">
+      <p className="admin-workspace-kicker">SCANNER</p>
+      <h2>Вход и отметки</h2>
+      <p>Доступ сканеров настраивается в карточке нужного мероприятия.</p>
+      <div className="admin-workspace-note">
+        Мероприятие → «Scanner и доступ»
+      </div>
+    </section>
+    <section className="admin-workspace-group admin-workspace-mosactive">
+      <p className="admin-workspace-kicker">МОСАКТИВ</p>
+      <h2>Участие и баллы</h2>
+      <p>Проверка посещений, начисления и правила рейтинга.</p>
+      <div className="admin-workspace-links">
+        <button onClick={() => onOpen('reviewQueue')}>Проверить участие</button>
+        <button onClick={() => onOpen('participations')}>Все участия</button>
+        <button onClick={() => onOpen('scoring')}>Правила баллов</button>
+        <button onClick={() => onOpen('activity')}>Справочники</button>
+      </div>
+    </section>
+    <section className="admin-workspace-group admin-workspace-people">
+      <p className="admin-workspace-kicker">ЛЮДИ И ДОСТУП</p>
+      <h2>Студенты и сотрудники</h2>
+      <p>Карточки людей, учебные данные и права сотрудников.</p>
+      <div className="admin-workspace-links">
+        <button onClick={() => onOpen('people')}>Контингент</button>
+        <button onClick={() => onOpen('membership')}>Учебные данные</button>
+        <button onClick={() => onOpen('achievements')}>Достижения</button>
+        <button onClick={() => onOpen('adjustments')}>Изменить баллы</button>
+        <button onClick={() => onOpen('staff')}>Сотрудники и роли</button>
+        {role === 'SUPER_ADMIN' && (
+          <button onClick={() => onOpen('audit')}>Журнал действий</button>
+        )}
+      </div>
+    </section>
+  </nav>
+);
+
 export const EventGrid = ({
   events,
   onOpen,
@@ -423,7 +451,11 @@ export const EventGrid = ({
   onAccess: (event: EventResponse) => Promise<void>;
   onStatistics: (event: EventResponse) => Promise<void>;
 }) => (
-  <section className="admin-event-grid" aria-label="Список мероприятий">
+  <section
+    className="admin-event-grid"
+    id="admin-events"
+    aria-label="Список мероприятий"
+  >
     {events.map((event) => (
       <article className="admin-event-card" key={event.id}>
         <div className="admin-card-topline">
@@ -451,7 +483,7 @@ export const EventGrid = ({
             className="secondary-button"
             onClick={() => void onParticipants(event)}
           >
-            Участники
+            Участники и отметки
           </button>
           <button
             className="secondary-button"
@@ -463,7 +495,7 @@ export const EventGrid = ({
             className="secondary-button"
             onClick={() => void onAccess(event)}
           >
-            Доступ
+            Scanner и доступ
           </button>
           <button
             className="secondary-button"
@@ -496,6 +528,9 @@ const EventEditor = ({
   const [fields, setFields] = useState<FormFieldResponse[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>();
+  const [editorSection, setEditorSection] = useState<
+    'settings' | 'registration' | 'streams'
+  >('settings');
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [categories, setCategories] = useState<ActivityReference[]>([]);
   const [levels, setLevels] = useState<ActivityReference[]>([]);
@@ -676,9 +711,13 @@ const EventEditor = ({
   return (
     <main className="admin-shell">
       <header className="admin-editor-header">
-        <button className="text-button" onClick={onBack}>
-          ← Все мероприятия
-        </button>
+        <div>
+          <button className="text-button" onClick={onBack}>
+            ← Панель управления
+          </button>
+          <span className="admin-breadcrumb-separator">/</span>
+          <strong>{savedEvent?.title ?? 'Новое мероприятие'}</strong>
+        </div>
         {savedEvent && (
           <StatusBadge
             status={savedEvent.effectiveStatus ?? savedEvent.status}
@@ -686,11 +725,52 @@ const EventEditor = ({
         )}
       </header>
       <div className="admin-editor-layout">
-        <section className="admin-panel event-primary-panel">
+        <header className="event-editor-heading">
+          <div>
+            <p className="eyebrow">Web · мероприятие</p>
+            <h1>{savedEvent ? savedEvent.title : 'Новое мероприятие'}</h1>
+            <p>
+              Выберите раздел — на экране останутся только нужные настройки.
+            </p>
+          </div>
+        </header>
+        <nav className="event-editor-tabs" aria-label="Настройки мероприятия">
+          <button
+            type="button"
+            aria-current={editorSection === 'settings' ? 'page' : undefined}
+            onClick={() => setEditorSection('settings')}
+          >
+            <span>1</span>
+            Основное
+          </button>
+          <button
+            type="button"
+            aria-current={editorSection === 'registration' ? 'page' : undefined}
+            disabled={!savedEvent}
+            onClick={() => setEditorSection('registration')}
+          >
+            <span>2</span>
+            Форма регистрации
+          </button>
+          <button
+            type="button"
+            aria-current={editorSection === 'streams' ? 'page' : undefined}
+            disabled={!savedEvent}
+            onClick={() => setEditorSection('streams')}
+          >
+            <span>3</span>
+            Потоки и места
+          </button>
+        </nav>
+        <section
+          className="admin-panel event-primary-panel"
+          hidden={editorSection !== 'settings'}
+          aria-labelledby="event-settings-title"
+        >
           <div className="admin-section-title">
             <div>
-              <p className="eyebrow">Основные данные</p>
-              <h1>{savedEvent ? savedEvent.title : 'Новое мероприятие'}</h1>
+              <p className="eyebrow">Раздел 1</p>
+              <h2 id="event-settings-title">Настройки мероприятия</h2>
             </div>
           </div>
           {notice && <AdminNotice notice={notice} />}
@@ -768,7 +848,21 @@ const EventEditor = ({
             </button>
           )}
         </section>
-        <section className="admin-panel">
+        <section
+          className="admin-panel event-primary-panel"
+          hidden={editorSection !== 'registration'}
+          aria-labelledby="event-registration-title"
+        >
+          <div className="admin-section-title">
+            <div>
+              <p className="eyebrow">Раздел 2</p>
+              <h2 id="event-registration-title">Форма регистрации</h2>
+              <p>
+                Настройте, какие сведения участник заполняет на сайте и при
+                регистрации на месте.
+              </p>
+            </div>
+          </div>
           {savedEvent && (
             <RegistrationFormEditor
               key={savedEvent.id}
@@ -796,12 +890,18 @@ const EventEditor = ({
           )}
         </section>
         {savedEvent && (
-          <EventStreamsEditor
-            event={savedEvent}
-            onChanged={async () =>
-              setSavedEvent(await adminApi.event(savedEvent.id))
-            }
-          />
+          <section
+            className="event-editor-section"
+            hidden={editorSection !== 'streams'}
+            aria-label="Потоки и количество мест"
+          >
+            <EventStreamsEditor
+              event={savedEvent}
+              onChanged={async () =>
+                setSavedEvent(await adminApi.event(savedEvent.id))
+              }
+            />
+          </section>
         )}
       </div>
     </main>
@@ -855,8 +955,20 @@ export const EventForm = ({
         void onSubmit(new FormData(submitEvent.currentTarget));
       }}
     >
+      <nav className="event-form-nav" aria-label="Поля мероприятия">
+        <a href="#event-main">Название</a>
+        <a href="#event-time">Время и место</a>
+        <a href="#event-points">Баллы МосАктив</a>
+        <a href="#event-publication">Публикация</a>
+        <a href="#event-description">Обложка и описание</a>
+      </nav>
       <div className="form-grid">
-        <h2 className="form-group-heading">Основное</h2>
+        <h3 className="form-group-heading" id="event-main">
+          Название и адрес страницы
+        </h3>
+        <p className="form-group-hint">
+          Эти данные участник увидит в каталоге и по ссылке на регистрацию.
+        </p>
         <AdminText
           name="title"
           label="Название"
@@ -872,7 +984,12 @@ export const EventForm = ({
           pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
           disabled={readOnly}
         />
-        <h2 className="form-group-heading">Время и места</h2>
+        <h3 className="form-group-heading" id="event-time">
+          Время и место
+        </h3>
+        <p className="form-group-hint">
+          Укажите расписание, место проведения и общий лимит участников.
+        </p>
         <AdminText
           name="startAt"
           label="Начало"
@@ -919,7 +1036,13 @@ export const EventForm = ({
         <p className="form-group-hint">
           Все даты и время — московские (UTC+3).
         </p>
-        <h2 className="form-group-heading">Баллы МосАктив</h2>
+        <h3 className="form-group-heading" id="event-points">
+          Баллы МосАктив
+        </h3>
+        <p className="form-group-hint">
+          Эти настройки определяют, по каким правилам будут рассчитаны баллы
+          после проверки участия.
+        </p>
         <label>
           <span>Направление</span>
           <select
@@ -1012,7 +1135,13 @@ export const EventForm = ({
             <option value="3.0">×3</option>
           </select>
         </label>
-        <h2 className="form-group-heading">Публикация и регистрация</h2>
+        <h3 className="form-group-heading" id="event-publication">
+          Публикация и регистрация
+        </h3>
+        <p className="form-group-hint">
+          Решите, кому доступна регистрация и когда мероприятие появится на
+          сайте.
+        </p>
         <input type="hidden" name="visibilityConfigured" value="1" />
         <label className="checkbox-row">
           <input
@@ -1064,7 +1193,13 @@ export const EventForm = ({
           </select>
         </label>
       </div>
-      <h2 className="form-group-heading">Обложка и описание</h2>
+      <h3 className="form-group-heading" id="event-description">
+        Обложка и описание
+      </h3>
+      <p className="form-group-hint">
+        Добавьте текст и изображение, которые участник увидит на странице
+        мероприятия.
+      </p>
       <div className="cover-editor">
         <div className="cover-preview">
           {coverPreview || event?.coverObjectKey ? (

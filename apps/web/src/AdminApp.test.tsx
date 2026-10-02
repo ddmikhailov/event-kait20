@@ -6,7 +6,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import { eventValues } from './admin-values.js';
-import { AdminLogin, EventForm, EventGrid, RoleDenied } from './AdminApp.js';
+import {
+  AdminLogin,
+  AdminTaskNavigation,
+  EventForm,
+  EventGrid,
+  RoleDenied,
+} from './AdminApp.js';
 
 const event: EventResponse = {
   id: '10000000-0000-4000-8000-000000000001',
@@ -64,6 +70,25 @@ const eventFormData = (overrides: Record<string, string> = {}): FormData => {
 };
 
 describe('admin console views', () => {
+  it('groups administration by the four product areas and explains Scanner access', () => {
+    const markup = renderToStaticMarkup(
+      <AdminTaskNavigation role="SUPER_ADMIN" onOpen={() => undefined} />,
+    );
+    expect(markup).toContain('Мероприятия и регистрация');
+    expect(markup).toContain('Вход и отметки');
+    expect(markup).toContain('Участие и баллы');
+    expect(markup).toContain('Студенты и сотрудники');
+    expect(markup).toContain('Мероприятие → «Scanner и доступ»');
+    expect(markup).toContain('Журнал действий');
+  });
+
+  it('does not offer the audit log to an organizer', () => {
+    const markup = renderToStaticMarkup(
+      <AdminTaskNavigation role="ORGANIZER" onOpen={() => undefined} />,
+    );
+    expect(markup).not.toContain('Журнал действий');
+  });
+
   it('renders a password-manager friendly administrator login', () => {
     const markup = renderToStaticMarkup(
       <AdminLogin onLogin={async () => undefined} />,
@@ -103,11 +128,14 @@ describe('admin console views', () => {
       />,
     );
     expect(grid).toContain('День открытых дверей');
-    expect(grid).toContain('Доступ');
+    expect(grid).toContain('Scanner и доступ');
     expect(grid).toContain('Статистика');
     expect(form).toContain('Регистрация открыта');
     expect(form).not.toContain('Идёт сейчас');
     expect(form).not.toContain('Завершено');
+    expect(form).toContain('Поля мероприятия');
+    expect(form).toContain('Название и адрес страницы');
+    expect(form).toContain('Баллы МосАктив');
   });
 
   it('makes archived events read-only', () => {

@@ -81,7 +81,7 @@ test.describe.serial('critical MVP browser journey', () => {
     const card = page.getByRole('article').filter({
       hasText: 'Демонстрационное мероприятие',
     });
-    await card.getByRole('button', { name: 'Участники' }).click();
+    await card.getByRole('button', { name: 'Участники и отметки' }).click();
     await page.getByRole('textbox', { name: 'Поиск' }).fill(participant.email);
     await page.getByRole('button', { name: 'Найти' }).click();
     await expect(page.getByText(participant.email)).toBeVisible();
@@ -224,7 +224,7 @@ test.describe.serial('critical MVP browser journey', () => {
     const card = page.getByRole('article').filter({
       hasText: 'Демонстрационное мероприятие',
     });
-    await card.getByRole('button', { name: 'Участники' }).click();
+    await card.getByRole('button', { name: 'Участники и отметки' }).click();
     await page.getByRole('button', { name: 'Участие и баллы' }).click();
 
     const row = page.getByRole('row').filter({ hasText: participant.lastName });
@@ -276,7 +276,7 @@ test.describe.serial('critical MVP browser journey', () => {
     const card = page.getByRole('article').filter({
       hasText: 'Демонстрационное мероприятие',
     });
-    await card.getByRole('button', { name: 'Участники' }).click();
+    await card.getByRole('button', { name: 'Участники и отметки' }).click();
     await page.getByRole('button', { name: 'Участие и баллы' }).click();
     const row = page.getByRole('row').filter({ hasText: absent.lastName });
     await row.getByRole('checkbox').check();

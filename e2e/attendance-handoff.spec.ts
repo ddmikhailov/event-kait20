@@ -72,7 +72,7 @@ test('administrator reviews and closes a rejected Scanner handoff', async ({
   const card = page
     .getByRole('article')
     .filter({ hasText: 'Демонстрационное мероприятие' });
-  await card.getByRole('button', { name: 'Участники' }).click();
+  await card.getByRole('button', { name: 'Участники и отметки' }).click();
   const queue = page.getByRole('region', {
     name: 'Отклонённые отметки Scanner',
   });
