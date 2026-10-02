@@ -203,6 +203,77 @@ async function reviewScreen(page: Page, failSave = false, count = 1) {
   return () => ({ approvals, approvedAttendance, readsAfterApproval });
 }
 
+test('roster suggestion shows differences and stays a draft until staff saves', async ({
+  page,
+}, testInfo) => {
+  await reviewScreen(page);
+  const selectedId = '90000000-0000-4000-8000-000000000099';
+  await page.route('**/roster-suggestions', (route) =>
+    route.fulfill({
+      headers,
+      json: {
+        items: [
+          {
+            id: selectedId,
+            lastName: 'Тестов',
+            firstName: 'Тест',
+            middleName: 'Составное Отчество',
+            studyGroup: 'ТЕСТ-1',
+            differingFields: ['middleName'],
+          },
+        ],
+        truncated: false,
+      },
+    }),
+  );
+  let saved = 0;
+  page.on('request', (request) => {
+    if (
+      request.method() === 'PATCH' &&
+      request.url().endsWith(`/review/${registrationId}`)
+    ) {
+      expect(request.postDataJSON().rosterPersonId).toBe(selectedId);
+      saved += 1;
+    }
+  });
+  await page
+    .getByRole('button', { name: 'Найти студента', exact: true })
+    .click();
+  await expect(
+    page.getByText(
+      'Отчество: в заявке «не указано», в реестре «Составное Отчество»',
+    ),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    )
+    .toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath('roster-suggestions-mobile.png'),
+    fullPage: true,
+  });
+  await page.getByRole('button', { name: 'Выбрать эту запись' }).click();
+  expect(saved).toBe(0);
+  await expect(
+    page.getByRole('button', { name: 'Утвердить и начислить баллы' }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole('button', { name: 'Сохранить', exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByLabel('Причина изменения', { exact: true })
+    .fill('ФИО уточнено у участника');
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(
+    page.getByText('Решение сохранено.', { exact: true }),
+  ).toBeVisible();
+  expect(saved).toBe(1);
+});
+
 test('dirty review cannot approve or refresh; saved decision determines approval', async ({
   page,
 }) => {

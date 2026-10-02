@@ -440,6 +440,10 @@ Migration 017 добавляет `events.boost_multiplier` (1, 1.5, 2, 3),
 `registrations.roster_match_state/roster_person_id` фиксируют предложение
 сопоставления, а `event_participation_reviews` — утверждаемую ведомость со
 снимком отметки Scanner, итоговым посещением, ролью, результатом и связью.
+Выбор «Моей группы нет» в публичной форме хранится существующими значениями
+`study_group=NULL`, `roster_match_state='UNMATCHED'`, `roster_person_id=NULL`.
+Подсказки похожих студентов вычисляются при запросе администратора, не
+сохраняются и не изменяют Person или snapshot Registration. Новая миграция не нужна.
 Исторические Events с подтверждённым участием сохраняют
 `activity_review_required=false`; незавершённые Events без подтверждённых
 участий переходят в новый порядок. Миграция добавляющая:

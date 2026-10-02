@@ -29,10 +29,12 @@ export const RegistrationSystemFields = ({
   fields,
   allowedTypes,
   disabled = false,
+  studyGroups,
 }: {
   fields: SystemFields;
   allowedTypes?: string[] | null | undefined;
   disabled?: boolean;
+  studyGroups?: string[] | undefined;
 }) => {
   const [personType, setPersonType] = useState('');
   const restricted =
@@ -71,6 +73,14 @@ export const RegistrationSystemFields = ({
           )
             return null;
           const required = setting === 'REQUIRED';
+          if (key === 'studyGroup' && studyGroups !== undefined)
+            return (
+              <StudyGroupField
+                key={key}
+                groups={studyGroups}
+                required={required}
+              />
+            );
           return (
             <label key={key}>
               {systemFieldLabels[key]}
@@ -136,6 +146,70 @@ export const RegistrationSystemFields = ({
         })}
       </div>
     </fieldset>
+  );
+};
+
+const StudyGroupField = ({
+  groups,
+  required,
+}: {
+  groups: string[];
+  required: boolean;
+}) => {
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState('');
+  const missing = selected === '__missing__';
+  const visible = groups.filter(
+    (group) =>
+      group === selected ||
+      group
+        .toLocaleLowerCase('ru')
+        .includes(query.trim().toLocaleLowerCase('ru')),
+  );
+  return (
+    <div>
+      <label>
+        Найти группу
+        <input
+          type="search"
+          value={query}
+          maxLength={100}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Начните вводить название"
+        />
+      </label>
+      <label>
+        Учебная группа{required ? ' *' : ''}
+        <select
+          required={required}
+          value={selected}
+          onChange={(event) => setSelected(event.target.value)}
+        >
+          <option value="">
+            {required ? 'Выберите группу' : 'Не указана'}
+          </option>
+          {visible.map((group) => (
+            <option key={group} value={group}>
+              {group}
+            </option>
+          ))}
+          <option value="__missing__">Моей группы нет</option>
+        </select>
+      </label>
+      <input type="hidden" name="studyGroup" value={missing ? '' : selected} />
+      {missing && (
+        <>
+          <input type="hidden" name="studyGroupMissing" value="true" />
+          <p>
+            Заявка будет принята. Организатор уточнит вашу группу перед
+            начислением баллов.
+          </p>
+        </>
+      )}
+      {!missing && visible.length === 0 && (
+        <p>Группа не найдена. Измените поиск или выберите «Моей группы нет».</p>
+      )}
+    </div>
   );
 };
 

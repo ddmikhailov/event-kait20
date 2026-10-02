@@ -161,7 +161,8 @@ test('fictional roster, registration, Scanner, review and public award form one 
   await page.getByLabel(/^Email/).fill(`journey-${suffix}@example.com`);
   await page.getByLabel(/^Телефон/).fill('+79990000001');
   await page.getByLabel(/^Статус участника/).selectOption('KAIT_STUDENT');
-  await page.getByLabel(/^Учебная группа/).fill('E2E-MOS');
+  await page.getByLabel('Найти группу', { exact: true }).fill('E2E-MOS');
+  await page.getByLabel(/^Учебная группа/).selectOption('E2E-MOS');
   await page.getByLabel(/Я даю/).check();
   const registrationResponse = page.waitForResponse((response) =>
     response.url().endsWith(`/public/events/${slug}/register`),

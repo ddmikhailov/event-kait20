@@ -48,7 +48,7 @@ test('production PWA update preserves offline attendance and does not reload ano
   await page.getByLabel(/^Email/).fill(`pwa-${nonce}@example.com`);
   await page.getByLabel(/^Телефон/).fill(`+7999${String(nonce).slice(-7)}`);
   await page.getByLabel(/^Статус участника/).selectOption('KAIT_STUDENT');
-  await page.getByLabel(/^Учебная группа/).fill('PWA-01');
+  await page.getByLabel(/^Учебная группа/).selectOption('__missing__');
   await page.getByLabel(/Я даю/).check();
   await page.getByRole('button', { name: 'Получить билет' }).click();
   await expect(page.getByText('Регистрация завершена')).toBeVisible();

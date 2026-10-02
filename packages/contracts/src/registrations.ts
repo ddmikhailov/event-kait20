@@ -57,6 +57,7 @@ export const publicRegistrationRequestSchema = z
     email: emailSchema.nullable().optional(),
     phone: russianPhoneSchema.nullable().optional(),
     studyGroup: z.string().trim().min(1).max(100).nullable().optional(),
+    studyGroupMissing: z.boolean().optional(),
     personType: personTypeSchema.nullable().optional(),
     organization: z.string().trim().min(1).max(255).nullable().optional(),
     consentAccepted: z.literal(true),
@@ -94,6 +95,7 @@ const publicFormFieldSchema = z.object({
 });
 
 export const publicEventResponseSchema = z.object({
+  studyGroups: z.array(z.string().min(1).max(100)).max(5000).optional(),
   levelName: z.string().nullable().optional(),
   boostMultiplier: z.enum(['1.0', '1.5', '2.0', '3.0']).optional(),
   effectiveStatus: eventStatusSchema.optional(),

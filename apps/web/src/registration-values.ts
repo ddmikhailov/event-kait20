@@ -58,6 +58,10 @@ export const registrationValues = (
     email: optional('email'),
     phone: optional('phone'),
     studyGroup: personType === 'KAIT_STUDENT' ? optional('studyGroup') : null,
+    ...(personType === 'KAIT_STUDENT' &&
+    form.get('studyGroupMissing') === 'true'
+      ? { studyGroupMissing: true }
+      : {}),
     personType: personType || null,
     organization: personType.startsWith('EXTERNAL_')
       ? optional('organization')
@@ -76,7 +80,7 @@ export const registrationValues = (
     event.systemFields ?? defaultSystemFields('public', true),
     restricted,
   );
-  if (missing)
+  if (missing && !(missing === 'studyGroup' && result.data.studyGroupMissing))
     throw new RegistrationFormError(
       `Заполните поле «${systemFieldLabels[missing]}»`,
     );
@@ -88,5 +92,14 @@ export const registrationValues = (
       `Мероприятие предназначено только для участников: ${event.allowedPersonTypes?.map((type) => personTypeLabels[type]).join(', ')}.`,
     );
   }
+  if (
+    result.data.personType === 'KAIT_STUDENT' &&
+    event.studyGroups !== undefined &&
+    result.data.studyGroup &&
+    !event.studyGroups.includes(result.data.studyGroup)
+  )
+    throw new RegistrationFormError(
+      'Выберите группу из списка или вариант «Моей группы нет».',
+    );
   return result.data;
 };

@@ -418,7 +418,7 @@ def test_public_registration_matches_roster_by_full_name_and_group(
     )
     assert event.status_code == 201, event.text
     client.cookies.clear()
-    for group in ("AUTO-1", "ЧУЖАЯ-ГРУППА"):
+    for group in ("AUTO-1", None):
         registration = client.post(
             f"/public/events/{event.json()['slug']}/register",
             headers=ORIGIN,
@@ -427,6 +427,7 @@ def test_public_registration_matches_roster_by_full_name_and_group(
                 "firstName": "Участник",
                 "middleName": "П.",
                 "studyGroup": group,
+                "studyGroupMissing": group is None,
                 "email": f"demo-{uuid4().hex[:8]}@example.com",
                 "phone": "+79990000001",
                 "personType": "KAIT_STUDENT",
@@ -446,8 +447,8 @@ def test_public_registration_matches_roster_by_full_name_and_group(
     by_group = {entry[0]: entry for entry in matches}
     assert by_group["AUTO-1"][1] == "MATCHED"
     assert by_group["AUTO-1"][2] == by_group["AUTO-1"][3]
-    assert by_group["ЧУЖАЯ-ГРУППА"][1] == "UNMATCHED"
-    assert by_group["ЧУЖАЯ-ГРУППА"][2] is None
+    assert by_group[None][1] == "UNMATCHED"
+    assert by_group[None][2] is None
 
 
 def test_event_completion_scores_checked_in_students_once(client: TestClient) -> None:

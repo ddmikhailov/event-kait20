@@ -12,6 +12,7 @@ from .database import execute, row, rows
 from .dependencies import Staff
 from .errors import ApiError
 from .form_config import validate_system_fields
+from .roster_matching import validate_public_group
 from .schemas import ParticipantValues
 from .security import registration_qr, registration_signature
 from .service_utils import audit, db_json, json_value
@@ -472,7 +473,15 @@ def register(
     payload_hash = hmac.new(
         config.session_secret.encode(),
         json.dumps(
-            values.model_dump(mode="json", exclude={"capacity_override"}),
+            values.model_dump(
+                mode="json",
+                exclude={"capacity_override"}
+                | (
+                    {"study_group_missing"}
+                    if not getattr(values, "study_group_missing", False)
+                    else set()
+                ),
+            ),
             sort_keys=True,
             ensure_ascii=False,
         ).encode(),
@@ -516,6 +525,13 @@ def register(
         connection, event, str(values.stream_id) if values.stream_id else None
     )
     data = participant(values)
+    if source == "PUBLIC_FORM":
+        validate_public_group(
+            connection,
+            tenant_id,
+            data,
+            bool(getattr(values, "study_group_missing", False)),
+        )
     fields = form_fields(connection, event["id"])
     validate_answers(fields, values, onsite=source != "PUBLIC_FORM")
     candidates = roster_candidates(connection, event["id"], data)

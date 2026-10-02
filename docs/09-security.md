@@ -95,6 +95,15 @@ Backend policy:
 
 Every protected handler has explicit permission guard. UI hiding is not authorization.
 
+Public event details expose only distinct roster group names from the event's
+tenant (up to 5000), never roster identities or full names. Public registration
+validates the chosen group on the server; the explicit missing-group option
+leaves the student unmatched. Fuzzy roster suggestions use the stored
+Registration snapshot, require SUPER_ADMIN/ORGANIZER and event tenant access,
+and never automatically link identities. Staff must save a review decision
+with a reason and current version. Registration snapshots and roster spelling
+are not overwritten by a public submission.
+
 An assigned SCANNER, SUPER_ADMIN or ORGANIZER may explicitly confirm onsite
 capacity override. EventAccess still applies; the actor and explicit override are
 audited. The public registration endpoint never accepts an override flag.

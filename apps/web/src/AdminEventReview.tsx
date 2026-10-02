@@ -9,6 +9,7 @@ import { Button } from '@event-registration/ui';
 import { useCallback, useEffect, useState } from 'react';
 
 import { AdminApiError, adminApi } from './admin-api.js';
+import { RosterSuggestions } from './RosterSuggestions.js';
 
 type ReviewItem = EventReview['items'][number];
 
@@ -744,6 +745,18 @@ export const EventReviewWorkspace = ({
                                 Закрыть
                               </button>
                             </div>
+                            <RosterSuggestions
+                              key={item.registrationId}
+                              eventId={eventId}
+                              item={item}
+                              onSelect={(id) => {
+                                change(item, {
+                                  rosterPersonId: id,
+                                  rejectMatch: false,
+                                });
+                                setSearchFor(undefined);
+                              }}
+                            />
                             <label>
                               Фамилия или группа
                               <input
@@ -755,7 +768,7 @@ export const EventReviewWorkspace = ({
                                 }}
                               />
                               <span className="review-field-hint">
-                                Не менее трёх символов для сохранения решения.
+                                Введите не менее двух символов для поиска.
                               </span>
                             </label>
                             <button

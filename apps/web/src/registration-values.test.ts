@@ -49,6 +49,21 @@ const validForm = () => {
 };
 
 describe('public registration form values', () => {
+  it('requires a listed group or an explicit missing-group choice', () => {
+    const form = validForm();
+    const configured = { ...event, studyGroups: ['ИС-101'] };
+    expect(registrationValues(form, configured).studyGroup).toBe('ИС-101');
+    form.set('studyGroup', 'ИC-101');
+    expect(() => registrationValues(form, configured)).toThrow(
+      'Выберите группу',
+    );
+    form.delete('studyGroup');
+    form.set('studyGroupMissing', 'true');
+    expect(registrationValues(form, configured)).toMatchObject({
+      studyGroup: null,
+      studyGroupMissing: true,
+    });
+  });
   it('accepts names and consent when optional fields are blank', () => {
     const form = new FormData();
     form.set('firstName', 'Анна');

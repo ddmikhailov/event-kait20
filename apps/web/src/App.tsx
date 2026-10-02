@@ -361,6 +361,7 @@ export const RegistrationForm = ({
       <RegistrationSystemFields
         fields={event.systemFields ?? defaultSystemFields('public', true)}
         allowedTypes={event.allowedPersonTypes}
+        studyGroups={event.studyGroups}
         disabled={submitting}
       />
 
@@ -1017,6 +1018,8 @@ const messageForError = (error: unknown): string => {
       FORM_VERSION_INVALID:
         'Форма изменилась. Обновите страницу и попробуйте снова',
       VALIDATION_ERROR: 'Проверьте правильность заполнения формы',
+      STUDY_GROUP_INVALID:
+        'Выберите группу из списка или вариант «Моей группы нет». Если список устарел, обновите страницу.',
       RATE_LIMITED: 'Слишком много попыток. Попробуйте немного позже',
       INVALID_QR: 'Билет недействителен',
       NETWORK_ERROR: 'Нет соединения с сервером',

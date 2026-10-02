@@ -3,7 +3,25 @@
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from test_scoring_v2 import activate_policy, create_season, login, policy_values
+
+
+def roster_group(client: TestClient, group: str) -> None:
+    """Add a fictional directory entry for public group-selection fixtures."""
+    identity = str(uuid4())
+    with client.app.state.database.transaction() as connection:
+        connection.execute(
+            text("""INSERT INTO persons
+        (id,tenant_id,last_name,first_name,person_type,study_group,dedup_review_required,created_at,updated_at)
+        VALUES (:id,'50000000-0000-4000-8000-000000000001','Справочный','Вымышленный',
+        'KAIT_STUDENT',:group,false,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))"""),
+            {"id": identity, "group": group},
+        )
+        connection.execute(
+            text("INSERT INTO student_roster_members(person_id) VALUES (:id)"),
+            {"id": identity},
+        )
 
 
 def publication_fields(client: TestClient) -> dict[str, str]:

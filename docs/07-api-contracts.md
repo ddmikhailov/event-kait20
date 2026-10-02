@@ -47,6 +47,7 @@ Returns only data needed to render registration:
 - start/end/timezone/location;
 - registration availability (`OPEN`, `CLOSED`, `FULL`);
 - system form configuration;
+- `studyGroups`: up to 5000 distinct roster group names for this event's tenant;
 - active custom fields;
 - consent URL, privacy-policy URL and shared version.
 
@@ -66,6 +67,16 @@ update succeeds. Public images are served by
 remain immutable.
 
 ### `POST /public/events/:slug/register`
+For KAIT_STUDENT, a submitted `studyGroup` must exist in the roster; otherwise
+the API returns `400 STUDY_GROUP_INVALID`. The explicit `studyGroupMissing=true`
+option requires `studyGroup=null` and leaves the student unmatched. It satisfies
+a required group field, but is rejected for hidden group fields and other
+participant types. Optional/hidden group fields may remain null as before.
+Names and group values have surrounding/repeated whitespace normalized; group
+spelling is taken from the matching directory entry. A misspelled name never
+causes fuzzy automatic linking. Existing exact FIO+group matching remains
+unique-only; historical submitted names and roster profiles are preserved.
+
 Auth: public. Rate limited.
 
 Request:
@@ -579,6 +590,13 @@ Event responses include optional-compatible `effectiveStatus` with the existing 
   Перенос участия с выданным номером другому Person запрещён (`REVIEW_IDENTITY_LOCKED`);
   слияние людей требует отдельного процесса. Исходные регистрационные снимки не меняются.
 - `GET /admin/activity/roster/search?q=` — поиск кандидата для связи.
+- `GET /admin/events/:eventId/review/:registrationId/roster-suggestions` —
+  только SUPER_ADMIN/ORGANIZER своего tenant. До пяти похожих студентов
+  из той же группы; если группа отсутствует — подбор по префиксу фамилии
+  или имени. Проверяются максимум 1000 кандидатов, `truncated` сообщает
+  о неполном просмотре. `differingFields` перечисляет различия ФИО/группы.
+  Подсказки не меняют заявку и не подтверждают личность; существующий PATCH
+  решения с причиной и версией остаётся способом сохранить выбор.
 - `POST /admin/people/:personId/roster` — ручное включение в контингент.
 - `POST /admin/activity/roster/preview|import` — SUPER_ADMIN, XLSX до 5 МБ,
   один лист, до 5000 записей; импорт принимает `fileHash` из preview. Принимаются

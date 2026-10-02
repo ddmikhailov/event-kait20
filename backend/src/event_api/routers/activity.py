@@ -54,6 +54,7 @@ from ..event_review import (
     review_items,
     update_review_item,
 )
+from ..roster_matching import roster_suggestions
 from ..scoring_v2 import decimal_string
 from ..service_utils import audit, naive_utc, serial
 from ..tenant_scope import (
@@ -1007,6 +1008,27 @@ def get_event_review(
             "isCorrection": event["activity_reviewed_at"] is not None,
             "items": review_items(connection, str(event_id)),
         }
+
+
+@event_admin.get("/{event_id}/review/{registration_id}/roster-suggestions")
+def suggest_review_student(
+    event_id: UUID,
+    registration_id: UUID,
+    staff: Annotated[Staff, Depends(administrator)],
+    db: Annotated[Database, Depends(database)],
+) -> dict[str, Any]:
+    with db.connect() as connection:
+        require_event_for_staff(
+            connection, str(event_id), staff.tenant_id, staff.organization_id
+        )
+        registration = row(
+            connection,
+            "SELECT * FROM registrations WHERE id=:id AND event_id=:event",
+            {"id": str(registration_id), "event": str(event_id)},
+        )
+        if not registration:
+            raise ApiError(404, "REGISTRATION_NOT_FOUND", "Registration not found")
+        return roster_suggestions(connection, staff.tenant_id, registration)
 
 
 @event_admin.get("/{event_id}/review/{registration_id}/score-preview")

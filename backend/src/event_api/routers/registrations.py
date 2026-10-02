@@ -17,6 +17,7 @@ from ..registration_service import (
     register,
     release_person_locks,
 )
+from ..roster_matching import public_study_groups
 from ..schemas import OnsiteRegistrationRequest, PublicRegistrationRequest
 from ..security import registration_qr, utc_iso, verify_registration
 from ..service_utils import json_value
@@ -79,7 +80,7 @@ def public_event(
             connection,
             """SELECT e.id,e.title,e.slug,e.description,e.direction,e.cover_object_key,e.start_at,e.end_at,
             e.timezone,e.form_config,e.allowed_person_types,e.is_listed,e.streams_enabled,e.location,e.registration_deadline,e.capacity,e.status,
-            e.boost_multiplier,l.name AS level_name
+            e.boost_multiplier,e.organization_id,l.name AS level_name
             FROM events e LEFT JOIN event_levels l ON l.id=e.level_id WHERE e.slug=:slug""",
             {"slug": slug},
         )
@@ -89,6 +90,7 @@ def public_event(
             response.headers["X-Robots-Tag"] = "noindex, nofollow"
         fields = form_fields(connection, event["id"])
         streams = list_streams(connection, event["id"], public=True)
+        study_groups = public_study_groups(connection, event["organization_id"])
         count = row(
             connection,
             "SELECT count(*) AS count FROM registrations WHERE event_id=:event AND status='ACTIVE'",
@@ -121,6 +123,7 @@ def public_event(
         "direction": event["direction"],
         "allowedPersonTypes": json_value(event["allowed_person_types"]),
         "systemFields": event_form_config(event)["public"],
+        "studyGroups": study_groups,
         "streamsEnabled": bool(event["streams_enabled"]),
         "streams": streams,
         "coverObjectKey": event["cover_object_key"],

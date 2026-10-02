@@ -371,7 +371,7 @@ class ParticipantValues(Contract):
         default_factory=list, max_length=MAX_CUSTOM_ANSWERS
     )
 
-    @field_validator("last_name", "first_name", "middle_name")
+    @field_validator("last_name", "first_name", "middle_name", "study_group")
     @classmethod
     def normalize_name(cls, value: str | None) -> str | None:
         return re.sub(r"\s+", " ", value).strip() if value else value
@@ -400,6 +400,7 @@ class ParticipantValues(Contract):
 
 
 class PublicRegistrationRequest(ParticipantValues):
+    study_group_missing: bool = False
     consent_accepted: Literal[True]
     consent_version: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)

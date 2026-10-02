@@ -26,7 +26,7 @@ test.describe.serial('critical MVP browser journey', () => {
     await page.getByLabel(/^Email/).fill(participant.email);
     await page.getByLabel(/^Телефон/).fill(participant.phone);
     await page.getByLabel(/^Статус участника/).selectOption('KAIT_STUDENT');
-    await page.getByLabel(/^Учебная группа/).fill('E2E-01');
+    await page.getByLabel(/^Учебная группа/).selectOption('__missing__');
     await page.getByLabel(/Я даю/).check();
 
     const registrationResponse = page.waitForResponse(
@@ -263,7 +263,7 @@ test.describe.serial('critical MVP browser journey', () => {
     await page.getByLabel(/^Email/).fill(absent.email);
     await page.getByLabel(/^Телефон/).fill(`+7988${nonce}`);
     await page.getByLabel(/^Статус участника/).selectOption('KAIT_STUDENT');
-    await page.getByLabel(/^Учебная группа/).fill('E2E-02');
+    await page.getByLabel(/^Учебная группа/).selectOption('__missing__');
     await page.getByLabel(/Я даю/).check();
     await page.getByRole('button', { name: 'Получить билет' }).click();
     await expect(page.getByText('Регистрация завершена')).toBeVisible();

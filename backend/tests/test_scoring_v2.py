@@ -1437,6 +1437,10 @@ def test_inactive_status_type_preserves_historical_scoring(
 def test_preview_production_parity_and_published_immutability(
     client: TestClient,
 ) -> None:
+    # Retirement must still be retroactive to this future participation on any run date.
+    event_start = max(
+        datetime.now(UTC) + timedelta(days=2), datetime(2026, 10, 1, 10, tzinfo=UTC)
+    ).replace(microsecond=0)
     headers = login(client)
     database: Database = client.app.state.database
     published = client.post(
@@ -1478,7 +1482,7 @@ def test_preview_production_parity_and_published_immutability(
             "code": f"V2_{uuid4().hex[:8].upper()}",
             "name": "V2",
             "startsAt": "2026-01-01T00:00:00Z",
-            "endsAt": "2027-01-01T00:00:00Z",
+            "endsAt": (event_start + timedelta(days=365)).isoformat(),
             "active": False,
         },
     )
@@ -1500,9 +1504,9 @@ def test_preview_production_parity_and_published_immutability(
             "title": "V2 scoring",
             "slug": slug,
             "description": "V2",
-            "startAt": "2026-10-01T10:00:00Z",
-            "endAt": "2026-10-01T12:00:00Z",
-            "registrationDeadline": "2026-10-01T10:00:00Z",
+            "startAt": event_start.isoformat(),
+            "endAt": (event_start + timedelta(hours=2)).isoformat(),
+            "registrationDeadline": event_start.isoformat(),
             "timezone": "Europe/Moscow",
             "location": "КАИТ №20",
             "capacity": 10,
@@ -1617,7 +1621,7 @@ def test_preview_production_parity_and_published_immutability(
         "calculatedAt",
     }.issubset(snapshot)
     assert snapshot["finalPoints"] == "18.5000"
-    assert snapshot["eventStartAt"] == "2026-10-01T10:00:00Z"
+    assert snapshot["eventStartAt"] == event_start.isoformat().replace("+00:00", "Z")
     assert preview.json()["policyVersionStatus"] == "PUBLISHED"
     retirement = client.post(
         "/admin/activity/scoring-v2/versions/61000000-0000-4000-8000-000000000001/retire",

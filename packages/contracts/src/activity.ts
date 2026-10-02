@@ -232,6 +232,19 @@ export type EventReviewDecision = z.infer<typeof eventReviewDecisionSchema>;
 export type EventReviewApproval = z.infer<typeof eventReviewApprovalSchema>;
 export type PendingEventReviews = z.infer<typeof pendingEventReviewsSchema>;
 export type RosterSearch = z.infer<typeof rosterSearchSchema>;
+export const rosterSuggestionsSchema = z.object({
+  items: z
+    .array(
+      rosterSearchSchema.shape.items.element.extend({
+        differingFields: z.array(
+          z.enum(['lastName', 'firstName', 'middleName', 'studyGroup']),
+        ),
+      }),
+    )
+    .max(5),
+  truncated: z.boolean(),
+});
+export type RosterSuggestions = z.infer<typeof rosterSuggestionsSchema>;
 
 export const rosterPreviewSchema = z
   .object({

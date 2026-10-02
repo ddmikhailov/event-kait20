@@ -25,6 +25,7 @@ import {
   eventReviewApprovalSchema,
   pendingEventReviewsSchema,
   rosterSearchSchema,
+  rosterSuggestionsSchema,
   rosterPreviewSchema,
   rosterImportSchema,
   activityDirectionListSchema,
@@ -621,6 +622,14 @@ export class AdminApiClient {
       `/admin/activity/roster/search?q=${encodeURIComponent(query)}`,
       { method: 'GET' },
       rosterSearchSchema,
+    );
+  }
+
+  public suggestRoster(eventId: string, registrationId: string) {
+    return this.request(
+      `/admin/events/${encodeURIComponent(eventId)}/review/${encodeURIComponent(registrationId)}/roster-suggestions`,
+      { method: 'GET' },
+      rosterSuggestionsSchema,
     );
   }
 

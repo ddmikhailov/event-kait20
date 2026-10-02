@@ -16,7 +16,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
-from publication_fixture import publication_fields
+from publication_fixture import publication_fields, roster_group
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
@@ -387,6 +387,8 @@ def test_demo_seed_is_idempotent(
 
 
 def test_public_registration_and_idempotent_attendance(client: TestClient) -> None:
+    roster_group(client, "ИС-21")
+    roster_group(client, "ЧУЖАЯ-ГРУППА")
     headers, _ = _login(client)
     database: Database = client.app.state.database
     with database.connect() as connection:

@@ -42,6 +42,12 @@ def validate_system_fields(event: Any, values: ParticipantValues, mode: str) -> 
         if key == "personType" and restricted:
             setting = "REQUIRED"
         value = submitted.get(key)
+        if key == "studyGroup" and submitted.get("studyGroupMissing"):
+            if value is not None or setting == "HIDDEN":
+                raise ApiError(
+                    400, "STUDY_GROUP_INVALID", "Choose a group or report it missing"
+                )
+            continue
         if setting == "REQUIRED" and value is None:
             raise ApiError(
                 409, "FORM_VERSION_INVALID", "Fill the required registration fields"
